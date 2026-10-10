@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>企业微信 · 实时查看</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --line:#e5e7eb; --text:#1f2328; --sub:#6b7280;
+  --me:#95ec69; --accent:#07c160; --sys:#9ca3af; --hl:#fff8c5;
+  --side:#fafbfc; --hover:#f3f4f6; --sel:#e8f8ee;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+     background:var(--bg);color:var(--text);display:flex;flex-direction:column}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:9px 16px;
+       display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex-shrink:0;
+       box-shadow:0 1px 3px rgba(0,0,0,.04);z-index:5}
+h1{font-size:15px;margin:0;font-weight:600;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#d1d5db;flex-shrink:0}
+.dot.live{background:var(--accent);box-shadow:0 0 0 3px rgba(7,193,96,.18);
+          animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.badge{background:#e8f8ee;color:#0a8f4a;border-radius:10px;padding:2px 8px;
+       font-size:12px;font-weight:600;white-space:nowrap}
+.badge.warn{background:#fff4e5;color:#b45309}
+.tabs{display:flex;gap:6px}
+.tab{padding:4px 12px;border-radius:14px;cursor:pointer;font-size:13px;
+     border:1px solid var(--line);background:#fff;user-select:none;white-space:nowrap}
+.tab .n{font-size:10px;background:#e5e7eb;color:#4b5563;border-radius:8px;
+     padding:0 5px;margin-left:4px;vertical-align:1px}
+.tab.on .n{background:rgba(255,255,255,.28);color:#fff}
+.subtabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.stab{padding:3px 11px;border-radius:12px;cursor:pointer;font-size:12px;
+     border:1px solid var(--line);background:#fff;user-select:none}
+.stab.on{background:#e8f8ee;color:#0a8f4a;border-color:#a7e5c1;font-weight:600}
+.stab:hover:not(.on){border-color:var(--accent);color:var(--accent)}
+.ntc{background:#fff;border:1px solid var(--line);border-radius:10px;
+     padding:12px 15px;margin-bottom:10px}
+.ntc .hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+     margin-bottom:6px}
+.ntc .tag{font-size:11px;border-radius:8px;padding:1px 8px;font-weight:600;
+     background:#eef2ff;color:#4338ca;white-space:nowrap}
+.ntc .tag.grp{background:#fef3c7;color:#b45309}
+.ntc .tag.an{background:#fee2e2;color:#b91c1c}
+.ntc .tag.sys{background:#f3f4f6;color:#4b5563}
+.ntc .tag.login{background:#e0f2fe;color:#0369a1}
+.ntc .ttl{font-weight:600;font-size:13px}
+.ntc .who{color:var(--sub);font-size:12px}
+.ntc .bd{white-space:pre-wrap;word-break:break-word;font-size:13px;
+     color:#374151;line-height:1.7}
+.appgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));
+     gap:12px}
+.app{background:#fff;border:1px solid var(--line);border-radius:10px;
+     padding:12px 14px;display:flex;gap:11px;align-items:flex-start}
+.app img{width:40px;height:40px;border-radius:9px;background:#f3f4f6;
+     flex-shrink:0;object-fit:cover}
+.app .ph{width:40px;height:40px;border-radius:9px;background:#e8f8ee;
+     color:#0a8f4a;display:flex;align-items:center;justify-content:center;
+     font-weight:700;flex-shrink:0;font-size:16px}
+.app .nm{font-weight:600;font-size:13px;margin-bottom:2px}
+.app .ds{color:var(--sub);font-size:12px;line-height:1.5;
+     display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+     overflow:hidden}
+.app .id{color:#9ca3af;font-size:10.5px;margin-top:4px;
+     font-family:ui-monospace,Consolas,monospace}
+table.dirt{width:100%;border-collapse:collapse;font-size:12.5px;
+     background:#fff;border:1px solid var(--line);border-radius:10px;
+     overflow:hidden}
+table.dirt th{background:#fafbfc;text-align:left;padding:9px 12px;
+     font-size:11.5px;color:var(--sub);font-weight:600;
+     border-bottom:1px solid var(--line);white-space:nowrap}
+table.dirt td{padding:8px 12px;border-bottom:1px solid #f1f3f5;
+     max-width:280px;overflow:hidden;text-overflow:ellipsis;
+     white-space:nowrap}
+table.dirt tr:last-child td{border-bottom:none}
+table.dirt tr:hover td{background:#fafcff}
+.avt{width:26px;height:26px;border-radius:5px;background:#e8f8ee;color:#0a8f4a;
+     display:inline-flex;align-items:center;justify-content:center;
+     font-size:11px;font-weight:700;vertical-align:-7px;margin-right:7px;
+     overflow:hidden}
+.avt img{width:100%;height:100%;object-fit:cover}
+.pager{display:flex;gap:8px;align-items:center;justify-content:center;
+     margin:16px 0 4px;font-size:12px;color:var(--sub)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chip{background:#fff;border:1px solid var(--line);border-radius:12px;
+     padding:3px 11px;font-size:12px;cursor:pointer}
+.chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.deptree{font-size:12.5px;line-height:2}
+.deptree .lv1{padding-left:0;font-weight:600}
+.deptree .lv2{padding-left:20px}
+.deptree .lv3{padding-left:40px}
+.deptree .lv4{padding-left:60px}
+.deptree .lv5{padding-left:80px}
+.deptree .nm2{color:#374151}
+.deptree .ct{color:#9ca3af;font-size:11px}
+.tab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.tab:hover:not(.on){border-color:var(--accent);color:var(--accent)}
+input[type=search],select{border:1px solid var(--line);border-radius:6px;
+     padding:5px 10px;font-size:13px;outline:none;background:#fff;color:var(--text)}
+input[type=search]{width:200px}
+input[type=search]:focus,select:focus{border-color:var(--accent)}
+button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 10px;
+       font-size:12px;cursor:pointer;color:var(--text)}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.primary:hover{opacity:.88;color:#fff}
+.spacer{flex:1}
+.stat{color:var(--sub);font-size:12px;white-space:nowrap}
+main{flex:1;display:flex;min-height:0}
+aside{width:246px;background:var(--side);border-right:1px solid var(--line);
+      overflow-y:auto;flex-shrink:0;padding:6px 0}
+aside .sidehd{padding:6px 14px;font-size:11px;color:var(--sub);font-weight:600;
+      letter-spacing:.4px;text-transform:uppercase}
+aside .grp{padding:7px 14px;cursor:pointer;border-left:3px solid transparent;
+      display:flex;justify-content:space-between;gap:8px;font-size:13px;align-items:center}
+aside .grp:hover{background:var(--hover)}
+aside .grp.on{background:var(--sel);border-left-color:var(--accent);font-weight:600}
+aside .grp .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+aside .grp .n{color:var(--sub);font-size:11px;flex-shrink:0}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#log{flex:1;overflow-y:auto;padding:16px 22px}
+.row{display:flex;margin-bottom:13px;gap:8px}
+.row.me{flex-direction:row-reverse}
+.av{width:34px;height:34px;border-radius:6px;background:#c7cdd4;color:#fff;
+    flex-shrink:0;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:600}
+.bub{max-width:min(640px,74%)}
+.meta{font-size:11px;color:var(--sub);margin-bottom:3px}
+.row.me .meta{text-align:right}
+.txt{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 11px;
+     white-space:pre-wrap;word-break:break-word}
+.row.me .txt{background:var(--me);border-color:#86d95c}
+.row.fresh .txt{animation:flash 2.6s ease-out}
+@keyframes flash{0%{background:#fff3b0}100%{}}
+.sys{width:100%;text-align:center;color:var(--sys);font-size:12px;margin:6px 0}
+.media{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px}
+.media img{max-width:230px;max-height:230px;border-radius:8px;border:1px solid var(--line);
+     cursor:zoom-in;display:block;background:#fff}
+.row.me .media{justify-content:flex-end}
+.fchip{display:inline-flex;align-items:center;gap:6px;background:#fff;
+     border:1px solid var(--line);border-radius:8px;padding:7px 10px;
+     text-decoration:none;color:var(--text);font-size:13px;max-width:100%}
+.fchip:hover{border-color:var(--accent);background:#f7fff9}
+.fchip .fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:250px}
+.fchip .fs{color:var(--sub);font-size:11px;flex-shrink:0}
+.pane{flex:1;overflow-y:auto;padding:16px 22px;display:none}
+.pane.on{display:block}
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(166px,1fr));gap:12px}
+.mcard{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+       display:flex;flex-direction:column}
+.mcard img{width:100%;height:148px;object-fit:cover;background:#f3f4f6;cursor:zoom-in}
+.mcard .body{padding:8px 10px;font-size:12px}
+.mcard .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mcard .sub{color:var(--sub);margin-top:2px}
+.empty{color:var(--sub);text-align:center;margin-top:60px}
+mark{background:var(--hl);padding:0 2px;border-radius:2px}
+#lb{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;
+    align-items:center;justify-content:center;z-index:99;cursor:zoom-out}
+#lb img{max-width:94vw;max-height:94vh;border-radius:6px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;
+       margin-bottom:20px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+.card .k{font-size:12px;color:var(--sub)}
+.card .v{font-size:24px;font-weight:700;margin-top:3px;color:var(--accent)}
+.sec{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+     margin-bottom:16px}
+.sec h3{margin:0 0 12px;font-size:14px;font-weight:600}
+.bar{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px}
+.bar .lbl{width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+     flex-shrink:0;color:var(--sub)}
+.bar .track{flex:1;background:#f3f4f6;border-radius:4px;height:16px;overflow:hidden}
+.bar .fill{height:100%;background:linear-gradient(90deg,#07c160,#4ade80);border-radius:4px;
+     transition:width .5s}
+.bar .val{width:52px;text-align:right;color:var(--sub);flex-shrink:0}
+.heat{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-top:8px}
+.heat div{height:26px;border-radius:3px;background:#f3f4f6;position:relative}
+.heat div span{position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);
+     font-size:9px;color:var(--sub)}
+.hx{margin-bottom:22px}
+#toast{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;
+       flex-direction:column;gap:8px;align-items:flex-end}
+.tst{background:#fff;border:1px solid var(--line);border-left:3px solid var(--accent);
+     border-radius:8px;padding:9px 13px;font-size:13px;max-width:340px;
+     box-shadow:0 4px 14px rgba(0,0,0,.10);animation:slidein .25s}
+@keyframes slidein{from{transform:translateX(20px);opacity:0}}
+.tst .h{font-weight:600;color:var(--accent);margin-bottom:2px}
+.tst .b{color:var(--sub);font-size:12px;overflow:hidden;text-overflow:ellipsis;
+     white-space:nowrap}
+#revoke{list-style:none;padding:0;margin:0}
+#revoke li{border-bottom:1px solid var(--line);padding:9px 2px;font-size:13px}
+#revoke li:last-child{border-bottom:none}
+#revoke .rw{color:var(--sub);font-size:11px}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#d5d9de;border-radius:5px}
+::-webkit-scrollbar-thumb:hover{background:#b9bfc6}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>企业微信 · 实时查看</h1>
+  <span class="badge" id="connBadge">连接中…</span>
+  <div class="tabs">
+    <span class="tab on" data-tab="chat">聊天</span>
+    <span class="tab" data-tab="content">内容<span class="n" id="nContent">·</span></span>
+    <span class="tab" data-tab="media">媒体</span>
+    <span class="tab" data-tab="stats">统计</span>
+    <span class="tab" data-tab="tools">工具</span>
+  </div>
+  <span class="spacer"></span>
+  <input type="search" id="q" placeholder="搜索消息 / 人名 / 文件名…">
+  <button id="btnSync">立即同步</button>
+  <button id="btnExp">导出</button>
+  <select id="expFmt">
+    <option value="json">JSON</option>
+    <option value="md">Markdown</option>
+    <option value="txt">TXT</option>
+    <option value="csv">CSV</option>
+    <option value="html">HTML</option>
+  </select>
+  <span class="stat" id="stat"></span>
+</header>
+<main>
+  <aside id="conv">
+    <div class="sidehd">会话</div>
+  </aside>
+  <div id="main">
+    <div id="log" class="pane on"></div>
+    <div id="paneContent" class="pane"></div>
+    <div id="paneMedia" class="pane"><div class="mgrid" id="mgrid"></div></div>
+    <div id="paneStats" class="pane"></div>
+    <div id="paneTools" class="pane"></div>
+  </div>
+</main>
+<div id="lb"><img id="lbimg" alt=""></div>
+<div id="toast"></div>
+
+<script>
+const $  = s => document.querySelector(s);
+const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c;
+  if(h!=null)e.innerHTML=h; return e;};
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fsz = n => n<1024? n+' B' : n<1048576? (n/1024).toFixed(1)+' KB'
+  : (n/1048576).toFixed(1)+' MB';
+const ICONS = {图片:'🖼️',视频:'🎬',文件:'📄'};
+const EXT = {pdf:'📕',doc:'📘',docx:'📘',xls:'📗',xlsx:'📗',ppt:'📙',pptx:'📙',
+  jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',bmp:'🖼️',
+  mp4:'🎬',mov:'🎬',avi:'🎬',mkv:'🎬',zip:'🗜️',rar:'🗜️'};
+const extIcon = n => EXT[(String(n).split('.').pop()||'').toLowerCase()] || '📄';
+const mediaURL = p => '/media/' + String(p).split('/').map(encodeURIComponent).join('/');
+
+let TREE = [], CONVS = [], STATS = null, CUR = '__ALL__', TAB = 'chat';
+let ALL_MSGS = [], MEDIA = [], LIVE = 0;
+const convCount = {};
+
+/* ---------- SSE 实时通道 ---------- */
+function connect(){
+  const es = new EventSource('/events');
+  es.onopen = ()=> setConn(true);
+  es.onerror = ()=>{ setConn(false); };
+  es.onmessage = ev =>{
+    let d; try{ d = JSON.parse(ev.data); }catch(e){ return; }
+    if(d.type==='hello'){ 
+      if(d.info&&d.info.messages) refreshCounters();
+      loadConvTree(); return; }
+    if(d.type==='new'){
+      LIVE += d.count;
+      const fresh = d.messages.map(mm=>normalize(mm));
+      ALL_MSGS = ALL_MSGS.concat(fresh);
+      appendLive(fresh);
+      if(notifyOn) fresh.slice(0,3).forEach(notify);
+      toast('收到新消息', d.count+' 条 · '+
+        [...new Set(fresh.map(m=>m.c))].slice(0,2).join('、'));
+      loadConvTree(); updateStat();
+      if(TAB==='media') refreshMedia();
+      if(TAB==='content' && CSUB==='notice'){ CONTENT=null; loadContent().then(renderContent); }
+      return;
+    }
+    if(d.type==='status'){
+      if(d.error){ setConn(false, d.error); }
+      const t = [];
+      if(d.messages!=null) t.push(d.messages+' 条消息');
+      if(d.conversations!=null) t.push(d.conversations+' 个会话');
+      if(d.media!=null) t.push(d.media+' 个媒体');
+      if(t.length){ $('#stat').textContent = t.join(' · '); }
+      if(!d.error) setConn(true);
+    }
+  };
+  return es;
+}
+function setConn(ok, msg){
+  $('#dot').classList.toggle('live', !!ok);
+  const b = $('#connBadge');
+  b.textContent = ok ? '实时已连接' : (msg ? '同步异常' : '连接中断');
+  b.classList.toggle('warn', !ok);
+}
+
+/* ---------- 数据加载 ---------- */
+function normalize(m){
+  return {t:m.time, st:m.send_time, c:m.conversation, s:m.sender, m:m.text,
+    k:m.kind||'text', me:m.me, media:m.media||null, mid:m.message_id};
+}
+async function loadMessages(){
+  const r = await fetch('/api/messages').then(x=>x.json());
+  ALL_MSGS = (r.messages||[]).map(normalize);
+  renderLog();
+}
+async function loadConvTree(){
+  const r = await fetch('/api/conversations').then(x=>x.json());
+  CONVS = r.conversations||[];
+  CONVS.forEach(c=>convCount[c.name]=c.messages);
+  renderConv();
+}
+async function loadMedia(){
+  const r = await fetch('/api/media?limit=0').then(x=>x.json());
+  MEDIA = r.media||[];
+  renderMedia();
+}
+async function loadStats(){
+  STATS = await fetch('/api/stats').then(x=>x.json());
+  renderStats();
+}
+async function loadTools(){
+  await loadStatsInline();
+  const r = await fetch('/api/revoked').then(x=>x.json());
+  renderTools(r.revoked||[]);
+}
+function refreshCounters(){ loadMessages(); loadConvTree(); }
+
+/* ---------- 左侧会话树 ---------- */
+function renderConv(){
+  const box = $('#conv');
+  box.innerHTML = '<div class="sidehd">会话</div>';
+  box.appendChild(grpEl('全部会话', ALL_MSGS.length, '__ALL__'));
+  CONVS.forEach(c=> box.appendChild(grpEl(c.name, c.messages, c.name)));
+}
+function grpEl(name, n, key){
+  const d = el('div', 'grp' + (CUR===key?' on':''));
+  d.appendChild(el('span','nm', esc(name)));
+  d.appendChild(el('span','n', n));
+  d.onclick = ()=>{ CUR = key; renderConv();
+    TAB==='media'? renderMedia() : renderLog(); updateStat(); };
+  return d;
+}
+
+/* ---------- 聊天 ---------- */
+function mediaHTML(list, kw){
+  if(!list || !list.length) return '';
+  let h = '<div class="media">';
+  list.forEach(m=>{
+    const nm = m.n || String(m.p).split('/').pop();
+    const isImg = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(nm) || m.k==='图片';
+    const u = mediaURL(m.p);
+    if(isImg) h += `<a href="${u}" target="_blank">
+      <img src="${u}" loading="lazy" title="${esc(nm)}"></a>`;
+    else h += `<a class="fchip" href="${u}" target="_blank" download>
+      <span>${extIcon(nm)}</span><span class="fn">${hl(nm,kw)}</span>
+      <span class="fs">${fsz(m.sz||0)}</span></a>`;
+  });
+  return h + '</div>';
+}
+function hl(s,kw){
+  s = String(s==null?'':s);
+  if(!kw) return esc(s);
+  const i = s.toLowerCase().indexOf(kw);
+  if(i<0) return esc(s);
+  return esc(s.slice(0,i))+'<mark>'+esc(s.slice(i,i+kw.length))+'</mark>'
+       + esc(s.slice(i+kw.length));
+}
+function rowHTML(m, kw, fresh){
+  if(m.k==='sys' && !m.media)
+    return `<div class="sys">${esc(m.t)} · ${esc(m.m)}</div>`;
+  const ini = esc((m.s||'?').trim().slice(0,1));
+  return `<div class="row ${m.me?'me':''} ${fresh?'fresh':''}">
+    <div class="av">${ini}</div><div class="bub">
+    <div class="meta">${esc(m.s)} · ${esc(m.t)}
+      ${CUR==='__ALL__'?' · '+esc(m.c):''}</div>
+    <div class="txt">${hl(m.m,kw)}</div>
+    ${mediaHTML(m.media, kw)}</div></div>`;
+}
+function filterList(list, kw){
+  if(!kw) return list;
+  return list.filter(m=> m.m.toLowerCase().includes(kw)
+    || m.s.toLowerCase().includes(kw) || m.c.toLowerCase().includes(kw)
+    || (m.media||[]).some(x=>(x.n||'').toLowerCase().includes(kw)));
+}
+function renderLog(){
+  const kw = $('#q').value.trim().toLowerCase();
+  let list = CUR==='__ALL__' ? ALL_MSGS : ALL_MSGS.filter(m=>m.c===CUR);
+  list = filterList(list, kw);
+  const log = $('#log');
+  if(!list.length){ log.innerHTML='<div class="empty">没有匹配的消息</div>'; return; }
+  const H = list.map(m=>rowHTML(m,kw,false)).join('');
+  log.innerHTML = H;
+  log.scrollTop = 0;
+}
+function appendLive(fresh){
+  const kw = $('#q').value.trim().toLowerCase();
+  const log = $('#log');
+  if(!log.dataset.ready || TAB!=='chat') return;
+  let list = fresh;
+  if(CUR!=='__ALL__') list = list.filter(m=>m.c===CUR);
+  if(!list.length) return;
+  const atTop = log.scrollTop < 60;
+  const H = list.map(m=>rowHTML(m,kw,true)).join('');
+  log.insertAdjacentHTML('afterbegin', H);
+  if(atTop) log.scrollTop = 0;
+}
+
+/* ---------- 媒体库 ---------- */
+function renderMedia(){
+  const kw = $('#q').value.trim().toLowerCase();
+  let list = MEDIA;
+  if(CUR!=='__ALL__') list = list.filter(m=>m.conv===CUR);
+  if(kw) list = list.filter(m=>(m.name||'').toLowerCase().includes(kw)
+    || (m.conv||'').toLowerCase().includes(kw)
+    || (m.sender||'').toLowerCase().includes(kw));
+  const g = $('#mgrid');
+  if(!list.length){ g.innerHTML='<div class="empty">没有匹配的媒体</div>'; return; }
+  g.innerHTML = list.map(m=>{
+    const nm = m.name || String(m.path).split('/').pop();
+    const isImg = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(nm) || m.kind==='图片';
+    const u = mediaURL(m.path);
+    return `<div class="mcard">
+      ${isImg ? `<img src="${u}" loading="lazy" onclick="showLb('${u}')">`
+              : `<div style="height:148px;display:flex;align-items:center;
+                 justify-content:center;font-size:44px;background:#f3f4f6">
+                 ${extIcon(nm)}</div>`}
+      <div class="body">
+        <div class="nm" title="${esc(nm)}">${hl(nm,kw)}</div>
+        <div class="sub">${esc(m.kind)} · ${fsz(m.size)}</div>
+        <div class="sub">${esc(m.conv||'')}${m.time?' · '+esc(String(m.time).slice(0,16)):''}</div>
+        <div class="sub"><a href="${u}" target="_blank" download
+          style="color:#0a8f4a">下载 / 打开</a></div>
+      </div></div>`;
+  }).join('');
+}
+window.showLb = u =>{ $('#lbimg').src = u; $('#lb').style.display='flex'; };
+$('#lb').onclick = ()=> $('#lb').style.display='none';
+
+/* ---------- 内容（公告 / 应用 / 通讯录 / 群成员） ---------- */
+let CONTENT = null;          // {counts, corps, departments, elapsed}
+let CSUB = 'notice';         // 当前子标签
+let DIR_PAGE = 0, DIR_Q = '', DIR_TOTAL = 0;
+const DIR_PAGE_SIZE = 200;
+
+const KIND_CLS = {'群公告':'grp','公告':'an','登录通知':'login','系统':'sys',
+  '系统提示':'sys','会话名':'sys'};
+const KIND_ALL = ['群公告','公告','登录广告','登录通知','系统提示','系统','会话名'];
+
+async function loadContent(force){
+  const url = '/api/content' + (force? '?refresh=1' : '');
+  CONTENT = await fetch(url).then(x=>x.json());
+  const b = $('#nContent');
+  if(b && CONTENT && CONTENT.counts){
+    const c = CONTENT.counts;
+    b.textContent = (c.notices + c.apps) || '·';
+  }
+  return CONTENT;
+}
+
+function subTabs(){
+  const c = (CONTENT && CONTENT.counts) || {};
+  const items = [
+    ['notice','公告', c.notices],
+    ['apps','企业应用', c.apps],
+    ['dir','通讯录', c.members],
+    ['grp','群成员', c.group_members],
+  ];
+  return `<div class="subtabs">${items.map(([k,lab,n])=>
+    `<span class="stab ${CSUB===k?'on':''}" data-sub="${k}">${esc(lab)}`
+    + (n!=null? ` <b>${n}</b>`:'') + `</span>`).join('')}</div>`;
+}
+
+function renderContent(){
+  const p = $('#paneContent');
+  if(!CONTENT || !CONTENT.counts){
+    p.innerHTML = '<div class="empty">正在读取公告 / 应用 / 通讯录…（首次约需数秒）</div>';
+    return;
+  }
+  p.innerHTML = subTabs() + '<div id="subBody"></div>';
+  p.querySelectorAll('.stab').forEach(s=>
+    s.onclick = ()=>{ CSUB = s.dataset.sub; DIR_PAGE = 0; renderContent(); });
+  if(CSUB==='notice') renderNotices();
+  else if(CSUB==='apps') renderApps();
+  else if(CSUB==='dir') renderDirectory();
+  else if(CSUB==='grp') renderGroups();
+  updateStat();
+}
+
+/* --- 公告 --- */
+async function renderNotices(){
+  const box = $('#subBody');
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  const r = await fetch('/api/notices').then(x=>x.json());
+  const list = r.notices||[];
+  const kinds = [...new Set(list.map(x=>x.kind))];
+  box.innerHTML = `
+    <div class="chips">
+      <span class="chip on" data-k="">全部 ${list.length}</span>
+      ${kinds.map(k=>`<span class="chip" data-k="${esc(k)}">${esc(k)} `
+        + `${list.filter(x=>x.kind===k).length}</span>`).join('')}
+    </div>
+    <div id="ntcList"></div>`;
+  box.querySelectorAll('.chip').forEach(c=> c.onclick = ()=>{
+    box.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+    c.classList.add('on');
+    paintNotices(c.dataset.k ? list.filter(x=>x.kind===c.dataset.k) : list);
+  });
+  paintNotices(list);
+}
+function paintNotices(list){
+  const el2 = $('#ntcList');
+  if(!list.length){ el2.innerHTML='<div class="empty">没有匹配的公告</div>'; return; }
+  el2.innerHTML = list.map(n=>`
+    <div class="ntc">
+      <div class="hd">
+        <span class="tag ${KIND_CLS[n.kind]||''}">${esc(n.kind)}</span>
+        <span class="ttl">${esc(n.sender||'—')}</span>
+        <span class="who">· ${esc(n.conversation||'')} · ${esc(n.time||'')}</span>
+      </div>
+      <div class="bd">${esc(n.text)}</div>
+    </div>`).join('');
+}
+
+/* --- 企业应用 --- */
+async function renderApps(){
+  const box = $('#subBody');
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  const r = await fetch('/api/apps').then(x=>x.json());
+  const list = r.apps||[];
+  box.innerHTML = `<div class="appgrid">${list.map(a=>`
+    <div class="app">
+      ${a.icon ? `<img src="${esc(a.icon)}" loading="lazy"
+          onerror="this.outerHTML='<div class=ph>${esc((a.name||'?').slice(0,1))}</div>'">`
+        : `<div class="ph">${esc((a.name||'?').slice(0,1))}</div>`}
+      <div style="min-width:0">
+        <div class="nm">${esc(a.name||'(未命名应用)')}</div>
+        ${a.desc? `<div class="ds">${esc(a.desc)}</div>`:''}
+        <div class="id">open_id ${esc(a.app_open_id)}</div>
+      </div>
+    </div>`).join('')}</div>`;
+}
+
+/* --- 通讯录 --- */
+async function renderDirectory(){
+  const box = $('#subBody');
+  const depts = (CONTENT.departments||[]);
+  const corps = (CONTENT.corps||[]);
+  box.innerHTML = `
+    <div class="sec"><h3>企业与部门</h3>
+      ${corps.map(c=>`<div class="ntc" style="margin-bottom:8px">
+        <div class="hd"><span class="tag">企业</span>
+          <span class="ttl">${esc((c.info||'').split(' | ')[0]||c.corp_id)}</span>
+          <span class="who">· corp_id ${esc(c.corp_id)}</span></div>
+      </div>`).join('')}
+      <div class="deptree">${deptTree(depts)}</div>
+    </div>
+    <div class="sec">
+      <h3>成员 <span style="color:#6b7280;font-weight:400;font-size:12px"
+        id="dirCnt"></span></h3>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <input type="search" id="dirQ" placeholder="搜索姓名 / 手机 / 邮箱 / 职位 / ID…"
+          style="width:290px" value="${esc(DIR_Q)}">
+        <button class="primary" id="dirGo">搜索</button>
+        ${DIR_Q? '<button id="dirClr">清空</button>':''}
+      </div>
+      <div id="dirBody"></div>
+    </div>`;
+  const go = ()=>{ DIR_Q = $('#dirQ').value.trim(); DIR_PAGE = 0; loadDir(); };
+  $('#dirGo').onclick = go;
+  $('#dirQ').onkeydown = e =>{ if(e.key==='Enter') go(); };
+  const cl = $('#dirClr'); if(cl) cl.onclick = ()=>{
+    $('#dirQ').value=''; DIR_Q=''; DIR_PAGE=0; loadDir(); };
+  loadDir();
+}
+function deptTree(depts){
+  if(!depts.length) return '<span style="color:#6b7280">无部门数据</span>';
+  const byParent = {};
+  depts.forEach(d=> (byParent[d.parent_id||''] = byParent[d.parent_id||'']||[])
+    .push(d));
+  const out = [];
+  const walk = (pid, lv)=>{
+    (byParent[pid]||[]).forEach(d=>{
+      out.push(`<div class="lv${Math.min(lv,5)}">
+        <span class="nm2">📁 ${esc(d.name||d.dept_id)}</span>
+        ${d.user_count? `<span class="ct"> · ${d.user_count} 人</span>`:''}</div>`);
+      walk(d.dept_id, lv+1);
+    });
+  };
+  walk('', 1);
+  // 若有未挂到根上的，兜底平铺
+  const shown = new Set([...out].map(String));
+  if(!out.length) return depts.map(d=>
+    `<div class="lv1"><span class="nm2">📁 ${esc(d.name)}</span></div>`).join('');
+  return out.join('');
+}
+async function loadDir(){
+  const box = $('#dirBody');
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  const u = `/api/directory?q=${encodeURIComponent(DIR_Q)}`
+    + `&offset=${DIR_PAGE*DIR_PAGE_SIZE}&limit=${DIR_PAGE_SIZE}`;
+  const r = await fetch(u).then(x=>x.json());
+  DIR_TOTAL = r.total||0;
+  $('#dirCnt').textContent = `· 共 ${DIR_TOTAL} 人`;
+  const ms = r.members||[];
+  if(!ms.length){ box.innerHTML='<div class="empty">没有匹配的成员</div>'; return; }
+  const pages = Math.max(1, Math.ceil(DIR_TOTAL/DIR_PAGE_SIZE));
+  box.innerHTML = `
+    <table class="dirt"><thead><tr>
+      <th>姓名</th><th>英文名</th><th>手机</th><th>邮箱</th>
+      <th>职位</th><th>账号</th><th>user_id</th>
+    </tr></thead><tbody>${ms.map(m=>`<tr>
+      <td><span class="avt">${m.avatar?
+        `<img src="${esc(m.avatar)}" loading="lazy">`:
+        esc((m.name||'?').trim().slice(0,1))}</span>${esc(m.name||'—')}</td>
+      <td>${esc(m.english_name||'')}</td>
+      <td>${esc(m.mobile||m.telephone||'')}</td>
+      <td>${esc(m.email||'')}</td>
+      <td>${esc(m.position||'')}</td>
+      <td>${esc(m.account||'')}</td>
+      <td style="font-family:ui-monospace,Consolas,monospace;font-size:11px">
+        ${esc(m.user_id||'')}</td>
+    </tr>`).join('')}</tbody></table>
+    ${pages>1? `<div class="pager">
+      <button id="dPrev" ${DIR_PAGE<=0?'disabled':''}>上一页</button>
+      <span>第 ${DIR_PAGE+1} / ${pages} 页</span>
+      <button id="dNext" ${DIR_PAGE>=pages-1?'disabled':''}>下一页</button>
+    </div>`:''}`;
+  const pv = $('#dPrev'); if(pv) pv.onclick = ()=>{ DIR_PAGE--; loadDir(); };
+  const nx = $('#dNext'); if(nx) nx.onclick = ()=>{ DIR_PAGE++; loadDir(); };
+}
+
+/* --- 群成员 --- */
+async function renderGroups(){
+  const box = $('#subBody');
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  const r = await fetch('/api/group-members').then(x=>x.json());
+  const list = (r.conversations||[]).filter(x=>!String(x.name).startsWith('R:'));
+  box.innerHTML = `
+    <div class="sec"><h3>群聊成员 (${list.length} 个群)</h3>
+      <div class="chips" id="grpChips">
+        <span class="chip on" data-n="">选择群…</span>
+        ${list.map(g=>`<span class="chip" data-n="${esc(g.name)}">
+          ${esc(g.name)} <b>${g.count}</b></span>`).join('')}
+      </div>
+    </div>
+    <div id="grpBody"><div class="empty">请选择一个群查看成员</div></div>`;
+  box.querySelectorAll('#grpChips .chip').forEach(c=> c.onclick = ()=>{
+    box.querySelectorAll('#grpChips .chip').forEach(x=>x.classList.remove('on'));
+    c.classList.add('on');
+    if(!c.dataset.n){ $('#grpBody').innerHTML =
+      '<div class="empty">请选择一个群查看成员</div>'; return; }
+    loadGroup(c.dataset.n);
+  });
+}
+async function loadGroup(name){
+  const b = $('#grpBody');
+  b.innerHTML = '<div class="empty">加载中…</div>';
+  const r = await fetch('/api/group-members?conv='
+    + encodeURIComponent(name)).then(x=>x.json());
+  const ms = r.members||[];
+  b.innerHTML = `
+    <div class="sec"><h3>${esc(name)} · ${ms.length} 人</h3>
+    <table class="dirt"><thead><tr><th>#</th><th>姓名</th><th>user_id</th>
+      <th>入群时间</th></tr></thead><tbody>${ms.map((m,i)=>`<tr>
+      <td>${i+1}</td>
+      <td><span class="avt">${esc((m.name||m.nick_name||'?').trim().slice(0,1))}</span>
+        ${esc(m.name||m.nick_name||'—')}</td>
+      <td style="font-family:ui-monospace,Consolas,monospace;font-size:11px">
+        ${esc(m.user_id)}</td>
+      <td>${m.join_time? new Date(m.join_time*1000).toLocaleString('zh-CN',
+        {hour12:false}):''}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+
+/* ---------- 统计 ---------- */
+function bar(name, val, max){
+  const p = max? Math.round(val/max*100) : 0;
+  return `<div class="bar"><span class="lbl" title="${esc(name)}">${esc(name)}</span>
+    <span class="track"><span class="fill" style="width:${p}%"></span></span>
+    <span class="val">${val}</span></div>`;
+}
+function bars(title, arr){
+  if(!arr || !arr.length) return '';
+  const max = Math.max(...arr.map(x=>x.value));
+  return `<div class="sec"><h3>${esc(title)}</h3>
+    ${arr.map(x=>bar(x.name, x.value, max)).join('')}</div>`;
+}
+function renderStats(){
+  if(!STATS) return;
+  const s = STATS;
+  const maxDay = s.by_day.length? Math.max(...s.by_day.map(d=>d.value)) : 1;
+  const heat = s.by_hour.map(h=>{
+    const a = h.value/maxDay;
+    const bg = h.value? `rgba(7,193,96,${(0.12+a*0.88).toFixed(2)})` : '#f3f4f6';
+    return `<div style="background:${bg}" title="${h.hour}时 · ${h.value}条">
+      ${h.hour%3===0?`<span>${h.hour}</span>`:''}</div>`;
+  }).join('');
+  const days = s.by_day.slice(-40).map(d=>{
+    const a = maxDay? d.value/maxDay : 0;
+    return `<div style="flex:1;background:rgba(7,193,96,${(0.15+a*0.85).toFixed(2)});
+      height:${Math.max(3, Math.round(a*58))}px;border-radius:2px"
+      title="${d.date} · ${d.value}条"></div>`;
+  }).join('');
+
+  $('#paneStats').innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="k">消息总数</div><div class="v">${s.total}</div></div>
+      <div class="card"><div class="k">会话</div><div class="v">${s.conversations}</div></div>
+      <div class="card"><div class="k">参与人</div><div class="v">${s.people}</div></div>
+      <div class="card"><div class="k">媒体文件</div><div class="v">${s.media_files}</div></div>
+      <div class="card"><div class="k">我发出</div><div class="v">${s.me}</div></div>
+      <div class="card"><div class="k">他人发出</div><div class="v">${s.other}</div></div>
+    </div>
+    <div class="sec"><h3>时段分布（0–23 时）</h3>
+      <div class="heat">${heat}</div><div style="height:18px"></div></div>
+    <div class="sec"><h3>按日活跃度</h3>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:62px">${days}</div></div>
+    ${bars('消息类型占比', s.by_type)}
+    ${bars('发言排行', s.top_senders)}
+    <div class="sec"><h3>会话排行 / 群聊画像</h3>
+      ${s.conv_detail.slice(0,20).map(c=>`
+        <details style="margin-bottom:8px">
+          <summary style="cursor:pointer;font-weight:600">
+            ${esc(c.name)}
+            <span style="color:#6b7280;font-weight:400;font-size:12px">
+              · ${c.messages} 条 · ${c.people} 人 · ${c.media} 个媒体</span>
+          </summary>
+          <div style="padding:8px 0 4px 18px">
+            ${c.top.map(p=>bar(p.name, p.value,
+              Math.max(...c.top.map(x=>x.value)))).join('')}
+          </div>
+        </details>`).join('')}
+    </div>`;
+}
+
+/* ---------- 工具 ---------- */
+async function loadStatsInline(){ if(!STATS) STATS = await fetch('/api/stats').then(x=>x.json()); }
+function renderTools(revoked){
+  $('#paneTools').innerHTML = `
+    <div class="sec"><h3>导出</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span style="color:#6b7280;font-size:13px">当前范围：</span>
+        <b>${esc(CUR==='__ALL__'?'全部会话':CUR)}</b>
+        <span style="color:#6b7280;font-size:13px">格式：</span>
+        <select id="teFmt">
+          <option value="json">JSON</option><option value="md">Markdown</option>
+          <option value="txt">TXT</option><option value="csv">CSV</option>
+          <option value="html">HTML</option></select>
+        <button class="primary" id="teBtn">下载</button>
+      </div></div>
+    <div class="sec"><h3>实时通知</h3>
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="cbNotify" ${notifyOn?'checked':''}>
+        新消息到达时弹出通知（含浏览器桌面通知）
+      </label>
+      <div style="color:#6b7280;font-size:12px;margin-top:8px">
+        同步状态：${ENGINE_INFO? `第 ${ENGINE_INFO.run_count} 轮 · 上次 ${esc(ENGINE_INFO.last_run||'—')}` : '—'}
+        ${ENGINE_INFO&&ENGINE_INFO.error? `<span style="color:#b45309">
+          · ${esc(ENGINE_INFO.error)}</span>`:''}
+      </div></div>
+    <div class="sec"><h3>撤回消息留档（${revoked.length} 条）</h3>
+      ${revoked.length? `<ul id="revoke">${revoked.map(r=>`
+        <li><div>${esc(Object.entries(r).filter(([k])=>
+          /msgid|message|content|text/i.test(k)).map(([k,v])=>k+'='+v).join(' · ')
+          || JSON.stringify(r))}</div></li>`).join('')}</ul>`
+        : '<div style="color:#6b7280;font-size:13px">暂无撤回记录</div>'}
+    </div>
+    <div class="sec"><h3>内容互通（公告 / 应用 / 通讯录）</h3>
+      <div style="font-size:12px;color:#374151;line-height:2">
+        <code>GET /api/content?refresh=1</code> — 内容概览与计数<br>
+        <code>GET /api/notices?q=&amp;kind=&amp;conv=</code> — 公告 / 系统通知<br>
+        <code>GET /api/apps?q=&amp;offset=&amp;limit=</code> — 企业应用<br>
+        <code>GET /api/directory?q=&amp;offset=&amp;limit=</code> — 企业通讯录<br>
+        <code>GET /api/group-members?conv=</code> — 群成员名册
+      </div></div>
+    <div class="sec"><h3>HTTP API</h3>
+      <div style="font-size:12px;color:#374151;line-height:2">
+        <code>GET /api/info</code> — 引擎状态<br>
+        <code>GET /api/messages?conv=&amp;q=&amp;limit=&amp;offset=</code> — 消息查询<br>
+        <code>GET /api/conversations</code> — 会话列表<br>
+        <code>GET /api/media?kind=&amp;conv=&amp;q=</code> — 媒体列表<br>
+        <code>GET /api/stats</code> — 统计分析<br>
+        <code>GET /api/search?q=</code> — 全文搜索<br>
+        <code>GET /api/revoked</code> — 撤回留档<br>
+        <code>GET /api/export?format=json&amp;conv=</code> — 导出<br>
+        <code>POST /api/sync/now</code> — 立即同步<br>
+        <code>GET /events</code> — SSE 实时事件流
+      </div></div>`;
+  const b = $('#teBtn');
+  if(b) b.onclick = ()=>{
+    const f = $('#teFmt').value;
+    const q = CUR==='__ALL__' ? '' : '&conv='+encodeURIComponent(CUR);
+    location.href = '/api/export?format='+f+q;
+  };
+  const cb = $('#cbNotify');
+  if(cb) cb.onchange = ()=>{ notifyOn = cb.checked; savePref(); };
+}
+let notifyOn = localStorage.getItem('wf_notify')==='1';
+function savePref(){ localStorage.setItem('wf_notify', notifyOn?'1':'0'); }
+function notify(m){
+  const title = m.c + ' · ' + m.s;
+  if(window.Notification && Notification.permission==='granted'){
+    try{ new Notification(title, {body: m.m.slice(0,120),
+      tag:'wf'+Date.now(), icon:'' }); }catch(e){}
+  }
+}
+function toast(h, b){
+  const t = el('div','tst');
+  t.appendChild(el('div','h', esc(h)));
+  if(b) t.appendChild(el('div','b', esc(b)));
+  $('#toast').appendChild(t);
+  setTimeout(()=>{ t.style.transition='opacity .4s'; t.style.opacity='0';
+    setTimeout(()=>t.remove(), 420); }, 4200);
+}
+
+/* ---------- Tab / 搜索 / 按钮 ---------- */
+function setTab(t){
+  TAB = t;
+  document.querySelectorAll('.tab').forEach(x=>
+    x.classList.toggle('on', x.dataset.tab===t));
+  ['log','paneContent','paneMedia','paneStats','paneTools'].forEach(id=>
+    $('#'+id).classList.remove('on'));
+  const map = {chat:'log', content:'paneContent', media:'paneMedia',
+    stats:'paneStats', tools:'paneTools'};
+  $('#'+map[t]).classList.add('on');
+  if(t==='chat'){ $('#log').dataset.ready='1'; renderLog(); }
+  if(t==='content'){ if(CONTENT) renderContent(); else
+    loadContent().then(renderContent).catch(e=>{
+      $('#paneContent').innerHTML =
+        '<div class="empty">内容读取失败：'+esc(e.message)+'</div>'; }); }
+  if(t==='media') refreshMedia();
+  if(t==='stats'){ if(STATS) renderStats(); else loadStats(); }
+  if(t==='tools') loadTools();
+  updateStat();
+}
+function refreshMedia(){ loadMedia(); }
+function updateStat(){
+  const s = $('#stat');
+  if(TAB==='chat'){
+    const n = CUR==='__ALL__'? ALL_MSGS.length
+      : ALL_MSGS.filter(m=>m.c===CUR).length;
+    const nm = ALL_MSGS.filter(m=>m.media).length;
+    s.textContent = `${ALL_MSGS.length} 条消息 · ${CONVS.length} 个会话 · ${nm} 条含附件`
+      + (LIVE? ` · 本轮新增 ${LIVE}` : '');
+  } else if(TAB==='content'){
+    const c = (CONTENT && CONTENT.counts) || {};
+    s.textContent = (CONTENT && CONTENT.counts)
+      ? `公告 ${c.notices} · 应用 ${c.apps} · 通讯录 ${c.members} 人 · 群成员 ${c.group_members}`
+      : '读取中…';
+  } else if(TAB==='media'){
+    const n = CUR==='__ALL__'? MEDIA.length : MEDIA.filter(m=>m.conv===CUR).length;
+    s.textContent = `${MEDIA.length} 个媒体文件 · 当前 ${n}`;
+  } else if(TAB==='stats' && STATS){
+    s.textContent = `${STATS.total} 条 · ${STATS.conversations} 会话 · ${STATS.people} 人`;
+  } else s.textContent = '';
+}
+document.querySelectorAll('.tab').forEach(t=>
+  t.onclick = ()=> setTab(t.dataset.tab));
+let qt = null;
+$('#q').oninput = ()=>{
+  clearTimeout(qt);
+  qt = setTimeout(()=>{
+    if(TAB==='chat') renderLog();
+    else if(TAB==='media') renderMedia();
+    else if(TAB==='content'){ DIR_Q = $('#q').value.trim(); DIR_PAGE=0;
+      if(CSUB==='dir') loadDir(); }
+  }, 220);
+};
+$('#btnSync').onclick = async ()=>{
+  $('#btnSync').textContent = '同步中…';
+  await fetch('/api/sync/now', {method:'POST'});
+  setTimeout(()=> $('#btnSync').textContent='立即同步', 1500);
+  toast('已触发同步', '稍后如有新消息会自动出现');
+};
+$('#btnExp').onclick = ()=>{
+  const f = $('#expFmt').value;
+  const q = CUR==='__ALL__' ? '' : '&conv='+encodeURIComponent(CUR);
+  location.href = '/api/export?format='+f+q;
+  toast('已开始导出', f.toUpperCase() + ' · ' + (CUR==='__ALL__'?'全部会话':CUR));
+};
+
+/* ---------- 启动 ---------- */
+let ENGINE_INFO = null;
+(async function boot(){
+  connect();
+  await Promise.all([loadMessages(), loadConvTree(), loadMedia()]);
+  try{ ENGINE_INFO = await fetch('/api/info').then(x=>x.json()); }catch(e){}
+  setTab('chat');
+  updateStat();
+  setInterval(async()=>{                       // 兜底：定期刷新会话计数
+    try{ ENGINE_INFO = await fetch('/api/info').then(x=>x.json());
+      setConn(!ENGINE_INFO.error, ENGINE_INFO.error);
+    }catch(e){ setConn(false); }
+  }, 30000);
+})();
+</script>
+</body>
+</html>

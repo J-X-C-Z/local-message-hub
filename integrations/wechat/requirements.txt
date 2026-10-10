@@ -1,0 +1,6 @@
+cryptography>=41.0.0,<47
+zstandard>=0.19.0,<1
+pycryptodome>=3.24.0,<4
+pilk-nogil==0.4.3
+qrcode==8.2
+pypng==0.20220715.0

@@ -1,0 +1,16 @@
+# Windows x64 / CPython 3.12 packaging lock. Keep in sync with the reader runtime.
+altgraph==0.17.4
+cffi==1.17.1
+cryptography==45.0.7
+packaging==25.0
+pefile==2023.2.7
+pilk-nogil==0.4.3
+pycparser==2.22
+pycryptodome==3.23.0
+pyinstaller==6.15.0
+pyinstaller-hooks-contrib==2025.8
+pywin32-ctypes==0.2.3
+pypng==0.20220715
+qrcode==8.2
+setuptools==80.9.0
+zstandard==0.24.0

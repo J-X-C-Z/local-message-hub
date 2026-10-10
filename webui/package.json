@@ -1,0 +1,9 @@
+{
+  "name": "local-chat-hub-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local unified chat archive interface",
+  "dependencies": {
+    "lucide": "^0.577.0"
+  }
+}
