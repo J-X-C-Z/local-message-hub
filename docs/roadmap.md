@@ -10,9 +10,10 @@ capabilities are never represented as connected or complete.
 **Current local source status (2026-10-14):** QQNT databases are read-only; new
 keys are protected by current-user Windows DPAPI in private Hub configuration.
 An earlier bounded scan through the running Hub verified and saved the local
-QQ key; the latest approved request was short-circuited because the database
-was already readable and did not scan process memory. The current live status
-is connected with the prior local sync complete. Explicitly authorized
+QQ key; the latest approved request was sent through the official endpoint and
+short-circuited because the database was already readable, so it did not scan
+process memory. The current live status is connected with the prior local sync
+complete. Explicitly authorized
 read-only syncs completed for the local WeChat and WeCom sources; the latest
 status check reports all three sources as
 `connected` without errors or account/message totals. No account identifiers or
@@ -39,10 +40,10 @@ tool mapping; its regression confirms chat-disabled clients cannot list or call
 the search tool. A completeness assertion now requires an explicit capability
 mapping for every MCP tool. Hindsight was unavailable during this audit.
 The local p376 Windows portable and sanitized source packages include this
-follow-up. The complete local gate passed 785 Python tests, four source-client
-mutation-gate tests, the WebUI suites and benchmark; isolated package startup,
-read-only MCP, privacy and local-worktree manifest checks passed. Hosted CI and
-artifact download verification remain open.
+follow-up. A later hosted Windows run passed the complete local gate, built and
+smoke-tested both packages, then verified the uploaded and downloaded artifact
+bytes and provenance. P14-01 is complete; P9, P11, P12-01, and P13 retain their
+real-device acceptance items below.
 P9 local send preparation also now accepts exact WeChat `@chatroom` targets
 across service, MCP schema and WebUI validation, while rejecting chat-type
 mismatches; this only prepares a request and never delivers it. The source
@@ -50,7 +51,7 @@ privacy scanner now inspects CSV/TSV text, and the source packager excludes
 these data files entirely so exports cannot enter the public source archive.
 The synthetic 25,000-message benchmark now enforces broad 60-second ingest and
 pagination, 10-second first-search, and 30-second backup/restore ceilings as
-catastrophic-regression guards; P14 still needs hosted CI and artifact roundtrip.
+catastrophic-regression guards; hosted P14 CI and artifact roundtrip now pass.
 
 Status is based on code and tests, not file presence. `DONE` means its listed
 synthetic/local acceptance has been verified. `IN_PROGRESS` includes work whose
@@ -535,7 +536,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. The p377 local gate/package evidence is recorded below; its local-worktree manifest checks both package inventories against base HEAD `8f45f2525c432ba81d6125b8d728f0ae5517ef5d`. The p377 commit `638555653242501c1b08bbfd7f039e0037e5af1e` now includes the CI and packaging helpers, closing the earlier clean-archive omission. Hosted run 38540434801 failed before tests/package creation because the MSYS2 mirror redirect returned a Cloudflare verification page. Direct package-host downloads and all three SHA-256 checks then passed in run 38541563975, but PowerShell pacman could not resolve the exact pinned `libgcc` and `libstdc++` dependencies. The packages' `.PKGINFO` names, versions, and dependency constraints match. Run 38542671122 failed with the same dependency error in an MSYS2 shell despite three explicit POSIX package targets, disproving the path-context diagnosis. Run 38543367064 auto-upgraded the pinned runtime packages to `16.2.0-6` during the GCC transaction; the exact-version guard caught the drift. Run 38544398023 then showed that ignoring those upgrades leaves current `cc-libs` dependencies unsatisfied. CI now installs the compiler and complete dependency graph from the updated official signed MSYS2 repositories and retains the QCE build's GCC 16.2.0 version gate. The package smoke checks the install command and version gate. This correction and the artifact download/provenance round trip still require hosted verification; P14 remains IN_PROGRESS. | IN_PROGRESS |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Local p377 evidence is recorded below. Hosted run 38547565569 on `c38d5fb90f9195d348831932ef5fb93afe7b273f` passed the full Windows gate, portable and source package builds/smokes, pre-upload manifest verification, artifact upload/download, and downloaded-byte/provenance verification. Artifact `LocalMessageHub-windows-release` is 251,740,883 bytes and retained until 2026-10-21. | DONE |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects

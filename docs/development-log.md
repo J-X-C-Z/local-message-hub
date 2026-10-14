@@ -7323,3 +7323,19 @@ key is absent.
 - Added synthetic checks for exact marker matches and arbitrary trailing text.
   The sender test suite passes without opening WeChat or delivering a message;
   real window-title variants and delivery remain unverified.
+
+## 2026-10-14 - P14 Hosted Windows CI and Artifact Round-Trip
+
+- Commit `c38d5fb90f9195d348831932ef5fb93afe7b273f` fixed Windows checkout
+  line endings for JavaScript test sources. The 32 WebUI checks passed locally.
+- Hosted run 38547565569 passed the complete Windows gate, including 788 Python
+  tests, four source-client mutation-gate tests, WebUI checks, benchmark,
+  portable and source-package builds, and isolated package smokes.
+- The hosted run created and pre-verified the provenance manifest, uploaded
+  the release artifact, downloaded it again, and passed byte/provenance
+  verification. `LocalMessageHub-windows-release` is 251,740,883 bytes and is
+  retained through 2026-10-21. P14-01 is DONE.
+- The approved QQ key-discovery request was sent to the local API; the API
+  refused a repeat scan because the QQ database is already readable. Its
+  existing key/index were left untouched. The separate QQ online-history
+  import capability remains disabled; no import or message delivery occurred.

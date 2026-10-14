@@ -2,7 +2,7 @@
 
 审计日期：2026-10-12。上游基线为 [`hicccc77/WeFlow`](https://github.com/hicccc77/WeFlow)
 
-2026-10-13 更新：QQ 全局缓存媒体视图加入 UTC+08 日期范围；vendored QCE 源码先筛选元数据再统计和分页，并返回能力标记。Windows 打包流程现从 vendored 源码和 Cargo.lock 构建 QCE；p260 包内 QCE（SHA-256 `adf2db90cd93d508a6d8c9e739fa22d68a37e547601757ee311c8c0f7f1b2107`）和 p263 包内 QCE（SHA-256 `fe8831b62a2c311e08cb3bdfbb3f39535b0a47f01502f6dbd50304ea89660386`）有隔离 loopback/日期筛选运行验收记录。p262 包内 QCE（SHA-256 `481999bc4de1c59e01e6b04539e2ba770e4f5cfbf999f95161968f73878bcc45`）已通过源码能力检查、构建和包内隐私检查，但未对该哈希独立运行日期筛选 smoke。p263 最终包在冒烟后重新执行隐私扫描并通过。hosted 构建、artifact 往返及真实账号缓存验收仍未完成；本地哈希仅作诊断，不作为发布 allowlist。
+2026-10-13 更新：QQ 全局缓存媒体视图加入 UTC+08 日期范围；vendored QCE 源码先筛选元数据再统计和分页，并返回能力标记。Windows 打包流程现从 vendored 源码和 Cargo.lock 构建 QCE；p260 包内 QCE（SHA-256 `adf2db90cd93d508a6d8c9e739fa22d68a37e547601757ee311c8c0f7f1b2107`）和 p263 包内 QCE（SHA-256 `fe8831b62a2c311e08cb3bdfbb3f39535b0a47f01502f6dbd50304ea89660386`）有隔离 loopback/日期筛选运行验收记录。p262 包内 QCE（SHA-256 `481999bc4de1c59e01e6b04539e2ba770e4f5cfbf999f95161968f73878bcc45`）已通过源码能力检查、构建和包内隐私检查，但未对该哈希独立运行日期筛选 smoke。p263 最终包在冒烟后重新执行隐私扫描并通过。P14 hosted build、artifact 往返已由 run 38547565569 验收通过；真实账号缓存验收仍未完成。本地哈希仅作诊断，不作为发布 allowlist。
 P11 本机头像读取补充：微信 `head_image` 表存在同一 username 的多条缓存记录时，按 `update_time` 从新到旧选择首个签名有效 JPEG，避免后写入的旧记录覆盖新头像；不访问远程头像源。合成 SQLite 回归覆盖乱序重复记录。
 `main`，commit `2f23e72cebf7f309a0f4d129307d16d7b0cd41c3`（与本仓库
 `UPSTREAM.md` 固定版本一致，包版本 5.0.0）。Local Message Hub 对照
