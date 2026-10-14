@@ -8089,3 +8089,9 @@ key is absent.
   disk space proportional to the export size.
 - Windows run `38645889678` targets the earlier commit `e1155df2d91523f9e061c6609125402c444e813b`,
   before this patch; it cannot serve as hosted acceptance for this change.
+- Windows run `38646851948` on commit `4add500a5255e2e66c462ac10d25742bcf0a9bd3`
+  passed all 24 workflow steps, including package build/smokes, upload/download,
+  and artifact byte/provenance verification. Artifact `LocalMessageHub-windows-release`
+  (`11932494397`) is 251,793,400 bytes, SHA-256
+  `d7235471bf806931f4fe5dca5f3cf04f239cf36915bf35ae5801e55353602cdb`, retained
+  through 2026-10-21. The documentation status update itself follows that run.
