@@ -209,7 +209,8 @@ for (const [platform, label] of [['qq', '准备 QQ 文本发送'], ['wecom', '�
   settingsHtml = context.__renderSettingsBase();
   assert.match(settingsHtml, /个人微信发送通道/);
   assert.match(settingsHtml, /data-action="wechat-send-readiness"/);
-  assert.match(settingsHtml, /可发送 · 本机微信 wxid_self0001/);
+  assert.match(settingsHtml, /客户端与账号已就绪 · 本机微信 wxid_self0001/);
+  assert.match(settingsHtml, /发送前需打开并唯一识别目标会话/);
   context.__state.wechatSendReadiness = {state: 'window_not_found', input_available: true};
   assert.match(context.__renderSettingsBase(), /未找到微信窗口/);
   context.__state.wechatSendReadiness = null;

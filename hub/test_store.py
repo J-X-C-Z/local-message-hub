@@ -872,6 +872,23 @@ class StoreTestCase(unittest.TestCase):
                 self.assertEqual(self.store.media("qq", q="must-not-fallback.png", source=source,
                                                   expand_attachments=True)["total"], 0)
 
+    def test_qq_media_search_matches_file_name_on_second_attachment(self):
+        self.store.ingest("qq", "acc1", [conv("qq-file-name-room", platform="qq")], [
+            msg("qq-file-name-message", "qq-file-name-room", 100, "", type="text",
+                platform="qq", file_name="first.png", media=[
+                    {"file_name": "first.png", "type": "image"},
+                    {"name": "visible-label.pdf", "file_name": "target.pdf", "type": "file"},
+                ]),
+        ])
+
+        for source in ("chat", "all"):
+            with self.subTest(source=source):
+                result = self.store.media("qq", q="target.pdf", source=source,
+                                          expand_attachments=True)
+                self.assertEqual(result["total"], 1)
+                self.assertEqual(result["items"][0]["id"], "qq-file-name-message")
+                self.assertEqual(result["items"][0]["media_entry"]["resource_index"], 1)
+
     def test_localized_wecom_attachment_types_filter_as_canonical_media(self):
         self.store.ingest("wecom", "acc1", [conv("localized-room", platform="wecom", title="Localized")], [
             msg("localized", "localized-room", 100, "", type="text", platform="wecom",

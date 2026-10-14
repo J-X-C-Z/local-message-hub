@@ -1691,11 +1691,13 @@ class ChatStore:
                        "COALESCE(text,'') LIKE ? ESCAPE '\\' OR " \
                        "COALESCE(sender_name,'') LIKE ? ESCAPE '\\' OR " \
                        "COALESCE(sender_id,'') LIKE ? ESCAPE '\\' OR " \
-                       "COALESCE(json_extract(_media_resource, '$.name'), " \
-                       "json_extract(_media_resource, '$.n'), '') LIKE ? ESCAPE '\\')"
+                       "json_extract(_media_resource, '$.name') LIKE ? ESCAPE '\\' OR " \
+                       "json_extract(_media_resource, '$.n') LIKE ? ESCAPE '\\' OR " \
+                       "json_extract(_media_resource, '$.file_name') LIKE ? ESCAPE '\\')"
         filter_params = [media_type, media_type, query, _like_pattern(query),
                          _like_pattern(query), _like_pattern(query), _like_pattern(query),
-                         _like_pattern(query), _like_pattern(query)]
+                         _like_pattern(query), _like_pattern(query), _like_pattern(query),
+                         _like_pattern(query)]
         with self._lock:
             conn = self._require_connection()
             total = conn.execute(
@@ -1815,9 +1817,10 @@ class ChatStore:
         if not branches:
             return {"items": [], "total": 0}
         union = " UNION ALL ".join(branches)
-        where = ["(?='' OR media_type=?)", "(?='' OR COALESCE(conversation_title,'') LIKE ? ESCAPE '\\' OR COALESCE(file_name,'') LIKE ? ESCAPE '\\' OR COALESCE(text,'') LIKE ? ESCAPE '\\' OR COALESCE(sender_name,'') LIKE ? ESCAPE '\\' OR COALESCE(sender_id,'') LIKE ? ESCAPE '\\' OR COALESCE(json_extract(resource_json,'$.name'),json_extract(resource_json,'$.n'),'') LIKE ? ESCAPE '\\' OR COALESCE(post_payload,'') LIKE ? ESCAPE '\\')"]
+        where = ["(?='' OR media_type=?)", "(?='' OR COALESCE(conversation_title,'') LIKE ? ESCAPE '\\' OR COALESCE(file_name,'') LIKE ? ESCAPE '\\' OR COALESCE(text,'') LIKE ? ESCAPE '\\' OR COALESCE(sender_name,'') LIKE ? ESCAPE '\\' OR COALESCE(sender_id,'') LIKE ? ESCAPE '\\' OR json_extract(resource_json,'$.name') LIKE ? ESCAPE '\\' OR json_extract(resource_json,'$.n') LIKE ? ESCAPE '\\' OR json_extract(resource_json,'$.file_name') LIKE ? ESCAPE '\\' OR COALESCE(post_payload,'') LIKE ? ESCAPE '\\')"]
         filter_params = [media_type, media_type, query, _like_pattern(query), _like_pattern(query),
                          _like_pattern(query), _like_pattern(query), _like_pattern(query),
+                         _like_pattern(query), _like_pattern(query),
                          _like_pattern(query), _like_pattern(query)]
         sql = f"WITH unified AS ({union}) SELECT * FROM unified WHERE {' AND '.join(where)}"
         with self._lock:
