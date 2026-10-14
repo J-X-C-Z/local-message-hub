@@ -8031,3 +8031,26 @@ key is absent.
   binds the packages to base commit `c996b1332c501a59e14e44ea06404b7a68fad56c`
   with build context `local-worktree`; hosted verification and uploaded/downloaded
   artifact checks for the current source change remain open.
+
+## 2026-10-15 - Release Gate and WeCom Timeout Bound
+
+- Hosted run `38636598608` exposed one Windows-only failure in the WeCom bot
+  transport timeout test. The captured remaining timeout exceeded its configured
+  300-second media limit at a monotonic-clock boundary. The shared send path now
+  clamps the socket timeout to that configured ceiling, with a deterministic
+  regression check. No delivery behavior or source-client state was changed.
+- `scripts/check-local-hub.ps1` passed after the fix: 819 Python tests, four
+  source-client mutation-gate checks, configured WebUI/JS suites, privacy and
+  package checks, and the 25,000-message performance benchmark. First search was
+  0.033 seconds, pagination recheck 1.467 seconds, backup 0.086 seconds, and
+  restore 0.251 seconds.
+- Rebuilt the Windows portable package (9,783 files, 586,811,450 bytes) and
+  sanitized source bundle (690 entries, 25,108,689 bytes). Isolated Hub/UI/
+  source/MCP startup and privacy checks passed; local-worktree manifest creation
+  and byte verification passed for commit `a2a1aae365cb31aaee9a7de406d9af1723efd4ea`.
+- Hosted run `38638279271` on that commit passed the full Windows gate, portable
+  and source package builds/smokes, artifact upload/download, and downloaded-byte
+  and provenance verification. Artifact `LocalMessageHub-windows-release` is
+  251,780,323 bytes with digest
+  `sha256:85e3bd31d62b8745b6ea27dd822f2520db95306093d572aef4c35bccb947ca6c`,
+  retained through 2026-10-21. P14-01 is complete for this source tree.

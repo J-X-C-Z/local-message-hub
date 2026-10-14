@@ -52,11 +52,13 @@ also passed the full Windows gate and artifact round-trip on commit
 `55a6e083f59f0b572bf9cb60fc795501dc9babcc`; its 251,779,840-byte artifact is
 retained through 2026-10-21. Documentation-only commit
 `c996b1332c501a59e14e44ea06404b7a68fad56c` also passed hosted run
-`38630724422` and produced a 251,779,476-byte artifact. The current local
-WeChat media-locator fix passed the full local gate; fresh portable and source
-packages passed isolated startup, privacy, and local manifest checks. They have
-not gone through hosted artifact round-trip, so P14-01 remains IN_PROGRESS for
-the current worktree. P9/P13 live
+`38630724422` and produced a 251,779,476-byte artifact. Commit
+`a2a1aae365cb31aaee9a7de406d9af1723efd4ea` passed the full local gate and
+hosted Windows workflow `38638279271`, including portable/source packaging,
+upload/download, and matching SHA-256/provenance checks. Its 251,780,323-byte
+artifact is retained through 2026-10-21. Fresh local packages also passed
+isolated startup, privacy, and manifest verification. P14-01 is DONE for this
+source tree. P9/P13 live
 delivery, P11 real-cache parity, and P12 live desktop/native acceptance remain
 open.
 
@@ -750,7 +752,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Hosted code run `38628212261` on commit `55a6e083f59f0b572bf9cb60fc795501dc9babcc` passed the full Windows gate and artifact round-trip; latest branch run `38630724422` on docs-only commit `c996b1332c501a59e14e44ea06404b7a68fad56c` also passed. The current worktree passed 819 Python tests, four source-mutation gate checks, configured WebUI/JS checks and the 25,000-message benchmark. A 9,783-file Windows portable package and 690-file sanitized source bundle passed isolated startup, privacy and `local-worktree` manifest verification. Hosted artifact round-trip for this source change remains outstanding. | IN_PROGRESS |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Hosted code run `38638279271` on `a2a1aae365cb31aaee9a7de406d9af1723efd4ea` passed the full Windows gate and artifact round-trip; artifact `LocalMessageHub-windows-release` is 251,780,323 bytes, SHA-256 `85e3bd31d62b8745b6ea27dd822f2520db95306093d572aef4c35bccb947ca6c`, retained through 2026-10-21. The current worktree passed 819 Python tests, four source-mutation gate checks, configured WebUI/JS checks and the 25,000-message benchmark. The 9,783-file Windows portable package and 690-file sanitized source bundle passed isolated startup, privacy and local manifest verification. | DONE |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects
