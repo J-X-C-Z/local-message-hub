@@ -172,7 +172,7 @@ $workflowText = Get-Content -LiteralPath (Join-Path $repo '.github/workflows/loc
 $ffmpegInstallStep = [regex]::Match($workflowText, '(?s)- name: Install locked root dependencies for the portable runtime.*?(?=\r?\n      - name: )').Value
 $portableBuildStep = $workflowText.IndexOf('Build and smoke-test Windows portable package', [System.StringComparison]::Ordinal)
 if (-not $ffmpegInstallStep -or
-    $ffmpegInstallStep -notmatch 'npm ci --ignore-scripts --no-audit --no-fund' -or
+    $ffmpegInstallStep -notmatch 'npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund' -or
     $ffmpegInstallStep -notmatch 'node node_modules/ffmpeg-static/install\.js' -or
     $ffmpegInstallStep -notmatch 'node_modules/ffmpeg-static/ffmpeg\.exe' -or
     $portableBuildStep -lt 0 -or

@@ -53,7 +53,7 @@ jobs:
       - name: Install locked root dependencies for the portable runtime
         shell: pwsh
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Installing the locked root npm dependencies failed.' }
           node node_modules/ffmpeg-static/install.js
           if ($LASTEXITCODE -ne 0) { throw 'Installing the package-pinned FFmpeg binary failed.' }

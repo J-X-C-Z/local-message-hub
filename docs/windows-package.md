@@ -13,7 +13,7 @@ From a Windows x64 checkout with PowerShell 5.1 or later, Python 3.12, Node/npm,
 Rust 1.98.1 GNU, and MinGW-w64 GCC 16.2.0 available for build-time staging:
 
 ```powershell
-npm ci --ignore-scripts
+npm ci --ignore-scripts --legacy-peer-deps
 node .\node_modules\ffmpeg-static\install.js
 if (-not (Test-Path .\node_modules\ffmpeg-static\ffmpeg.exe)) { throw 'Pinned FFmpeg binary is missing.' }
 .\scripts\build-windows-portable.ps1 -OutputPath .\output\windows\LocalMessageHub-portable

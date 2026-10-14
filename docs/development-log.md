@@ -7294,6 +7294,12 @@ key is absent.
   updated official signed repositories, while the existing build step still
   requires GCC 16.2.0. The package smoke checks the install command and version
   gate. This change still needs a hosted run.
+- Hosted run 38544901625 passed GCC installation and reached the locked root
+  npm install, where strict peer resolution rejected the existing React 19 /
+  ansi-to-react peer range. The WCDB compatibility workflow already uses
+  `--legacy-peer-deps` for this lockfile. The Windows packaging workflow,
+  package smoke, and build instructions now use the same lockfile-compatible
+  setting; no dependency versions changed. A full hosted run remains pending.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.
