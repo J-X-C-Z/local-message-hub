@@ -47,8 +47,12 @@ current-worktree portable and source packages passed isolated smoke and
 corrected full checks, Windows portable/source package builds, upload/download,
 and downloaded-byte/provenance verification for commit
 `c2c755024f8114ca56a84edf93fd1194d376b5f4`; the artifact is retained through
-2026-10-21. P14-01 is now DONE. P9/P13 live delivery, P11 real-cache parity,
-and P12 live desktop/native acceptance remain open.
+2026-10-21. After the missing-image-key status fix, hosted run `38628212261`
+also passed the full Windows gate and artifact round-trip on commit
+`55a6e083f59f0b572bf9cb60fc795501dc9babcc`; its 251,779,840-byte artifact is
+retained through 2026-10-21. P14-01 is DONE for this revision. P9/P13 live
+delivery, P11 real-cache parity, and P12 live desktop/native acceptance remain
+open.
 
 **P14 CI fixture correction (2026-10-15):** hosted run `38618407580` failed in
 the local test step because ChatLab memory/export fixtures omitted conversation

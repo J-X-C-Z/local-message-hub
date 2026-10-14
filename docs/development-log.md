@@ -7992,3 +7992,10 @@ key is absent.
   image AES key error, preserving its user-readable status through the Hub.
   The provider and Hub regression tests pass. The earlier live 500 has not been
   retried against the updated process, so its cause remains unconfirmed.
+- Commit `55a6e083f59f0b572bf9cb60fc795501dc9babcc` passed hosted run
+  `38628212261` in 16m05s: the full Windows gate, portable and sanitized source
+  package builds/smokes, manifest verification, artifact upload/download, and
+  downloaded-byte/provenance checks. Artifact `LocalMessageHub-windows-release`
+  is 251,779,840 bytes with digest
+  `sha256:800093022296894f91cfcff6dacba7866b59fb468e78ac1395ef1d9c0d0e5ee0`,
+  retained through 2026-10-21. P14-01 is complete for this revision.
