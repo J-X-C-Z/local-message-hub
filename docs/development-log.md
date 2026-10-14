@@ -8103,3 +8103,24 @@ key is absent.
   SHA-256 `53a5e8f07325c4d3d055931570c3cb2f25570642f85d89c24a14d9b3d409fe57`).
   Both artifacts expire 2026-10-21. A final correction to this record needs one
   fresh source package run to keep the published bundle's docs in sync.
+
+## 2026-10-15 - P8-P14 Current Hosted Gate and Public History Cleanup
+
+- Rewrote the public `main` and roadmap branch histories to remove an old
+  machine-specific disk-throughput measurement from a source comment. Both
+  branches now point to the same sanitized source revision; the commit uses the
+  repository's generic noreply identity. No tags point to the old history.
+- Fixed QQ media search so each attachment's `name`, `n`, and `file_name` fields
+  are searched independently, including when display name and file name differ.
+  Clarified that WeChat readiness confirms the client/account only; the target
+  conversation must also be open and uniquely identifiable before delivery.
+- The focused QQ media search test, WebUI send-history render check, and
+  whitespace check passed. The full hosted Windows workflow also passed on
+  both branches, including Hub checks, portable/source package builds and
+  smokes, provenance manifests, artifact upload/download, and downloaded-byte
+  verification. Artifacts `11936560661` and `11936965667` expire 2026-10-21.
+- The running local Hub reports WeChat, WeCom, and QQ connected, but its process
+  predates the current source revision. No real message was delivered. P9/P13
+  real-account delivery, P11 complete real-cache/media parity, P12 visible
+  desktop notification acceptance, and P12-03/04 inspectable native
+  implementation and isolated mutation/rollback acceptance remain open.
