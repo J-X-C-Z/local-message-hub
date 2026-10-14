@@ -545,6 +545,12 @@ package smoke, and build instructions now use that same lockfile setting. No
 dependency versions changed. A hosted run and artifact round trip are still
 pending.
 
+Run 38545314515 then passed GCC and npm installation, but 788 Windows tests
+reported 17 failures and 8 errors. Most were caused by temp paths alternating
+between the runner's long profile path and its 8.3 alias. The CI now pins
+`TEMP`/`TMP` to `${{ runner.temp }}`; its complete test/build/artifact gate must
+be rerun before P14 can close.
+
 **P14 acceptance status (2026-10-12):** The P14-01 row above is an earlier
 checkpoint; its 478/20-test and p163/p164 figures are superseded by the local
 p195/p198 refresh below: 497 Python tests, 2 mutation-gate tests, 21 WebUI

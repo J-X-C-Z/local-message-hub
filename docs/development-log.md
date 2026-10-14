@@ -7300,6 +7300,12 @@ key is absent.
   `--legacy-peer-deps` for this lockfile. The Windows packaging workflow,
   package smoke, and build instructions now use the same lockfile-compatible
   setting; no dependency versions changed. A full hosted run remains pending.
+- Hosted run 38545314515 passed toolchain and dependency installation but
+  exposed 25 Windows-only test failures. Most compare long runner profile paths
+  with their `RUNNER~1` 8.3 aliases, cascading into temp-backed cache, media,
+  and Moments tests. CI now sets `TEMP` and `TMP` to the runner's dedicated
+  temp directory to keep those paths canonical. One short synchronization
+  timeout may remain; the focused rerun will confirm.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.
