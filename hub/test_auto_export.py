@@ -18,7 +18,9 @@ class AutoExportTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.settings = {"capabilities": {"auto_export": True}}
         self.store = ChatStore(self.root / "hub.sqlite3")
-        self.store.ingest("wechat", "synthetic", [{"id": "room", "title": "Fixture"}], [
+        self.store.ingest("wechat", "synthetic", [
+            {"id": "room", "title": "Fixture", "kind": "private"},
+        ], [
             {"id": "one", "conversation_id": "room", "timestamp": 20,
              "type": "text", "text": "synthetic export record", "is_self": True},
         ])

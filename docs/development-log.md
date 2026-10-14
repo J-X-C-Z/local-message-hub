@@ -7959,3 +7959,9 @@ key is absent.
   privacy scans and local manifest byte/provenance verification passed.
 - Hosted CI and artifact upload/download verification for these uncommitted
   changes remain outstanding.
+- The newest hosted run failed in its local-check step: ChatLab memory and
+  automatic-export fixtures omitted conversation kinds after the exporter
+  began rejecting null/unknown kinds. Updated the synthetic fixtures to use an
+  explicit private kind; all four affected focused tests pass locally, while
+  orphan/null-kind rejection remains covered. Hosted rerun and artifact
+  upload/download verification remain outstanding.

@@ -11,7 +11,8 @@ from .exports import render_export, write_export
 class ChatLabMemoryTest(unittest.TestCase):
     def test_large_chatlab_exports_keep_projection_memory_bounded(self):
         rows = [{"id": str(index), "sender_id": "sender", "platform": "qq",
-                 "account_id": "account", "text": "x" * 1024, "timestamp": index}
+                 "account_id": "account", "conversation_kind": "private",
+                 "text": "x" * 1024, "timestamp": index}
                 for index in range(3000)]
         for format in ("chatlab", "chatlab-jsonl"):
             with self.subTest(format=format):
@@ -38,7 +39,8 @@ class ChatLabMemoryTest(unittest.TestCase):
             for index in range(3000):
                 yield {"id": str(index), "sender_id": "sender", "sender_name": "Sender",
                        "platform": "qq", "account_id": "account", "conversation_id": "room",
-                       "text": "x" * 1024, "timestamp": index}
+                           "conversation_kind": "private", "text": "x" * 1024,
+                           "timestamp": index}
 
         for format_id in formats:
             with self.subTest(format=format_id):
@@ -59,7 +61,8 @@ class ChatLabMemoryTest(unittest.TestCase):
                 self.assertLess(peak, 2 * 1024 * 1024)
 
     def test_chatlab_empty_and_single_pass_inputs(self):
-        for rows in ([], [{"id": "one", "text": "hello", "timestamp": "bad"}]):
+        for rows in ([], [{"id": "one", "conversation_kind": "private",
+                           "text": "hello", "timestamp": "bad"}]):
             document = json.loads(render_export(iter(rows), "chatlab")[0])
             lines = [json.loads(line) for line in
                      render_export(iter(rows), "chatlab-jsonl")[0].splitlines()]

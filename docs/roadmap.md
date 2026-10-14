@@ -47,6 +47,13 @@ current-worktree portable and source packages passed isolated smoke and
 parity, P12 live desktop/native acceptance, and P14 hosted verification for
 these uncommitted changes remain open.
 
+**P14 CI fixture correction (2026-10-15):** hosted run `38618407580` failed in
+the local test step because ChatLab memory/export fixtures omitted conversation
+types after the exporter began rejecting null/unknown kinds. The fixtures now
+declare their private conversation type explicitly; the four affected tests
+pass locally. Orphan/null-kind rejection remains intact. A hosted rerun for the
+corrected source and artifact round-trip is still required.
+
 **P14 current-worktree gate (2026-10-14):** After the core search capability
 alignment, `scripts/check-local-hub.ps1` passed for the modified worktree: 789
 Python tests, four source-client mutation-gate checks, 32 primary WebUI checks,
