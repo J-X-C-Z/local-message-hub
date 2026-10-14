@@ -40,7 +40,7 @@ returned successfully and all three source entries reported connected without
 errors. The send capability was disabled then; that snapshot does not describe
 later local settings. No real delivery is claimed.
 
-**P8-P14 local follow-up (2026-10-15):** the full local gate passed with 811
+**Historical P8-P14 local checkpoint (2026-10-15):** the full local gate passed with 811
 Python tests, four source-client mutation-gate checks, 28 primary WebUI checks,
 privacy/package checks, and the 25,000-message performance benchmark. Follow-up
 focused tests also passed after correcting unknown WeChat image suffix handling
@@ -61,20 +61,19 @@ hosted Windows workflow `38638279271`, including portable/source packaging,
 upload/download, and matching SHA-256/provenance checks. Its 251,780,323-byte
 artifact is retained through 2026-10-21. Fresh local packages also passed
 isolated startup, privacy, and manifest verification for the preceding source
-tree. The subsequent P11 DAT-candidate change is not in those packages or the
-hosted run; P14 is therefore IN_PROGRESS for the current worktree. P9/P13 live
-delivery, P11 real-cache parity, and P12 live desktop/native acceptance remain
-open.
+tree. At that checkpoint, the subsequent P11 DAT-candidate change was not in
+those packages and P14 remained IN_PROGRESS. This checkpoint is superseded by
+the current hosted evidence in P14-01 below. P9/P13 live delivery, P11
+real-cache parity, and P12 live desktop/native acceptance remain open.
 
-**Latest hosted P14 evidence (2026-10-15):** GitHub run `38641017039` completed
+**Prior hosted P14 checkpoint (2026-10-15):** GitHub run `38641017039` completed
 successfully for commit `5c184cf2d9b29e217670d9f5ad6b5bacf96c503d`. Its
 `LocalMessageHub-windows-release` artifact (`11930632619`) is 251,779,370 bytes
 with SHA-256 `da0608ad3d8711fe73c9b9297e30896635386c39694d12f3943c5987b8092876`,
-retained through 2026-10-21. The rewritten `main` and roadmap refs point to the
-same commit; mirrored `main` run `38643215399` also completed successfully on
-that SHA. Subsequent local P11 changes add best-preview-only WeChat DAT
-candidates and are not covered by this hosted artifact; P14 remains
-`IN_PROGRESS` until the current change is included in a hosted gate.
+retained through 2026-10-21. Mirrored `main` run `38643215399` also completed
+successfully on that SHA. This checkpoint predates later code and history
+cleanup; current branch heads and P14 acceptance are recorded in P14-01 and the
+latest development-log entry.
 
 **P14 CI fixture correction (2026-10-15):** hosted run `38618407580` failed in
 the local test step because ChatLab memory/export fixtures omitted conversation
