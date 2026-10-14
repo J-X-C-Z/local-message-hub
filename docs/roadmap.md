@@ -3879,5 +3879,14 @@ byte/provenance verification. Artifact `LocalMessageHub-windows-release`
 (`11932494397`) is 251,793,400 bytes with SHA-256
 `d7235471bf806931f4fe5dca5f3cf04f239cf36915bf35ae5801e55353602cdb`, retained
 through 2026-10-21. P14-01 is complete for this code revision. This log and the
-roadmap status update follow that run and need a fresh package artifact to ship
-inside the source bundle.
+roadmap status update follow that run.
+
+**P14 documentation package verification (2026-10-15):** documentation commit
+`a50e67c67f14685e277f8e01bcbd924adb5f49f8` passed the full Windows CI and
+artifact round trip on both `main` (run `38648975832`, artifact
+`11934851538`, 251,793,008 bytes, SHA-256
+`85392dfb5d03d7a28b6c5662d554465242320cb033f9032b38d80c120b30d8ea`) and the
+roadmap branch (run `38648954782`, artifact `11933702889`, 251,795,340 bytes,
+SHA-256 `53a5e8f07325c4d3d055931570c3cb2f25570642f85d89c24a14d9b3d409fe57`).
+Both artifacts expire 2026-10-21. The final documentation correction below is
+followed by one more package run so the source bundle contains this record.

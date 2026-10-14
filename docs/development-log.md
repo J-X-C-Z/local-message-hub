@@ -8095,3 +8095,11 @@ key is absent.
   (`11932494397`) is 251,793,400 bytes, SHA-256
   `d7235471bf806931f4fe5dca5f3cf04f239cf36915bf35ae5801e55353602cdb`, retained
   through 2026-10-21. The documentation status update itself follows that run.
+- Documentation commit `a50e67c67f14685e277f8e01bcbd924adb5f49f8` then passed
+  full Windows CI and artifact round trips on `main` (run `38648975832`, artifact
+  `11934851538`, 251,793,008 bytes, SHA-256
+  `85392dfb5d03d7a28b6c5662d554465242320cb033f9032b38d80c120b30d8ea`) and the
+  roadmap branch (run `38648954782`, artifact `11933702889`, 251,795,340 bytes,
+  SHA-256 `53a5e8f07325c4d3d055931570c3cb2f25570642f85d89c24a14d9b3d409fe57`).
+  Both artifacts expire 2026-10-21. A final correction to this record needs one
+  fresh source package run to keep the published bundle's docs in sync.
