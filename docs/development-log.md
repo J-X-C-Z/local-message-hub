@@ -7287,6 +7287,13 @@ key is absent.
   version `16.2.0-5`. The existing SHA-256 checks and normal checks for all
   other GCC dependencies remain active. This correction still needs hosted
   verification.
+- Hosted run 38544398023 showed why package-release pinning conflicts with the
+  updated MSYS2 repository: current `cc-libs` requires newer `libgcc` and
+  `libstdc++` releases, and pacman correctly refused the ignored older runtime
+  packages. CI now installs GCC and its complete dependency graph from the
+  updated official signed repositories, while the existing build step still
+  requires GCC 16.2.0. The package smoke checks the install command and version
+  gate. This change still needs a hosted run.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.

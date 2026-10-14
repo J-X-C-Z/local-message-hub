@@ -24,8 +24,9 @@ Compress-Archive -Path .\output\windows\LocalMessageHub-portable\* `
 The build pins Python dependencies and verifies the official QCE v6.3.2 Windows
 NapCat shell by SHA-256, then builds the QCE server from the repository's vendored
 source and Cargo.lock. The build rejects any GCC version other than 16.2.0. CI
-updates its MSYS2 environment, then installs GCC 16.2.0 and its matching runtime
-packages from SHA-256-pinned archives. It stages selected project trees and excludes local runtimes,
+updates its MSYS2 environment and installs GCC plus its matching dependencies
+from the official signed package repositories, then checks the compiler version.
+It stages selected project trees and excludes local runtimes,
 account settings, databases, caches, and generated output. Its smoke test starts
 the executable with temporary storage, then checks the WebUI, Lucide asset,
 three platform entries, storage isolation, and read-only MCP endpoint. It also

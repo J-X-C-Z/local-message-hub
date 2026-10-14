@@ -31,49 +31,13 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-      - name: Download checksum-pinned MinGW GCC 16.2.0 packages
-        shell: pwsh
-        run: |
-          $packages = @(
-            @{ File = 'mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '97f6eb042afbb1d27237a4479ea444acb3d594789bba5e0182360d2c4b983b88' },
-            @{ File = 'mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '6cc48c5efe5ebab70a1ee1f6806c422205d5515c0f50d7a0e6a67336268c2afe' },
-            @{ File = 'mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libstdc%2B%2B-16.2.0-5-any.pkg.tar.zst'; Sha256 = '2ec9a91ce896249b1a440a44e1bc0126f82efb540955827adec30e83a9bfb1f6' }
-          )
-          $packageRoot = Join-Path $env:RUNNER_TEMP 'lmh-pinned-gcc'
-          New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
-          foreach ($package in $packages) {
-            $path = Join-Path $packageRoot $package.File
-            Invoke-WebRequest -Uri $package.Url -OutFile $path
-            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $package.Sha256) { throw "SHA-256 mismatch for $($package.File)." }
-          }
-      - name: Install checksum-pinned MinGW GCC 16.2.0 packages
+      - name: Install MinGW GCC 16.2.0
         shell: msys2 {0}
         run: |
-          package_root="$(cygpath -u "$RUNNER_TEMP")/lmh-pinned-gcc"
-          for package in \
-            mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst \
-            mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst; do
-            if ! pacman -U --noconfirm "$package_root/$package"; then
-              printf 'Installing %s failed.\n' "$package" >&2
-              exit 1
-            fi
-          done
-          gcc_package=mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst
-          if ! pacman -U --noconfirm \
-            --ignore mingw-w64-x86_64-libgcc,mingw-w64-x86_64-libstdc++ \
-            --assume-installed mingw-w64-x86_64-libgcc=16.2.0-5 \
-            --assume-installed 'mingw-w64-x86_64-libstdc++=16.2.0-5' \
-            "$package_root/$gcc_package"; then
-            printf 'Installing %s failed.\n' "$gcc_package" >&2
+          if ! pacman -S --noconfirm --needed mingw-w64-x86_64-gcc; then
+            printf 'Installing the MSYS2 MinGW GCC package failed.\n' >&2
             exit 1
           fi
-          for package in mingw-w64-x86_64-libgcc mingw-w64-x86_64-libstdc++ mingw-w64-x86_64-gcc; do
-            if ! pacman -Q "$package" | grep -Fxq "$package 16.2.0-5"; then
-              printf 'Expected %s version 16.2.0-5 after installation.\n' "$package" >&2
-              exit 1
-            fi
-          done
           version="$(gcc --version | head -n 1)"
           if [[ ! "$version" =~ [[:space:]]16\.2\.0([[:space:]]|$) ]]; then
             printf 'Expected GCC 16.2.0, found %s.\n' "$version" >&2
