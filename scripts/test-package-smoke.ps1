@@ -184,6 +184,7 @@ if ($qceBuildText -notmatch "`\$pinnedGccVersion = '16\.2\.0'" -or
     $workflowText -notmatch '(?s)msys2/setup-msys2@v2.*?update: true' -or
     $workflowText -notmatch 'steps\.msys2\.outputs\.msys2-location' -or
     $workflowText -notmatch 'mingw-w64-x86_64-gcc-16\.2\.0-5-any\.pkg\.tar\.zst' -or
+    $workflowText -notmatch 'pacman -U --noconfirm \s+--ignore mingw-w64-x86_64-libgcc,mingw-w64-x86_64-libstdc\+\+' -or
     $workflowText -notmatch "--assume-installed mingw-w64-x86_64-libgcc=16\.2\.0-5" -or
     $workflowText -notmatch 'pacman -Q "\$package" \| grep -Fxq "\$package 16\.2\.0-5"' -or
     $workflowText -notmatch '97f6eb042afbb1d27237a4479ea444acb3d594789bba5e0182360d2c4b983b88') {

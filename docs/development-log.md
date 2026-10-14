@@ -7279,13 +7279,14 @@ key is absent.
   embedded PowerShell/Bash syntax checks pass locally; sequential installation
   still needs a hosted run.
 - Hosted run 38543367064 installed the two hash-pinned runtime packages but
-  pacman still rejected the GCC transaction for those exact sibling
-  dependencies. The workflow now supplies only those pinned versions through
-  pacman's `--assume-installed` option for the GCC transaction, then requires
-  `pacman -Q` to confirm that all three actual installed packages are version
-  `16.2.0-5`. The existing SHA-256 checks and normal checks for all other GCC
-  dependencies remain active. Local syntax and packaging smoke checks pass;
-  this correction still needs hosted verification.
+  pacman then upgraded them to `16.2.0-6` from the current sync repositories
+  during the GCC transaction; the new exact-version guard caught the drift.
+  The workflow now ignores upgrades of only those two runtime packages while
+  installing GCC with pacman's targeted `--assume-installed` option, then
+  requires `pacman -Q` to confirm that all three actual installed packages are
+  version `16.2.0-5`. The existing SHA-256 checks and normal checks for all
+  other GCC dependencies remain active. This correction still needs hosted
+  verification.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.

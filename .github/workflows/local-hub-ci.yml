@@ -61,6 +61,7 @@ jobs:
           done
           gcc_package=mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst
           if ! pacman -U --noconfirm \
+            --ignore mingw-w64-x86_64-libgcc,mingw-w64-x86_64-libstdc++ \
             --assume-installed mingw-w64-x86_64-libgcc=16.2.0-5 \
             --assume-installed 'mingw-w64-x86_64-libstdc++=16.2.0-5' \
             "$package_root/$gcc_package"; then
