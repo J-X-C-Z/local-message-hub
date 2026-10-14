@@ -50,7 +50,13 @@ and downloaded-byte/provenance verification for commit
 2026-10-21. After the missing-image-key status fix, hosted run `38628212261`
 also passed the full Windows gate and artifact round-trip on commit
 `55a6e083f59f0b572bf9cb60fc795501dc9babcc`; its 251,779,840-byte artifact is
-retained through 2026-10-21. P14-01 is DONE for this revision. P9/P13 live
+retained through 2026-10-21. Documentation-only commit
+`c996b1332c501a59e14e44ea06404b7a68fad56c` also passed hosted run
+`38630724422` and produced a 251,779,476-byte artifact. The current local
+WeChat media-locator fix passed the full local gate; fresh portable and source
+packages passed isolated startup, privacy, and local manifest checks. They have
+not gone through hosted artifact round-trip, so P14-01 remains IN_PROGRESS for
+the current worktree. P9/P13 live
 delivery, P11 real-cache parity, and P12 live desktop/native acceptance remain
 open.
 
@@ -659,6 +665,13 @@ Two focused regression tests pass. This does not establish that the earlier
 live HTTP 500 had this cause; the same cached sample was not retried against
 the updated process.
 
+**P11 missing-locator follow-up (2026-10-15):** a bounded read-only image
+request found an indexed WeChat record without its source `local_id` and shard;
+the resolver previously turned this into HTTP 500. The shared resolver now
+returns `local_media_identity_unavailable` before calling the provider, with a
+focused HTTP regression. The live process predates this change, so live
+reverification and broader real-cache acceptance remain open.
+
 ## Phase 13 - Additional Platform Sending
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
@@ -737,7 +750,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Local p377 evidence is recorded below. Hosted runs 38547565569, 38550004873, and latest run 38621260116 on commit `c2c755024f8114ca56a84edf93fd1194d376b5f4` passed the full Windows gate, package builds/smokes, manifest checks, artifact upload/download, and downloaded-byte/provenance verification. Latest artifact `LocalMessageHub-windows-release` is 251,776,531 bytes and retained through 2026-10-21. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Hosted code run `38628212261` on commit `55a6e083f59f0b572bf9cb60fc795501dc9babcc` passed the full Windows gate and artifact round-trip; latest branch run `38630724422` on docs-only commit `c996b1332c501a59e14e44ea06404b7a68fad56c` also passed. The current worktree passed 819 Python tests, four source-mutation gate checks, configured WebUI/JS checks and the 25,000-message benchmark. A 9,783-file Windows portable package and 690-file sanitized source bundle passed isolated startup, privacy and `local-worktree` manifest verification. Hosted artifact round-trip for this source change remains outstanding. | IN_PROGRESS |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects

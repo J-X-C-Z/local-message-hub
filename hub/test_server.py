@@ -4679,6 +4679,25 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(result['reason'], 'image_key_unavailable')
         self.assertEqual(result['message'], '缺少微信图片密钥，无法解密此图片')
 
+    def test_wechat_media_without_local_locator_returns_unavailable(self):
+        from unittest.mock import Mock
+        self.hub.store.ingest('wechat', 'account', [{'id': 'room', 'title': 'Chat'}], [{
+            'id': 'room:image-without-locator', 'conversation_id': 'room', 'type': 'image',
+        }])
+        provider = Mock()
+        self.hub.providers['wechat'] = provider
+        self.hub.set_capabilities({'media': True})
+
+        query = urlencode({'platform': 'wechat', 'account_id': 'account',
+                           'message_id': 'room:image-without-locator', 'conversation_id': 'room'})
+        with self.request('/api/media/resolve?' + query) as response:
+            result = json.load(response)
+
+        self.assertEqual(result['reason'], 'local_media_identity_unavailable')
+        self.assertIn('缺少媒体定位信息', result['message'])
+        self.assertIsNone(result['media_url'])
+        provider.media.assert_not_called()
+
     def test_wechat_wxgf_resolution_preserves_original_download_mime(self):
         from unittest.mock import Mock
         original = Path(self.temp.name) / 'original.wxgf'

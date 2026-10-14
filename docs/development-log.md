@@ -7999,3 +7999,35 @@ key is absent.
   is 251,779,840 bytes with digest
   `sha256:800093022296894f91cfcff6dacba7866b59fb468e78ac1395ef1d9c0d0e5ee0`,
   retained through 2026-10-21. P14-01 is complete for this revision.
+
+## 2026-10-15 - WeChat Media Locator Failure
+
+- A bounded, read-only check found an indexed WeChat image without the source
+  `local_id` and database shard required by the cache reader. The media list
+  worked, but resolving that record returned HTTP 500.
+- The shared resolver now returns `local_media_identity_unavailable` before
+  invoking the provider. One focused HTTP regression passed, and
+  `git diff --check` passed. No message body or local account identifier was
+  recorded, and no source database was modified.
+- The running 8765 server predates this code change, so the live request has
+  not yet been repeated against the fix. A read-only WeChat resync restored the
+  source locator fields in the Hub index; a bounded image request after resync still returned
+  HTTP 500 from the old process. Current-source tests cover the explicit missing
+  key status, but the running process has not loaded that code and the runtime
+  exception remains unconfirmed. No source database was modified. P11 real-cache
+  acceptance remains open.
+- Hosted run `38630724422` on documentation-only commit
+  `c996b1332c501a59e14e44ea06404b7a68fad56c` succeeded and produced a
+  251,779,476-byte artifact. It contains the prior code revision, not this
+  local media-locator fix.
+- `scripts/check-local-hub.ps1` passed with 819 Python tests, four source-client
+  mutation-gate checks, the configured WebUI/JS suites and the 25,000-message
+  performance benchmark. The benchmark reported 0.029-second first search,
+  1.442-second pagination recheck, 0.088-second backup and 0.253-second restore.
+- Rebuilt the current worktree portable package (9,783 files, 586,807,254 bytes)
+  and sanitized source bundle (690 files, 25,108,576 bytes). Isolated Hub/UI/
+  three-source/MCP startup, standalone MCP stdio smoke, package privacy scan,
+  and local-worktree manifest creation and verification passed. The manifest
+  binds the packages to base commit `c996b1332c501a59e14e44ea06404b7a68fad56c`
+  with build context `local-worktree`; hosted verification and uploaded/downloaded
+  artifact checks for the current source change remain open.

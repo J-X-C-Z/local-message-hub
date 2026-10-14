@@ -1665,11 +1665,19 @@ class Hub:
         if provider is None:
             return {'media_url': None, 'message': '请先同步该平台'}
         if platform == 'wechat':
+            try:
+                local_id = int(row.get('local_id'))
+            except (TypeError, ValueError):
+                local_id = None
+            shard = row.get('shard')
+            if local_id is None or not isinstance(shard, str) or not shard or Path(shard).name != shard:
+                return {'media_url': None, 'available': False,
+                        'reason': 'local_media_identity_unavailable',
+                        'message': '本机索引缺少媒体定位信息，无法读取缓存'}
             media_args = {'image_tier': image_tier}
             if video_variant is not None:
                 media_args['video_variant'] = video_variant
-            result = provider.media(row['conversation_id'], int(row['local_id']), row['shard'],
-                                    **media_args)
+            result = provider.media(row['conversation_id'], local_id, shard, **media_args)
         elif platform == 'wecom':
             if resource_index is not None:
                 try:
