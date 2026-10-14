@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -170,6 +171,9 @@ class ResourceJobTest(unittest.TestCase):
                     release_read.wait(2)
                 return block
 
+            def fileno(self):
+                return self.stream.fileno()
+
         def pause_during_copy(path, mode="r", *args, **kwargs):
             stream = original_open(path, mode, *args, **kwargs)
             if path == source and mode == "rb":
@@ -186,6 +190,55 @@ class ResourceJobTest(unittest.TestCase):
         self.assertEqual(result["state"], "cancelled")
         self.assertIsNone(self.manager.download_path(job_id))
         self.assertFalse((self.root / "resources" / "jobs" / job_id).exists())
+
+    def test_copy_rejects_a_same_size_source_mutation_during_read(self):
+        source = self.root / "changing.bin"
+        source.write_bytes(b"x" * (2 * 1024 * 1024))
+        original_open = Path.open
+        first_read = threading.Event()
+        release_read = threading.Event()
+
+        class PausedReader:
+            def __init__(self, stream):
+                self.stream = stream
+                self.paused = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.stream.close()
+
+            def fileno(self):
+                return self.stream.fileno()
+
+            def read(self, size):
+                block = self.stream.read(size)
+                if block and not self.paused:
+                    self.paused = True
+                    first_read.set()
+                    release_read.wait(2)
+                return block
+
+        def pause_during_copy(path, mode="r", *args, **kwargs):
+            stream = original_open(path, mode, *args, **kwargs)
+            if path == source and mode == "rb":
+                return PausedReader(stream)
+            return stream
+
+        with patch.object(resource_module.Path, "open", new=pause_during_copy):
+            self.files["changing"] = source
+            job_id = self.manager.start([self.item("changing")])["id"]
+            self.assertTrue(first_read.wait(1))
+            source.write_bytes(b"y" * (2 * 1024 * 1024))
+            stat = source.stat()
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+            release_read.set()
+            result = self.wait(job_id)
+
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual((result["exported"], result["failed"], result["bytes"]), (0, 1, 0))
+        self.assertEqual(list((self.root / "resources" / "jobs" / job_id / "files").glob("*")), [])
 
     def test_cancel_is_checked_between_zip_compression_chunks(self):
         source = self.root / "compress-large.bin"

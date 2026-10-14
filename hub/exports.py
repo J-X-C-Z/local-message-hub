@@ -126,8 +126,8 @@ def _message_resources(message):
                 resource = {}
                 for target, fields in (
                     ("name", ("name", "n", "file_name", "fileName")),
-                    ("type", ("type", "kind")),
-                    ("size", ("size", "file_size", "fileSize")),
+                    ("type", ("type", "kind", "k")),
+                    ("size", ("size", "file_size", "fileSize", "sz")),
                     ("md5", ("md5", "md5HexStr", "fileMd5")),
                     ("width", ("width", "picWidth")),
                     ("height", ("height", "picHeight")),
@@ -467,6 +467,26 @@ _CHATLAB_TYPES = {
 }
 
 
+def resolve_chatlab_conversation_type(kinds):
+    kinds = list(kinds)
+    if not kinds:
+        return "private"
+    normalized = {str(kind or "").lower() for kind in kinds}
+    if not normalized <= {"group", "private", "direct"}:
+        raise ValueError("ChatLab cannot represent unsupported conversation types")
+    has_group = "group" in normalized
+    has_private = bool(normalized & {"private", "direct"})
+    if has_group and has_private:
+        raise ValueError("ChatLab cannot represent mixed group and private conversations")
+    return "group" if has_group else "private"
+
+
+def _chatlab_conversation_type(messages):
+    return resolve_chatlab_conversation_type(
+        message.get("conversation_kind") for message in messages
+    )
+
+
 def _chatlab_header(messages, title):
     members = {}
     platforms = set()
@@ -493,7 +513,7 @@ def _chatlab_header(messages, title):
         "meta": {
             "name": title,
             "platform": "im",
-            "type": "private",
+            "type": _chatlab_conversation_type(messages),
             "sourcePlatforms": sorted(platforms),
         },
         "members": list(members.values()),
@@ -620,7 +640,7 @@ _RENDERERS = {
 
 
 def write_export(messages, stream, format, title="Chat export", *, count=0,
-                 source_platforms=(), members=()):
+                 source_platforms=(), members=(), conversation_type=None):
     """Write an export incrementally to a binary stream without collecting messages."""
     if not isinstance(format, str):
         raise ValueError(f"unknown export format: {format!r}")
@@ -723,7 +743,12 @@ __MESSAGE_ROWS__
         exported_at = int(datetime.now(timezone.utc).timestamp())
         chatlab = {"version": "0.0.2", "exportedAt": exported_at,
                    "generator": "Local Message Hub"}
-        meta = {"name": title, "platform": "im", "type": "private",
+        if conversation_type is None:
+            conversation_type = (_chatlab_conversation_type(messages)
+                                 if isinstance(messages, (list, tuple)) else "private")
+        if conversation_type not in {"group", "private"}:
+            raise ValueError("ChatLab export requires one conversation type")
+        meta = {"name": title, "platform": "im", "type": conversation_type,
                 "sourcePlatforms": list(source_platforms)}
         if key == "chatlab-jsonl":
             stream.write(json.dumps({"_type": "header", "chatlab": chatlab, "meta": meta},

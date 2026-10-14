@@ -185,8 +185,12 @@ filters is rejected. `offset` remains available for clients that need it.
   which can access the loopback service. The NapCat adapter rechecks that the
   online QQ account exactly matches the approved account;
   timeouts/interrupted sends become `unknown` and cannot be retried using the
-  same request. The capability defaults off and the server rechecks it on each
-  call.
+  same request. Before preparation, the Hub resolves the supplied conversation
+  through the exact account-scoped local QQ index and verifies private/group
+  type; indexed QQNT private UIDs are mapped to the numeric OneBot target. The
+  prepare tool is hidden and direct calls fail closed when this local resolver
+  is unavailable. The capability defaults off and the server rechecks it on
+  each call.
 - When the default-off `个人微信文本发送` capability is enabled and a logged-in local WeChat client is detected, MCP exposes `prepare_wechat_send` and `get_wechat_send_status`. Preparation writes only a durable `pending_approval` request; it requires a 1-64 character local WeChat account ID and a private (or `@chatroom`-suffixed) conversation ID, and refuses empty or oversized text. The status tool reads that request and its audit trail. Both tools disappear from `tools/list` and direct calls are denied when the capability is off or the client is not ready. MCP never approves, rejects, or delivers a WeChat message. When the request is approved locally, delivery is performed by the Hub on the Windows host via public Win32 input into the already-open conversation window of the logged-in client; no process injection, DLL hook or client database write is involved, and the sender is labelled as the logged-in personal WeChat account, not the Chat user. Ambiguous or absent receipts become `unknown` and are never retried.
 - When `企业微信机器人文本发送` is enabled and a bot identity is configured,
   MCP exposes `prepare_wecom_bot_send` and `get_wecom_bot_send_status`. The

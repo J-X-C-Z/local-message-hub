@@ -118,6 +118,24 @@ class LocalProviderTests(unittest.TestCase):
         self.assertTrue(resolved['available'])
         self.assertEqual(Path(resolved['path']).read_bytes(), payload)
 
+    def test_market_face_is_an_image_resource_and_resolves_local_cache(self):
+        self.fixture()
+        payload = b'synthetic QQ market-face image'
+        digest = hashlib.md5(payload).hexdigest()
+        cache_name = _qq_image_cache_names(digest)[0]
+        source = self.account / 'nt_qq' / 'nt_data' / 'Pic' / 'chatraw' / cache_name[-3:] / cache_name
+        source.parent.mkdir(parents=True)
+        source.write_bytes(payload)
+        element = (field(45002, 11) + field(80900, 'fixture-sticker.gif') +
+                   field(45424, digest) + field(45405, len(payload)))
+        rich, media = _decode(field(40800, element))
+
+        self.assertEqual(rich, [{'type': 'market_face', 'data': {'name': 'fixture-sticker.gif'}}])
+        self.assertEqual(media[0]['kind'], 'image')
+        result = self.provider.media({'account_id': '10001', 'media': media})
+        self.assertTrue(result['available'])
+        self.assertEqual(Path(result['path']).read_bytes(), payload)
+
     def test_plain_snapshot_includes_committed_wal(self):
         self.fixture()
         conn = sqlite3.connect(self.source)
@@ -359,6 +377,26 @@ class LocalProviderTests(unittest.TestCase):
         self.assertEqual(rich[1]['data']['text'], 'reply')
         self.assertEqual(media, [])
         self.assertEqual(_decode(b'\xff')[0][0]['type'], 'unknown')
+
+    def test_reply_preview_keeps_nested_attachment_for_local_cache_resolution(self):
+        digest = hashlib.md5(b'image').digest()
+        quote = (field(45002, 7) + field(47423, field(45002, 2) +
+                 field(45402, 'quoted.png') + field(45405, 5) + field(45424, digest)))
+        rich, media = _decode(field(40800, quote))
+        self.assertEqual(media, [{'kind': 'image', 'type': 'image', 'file_name': 'quoted.png',
+                                  'name': 'quoted.png', 'size': 5, 'md5': digest.hex(),
+                                  'quoted': True}])
+        self.assertEqual(rich[0]['data']['resources'], [
+            {'resource_index': 0, 'type': 'image', 'name': 'quoted.png', 'size': 5}])
+
+        self.fixture()
+        self.provider.status()
+        cached = self.account / 'nt_qq' / 'nt_data' / 'chatraw' / 'quoted.png'
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(b'image')
+        result = self.provider.media({'account_id': '10001', 'media': media}, resource_index=0)
+        self.assertTrue(result['available'])
+        self.assertEqual(Path(result['path']).read_bytes(), b'image')
 
     def test_parser_preserves_attachment_at_index_100(self):
         body = b''.join(

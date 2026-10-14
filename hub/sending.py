@@ -17,6 +17,7 @@ _WECOM_RE = re.compile(r"^[A-Za-z0-9_@.-]{1,128}$")
 _WECHAT_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _WECHAT_CONVERSATION_RE = re.compile(r"^(?:[A-Za-z0-9_-]{1,64}|[A-Za-z0-9_-]{1,64}@chatroom)$")
 _MAX_TEXT = 4000
+_MAX_RECEIPT_ID = 200
 _PLATFORMS = ("qq", "wecom_bot", "wechat")
 _PATTERNS = {"qq": _QQ_RE, "wecom_bot": _WECOM_RE, "wechat": _WECHAT_RE}
 _PLATFORM_LABELS = {"qq": "QQ", "wecom_bot": "企微机器人", "wechat": "微信"}
@@ -300,10 +301,12 @@ class SendService:
             except (ValueError, TypeError):
                 delivery_record["attachment"] = {}
             result = adapter.deliver(delivery_record)
-            if not isinstance(result, dict) or not result.get("message_id"):
+            message_id = result.get("message_id") if isinstance(result, dict) else None
+            if (not isinstance(message_id, str) or not message_id.strip() or
+                    len(message_id) > _MAX_RECEIPT_ID):
                 record, _ = self.repository.finish(request_id, "unknown", error_code="invalid_receipt")
             else:
-                record, _ = self.repository.finish(request_id, "sent", str(result["message_id"]))
+                record, _ = self.repository.finish(request_id, "sent", message_id)
         except TimeoutError:
             record, _ = self.repository.finish(request_id, "unknown", error_code="timeout")
         except Exception as exc:

@@ -83,6 +83,25 @@ class NapCatSenderTest(unittest.TestCase):
         self.assertEqual(ensure_local_http_server(self.path), self.endpoint)
         self.assertEqual(len(json.loads(self.path.read_text())["network"]["httpServers"]), 1)
 
+    def test_config_replaces_boolean_port(self):
+        config = json.loads(self.path.read_text())
+        config["network"]["httpServers"][0]["port"] = True
+        self.path.write_text(json.dumps(config), encoding="utf-8")
+
+        endpoint = ensure_local_http_server(self.path)
+
+        self.assertIs(type(endpoint["port"]), int)
+        stored = json.loads(self.path.read_text())["network"]["httpServers"][0]["port"]
+        self.assertIs(type(stored), int)
+
+    def test_endpoint_rejects_boolean_port(self):
+        config = json.loads(self.path.read_text())
+        config["network"]["httpServers"][0]["port"] = True
+        self.path.write_text(json.dumps(config), encoding="utf-8")
+
+        with self.assertRaisesRegex(QQSendError, "onebot_endpoint_invalid"):
+            NapCatOneBotSender(self.path)._endpoint()
+
     def test_readiness_reads_only_local_login_identity(self):
         captured = {}
 
@@ -102,6 +121,19 @@ class NapCatSenderTest(unittest.TestCase):
         self.assertTrue(captured["url"].endswith("/get_login_info"))
         self.assertEqual(captured["body"], b"{}")
         self.assertTrue(captured["authorization"].startswith("Bearer "))
+
+    def test_readiness_rejects_non_integer_success_retcode(self):
+        for retcode in (False, 0.0):
+            with self.subTest(retcode=retcode):
+                def opener(*_args, **_kwargs):
+                    return FakeResponse({"status": "ok", "retcode": retcode,
+                                         "data": {"user_id": 12345678}})
+
+                result = NapCatOneBotSender(self.path, opener=opener).readiness()
+
+                self.assertEqual(result["state"], "api_unavailable")
+                self.assertIsNone(result["account_id"])
+                self.assertIsNone(result["account_online"])
 
     def test_readiness_when_capability_disabled_does_not_contact_endpoint(self):
         calls = []
@@ -153,6 +185,20 @@ class NapCatSenderTest(unittest.TestCase):
                 with self.assertRaises(QQDeliveryUnknown) as result:
                     NapCatOneBotSender(self.path, opener=opener).deliver({
                         "conversation_type": "private", "conversation_id": "12345678", "text": "hello"})
+                self.assertEqual(result.exception.code, "onebot_invalid_receipt")
+
+    def test_malformed_retcode_receipts_remain_unknown(self):
+        for status, retcode in (("ok", False), ("ok", 0.0), ("failed", True),
+                                ("failed", 1.0)):
+            with self.subTest(status=status, retcode=retcode):
+                def opener(*_args, **_kwargs):
+                    return FakeResponse({"status": status, "retcode": retcode,
+                                         "data": {"message_id": 17}})
+
+                with self.assertRaises(QQDeliveryUnknown) as result:
+                    NapCatOneBotSender(self.path, opener=opener).deliver({
+                        "conversation_type": "private", "conversation_id": "12345678",
+                        "text": "hello"})
                 self.assertEqual(result.exception.code, "onebot_invalid_receipt")
 
     def test_loopback_http_transport_sends_only_authenticated_bounded_text_contract(self):

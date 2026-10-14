@@ -24,7 +24,7 @@ from ctypes import wintypes
 
 
 WINDOW_CLASS = "Qt51514QWindowIcon"
-MAIN_WINDOW_TITLES = ("Weixin",)
+MAIN_WINDOW_TITLES = ("Weixin", "微信")
 HISTORY_MARKER = "chat history"
 MAX_TEXT = 4000
 _WXID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -337,9 +337,17 @@ class WeChatGUISender:
             name = reader.get_nickname(conversation_id)
         except Exception:
             name = None
-        for candidate in (name, conversation_id):
+        resolved_name = name.strip() if isinstance(name, str) and name.strip() else None
+        for candidate in (resolved_name, conversation_id):
             if isinstance(candidate, str) and candidate.strip() and candidate not in names:
                 names.append(candidate.strip())
+        if resolved_name:
+            try:
+                matches = reader.usernames_for_display_name(resolved_name)
+            except Exception:
+                raise WeChatSendError("wechat_conversation_identity_unverified") from None
+            if len(matches) != 1 or matches[0] != conversation_id:
+                raise WeChatSendError("wechat_conversation_ambiguous")
         return names
 
     def deliver(self, request):

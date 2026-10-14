@@ -74,8 +74,9 @@ not signed and does not authenticate who created or stored it.
 
 The current local-worktree portable and source packages pass their privacy and
 isolated startup checks, and a `local-worktree` manifest verifies their exact
-file bytes. Hosted CI and artifact upload/download remain unverified. Public
-release publication remains a separate review step: verify hosted CI, confirm
-third-party notices and source-offer obligations for GPL QCE distribution,
-scan the final release artifact, and sign the binaries if a trusted Windows
-publisher identity becomes available.
+file bytes. Hosted run 38550004873 passed the Windows gate, package builds,
+upload/download, and downloaded-artifact provenance/byte verification for
+commit `75fa73185b5b1acf960da35ef331901c3284deef`. Public release publication
+remains a separate review step: confirm third-party notices and source-offer
+obligations for GPL QCE distribution, scan the final release artifact, and
+sign the binaries if a trusted Windows publisher identity becomes available.

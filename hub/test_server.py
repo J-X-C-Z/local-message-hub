@@ -86,6 +86,23 @@ class ServerTest(unittest.TestCase):
     def request(self, path, headers=None, body=None):
         return urlopen(Request(self.url + path, headers=headers or {}, data=body), timeout=3)
 
+    def index_qq_send_target(self, account_id='12345678', conversation_id='87654321',
+                             kind='private'):
+        self.hub.store.ingest('qq', account_id, [{
+            'id': conversation_id, 'title': 'Synthetic QQ target', 'kind': kind,
+        }], [])
+
+    @staticmethod
+    def read_sse_block(response):
+        lines = []
+        while True:
+            line = response.readline()
+            if not line:
+                return lines
+            if line == b'\n':
+                return lines
+            lines.append(line)
+
     def seed_moments(self, account, posts):
         cache = Path(self.temp.name) / 'sns_cache'
         cache.mkdir(exist_ok=True)
@@ -790,6 +807,7 @@ class ServerTest(unittest.TestCase):
         self.assertIsNone(self.hub.send_repository.get('locked-send-0001'))
     def test_send_requires_opt_in_then_prepare_requires_local_approval(self):
         headers = {'Content-Type': 'application/json'}
+        self.index_qq_send_target()
         payload = {'platform': 'qq', 'account_id': '12345678', 'conversation_type': 'private',
                    'conversation_id': '87654321', 'text': 'synthetic only', 'request_id': 'http-send-0001'}
         with self.assertRaises(HTTPError) as disabled:
@@ -827,6 +845,31 @@ class ServerTest(unittest.TestCase):
                          json.dumps({'approval_token': challenge['token']}).encode())
         self.assertEqual(replay.exception.code, 400)
         self.assertEqual(len(self.send_adapter.calls), 1)
+
+    def test_qq_send_prepare_requires_an_indexed_numeric_target_with_matching_kind(self):
+        headers = {'Content-Type': 'application/json'}
+        self.index_qq_send_target(conversation_id='87654321', kind='private')
+        self.index_qq_send_target(conversation_id='76543210', kind='group')
+        self.hub.set_capabilities({'qq_send': True})
+        cases = (
+            ('12345678', '99999999', 'private'),
+            ('other-account', '87654321', 'private'),
+            ('12345678', '87654321', 'group'),
+            ('12345678', '76543210', 'private'),
+        )
+        for index, (account_id, conversation_id, conversation_type) in enumerate(cases):
+            request_id = f'qq-indexed-{index:04d}'
+            with self.subTest(account_id=account_id, conversation_id=conversation_id,
+                              conversation_type=conversation_type):
+                with self.assertRaises(HTTPError) as rejected:
+                    self.request('/api/sends/prepare', headers, json.dumps({
+                        'account_id': account_id, 'conversation_type': conversation_type,
+                        'conversation_id': conversation_id, 'text': 'synthetic only',
+                        'request_id': request_id,
+                    }).encode())
+                self.assertEqual(rejected.exception.code, 400)
+                self.assertIsNone(self.hub.send_repository.get(request_id))
+        self.assertEqual(self.send_adapter.calls, [])
 
     def test_wecom_bot_send_is_separate_opt_in_and_approval_route(self):
         headers = {'Content-Type': 'application/json'}
@@ -927,6 +970,7 @@ class ServerTest(unittest.TestCase):
 
     def test_wecom_bot_credential_changes_revoke_existing_approval_tokens(self):
         headers = {'Content-Type': 'application/json'}
+        self.index_qq_send_target()
         bot = FakeSendAdapter()
         self.hub.wecom_bot_sender.sender = bot
         self.hub.set_capabilities({'wecom_bot_send': True})
@@ -1038,6 +1082,7 @@ class ServerTest(unittest.TestCase):
 
     def test_wechat_send_requests_are_isolated_from_other_platforms(self):
         headers = {'Content-Type': 'application/json'}
+        self.index_qq_send_target()
         self.hub.set_capabilities({'qq_send': True, 'wechat_send': True})
         self.request('/api/sends/prepare', headers,
                      json.dumps({'platform': 'qq', 'account_id': '12345678',
@@ -1077,6 +1122,8 @@ class ServerTest(unittest.TestCase):
         )
         for capability, route, request_id, payload, adapter in cases:
             with self.subTest(capability=capability):
+                if capability == 'qq_send':
+                    self.index_qq_send_target()
                 credential_patches = (
                     patch.object(self.hub.wecom_bot_credentials, 'status', return_value={
                         'configured': True, 'bot_id': 'bot_123',
@@ -1353,6 +1400,7 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(result['status'], expected)
 
     def test_send_approval_challenge_expires(self):
+        self.index_qq_send_target()
         self.hub.set_capabilities({'qq_send': True})
         headers = {'Content-Type': 'application/json'}
         body = json.dumps({'platform': 'qq', 'account_id': '12345678', 'conversation_type': 'private',
@@ -1370,6 +1418,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.send_adapter.calls, [])
 
     def test_send_approval_challenge_is_bound_to_request(self):
+        self.index_qq_send_target()
         self.hub.set_capabilities({'qq_send': True})
         headers = {'Content-Type': 'application/json'}
         for request_id in ('http-bind-one-0001', 'http-bind-two-0002'):
@@ -1386,6 +1435,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.send_adapter.calls, [])
 
     def test_send_request_can_be_rejected_without_delivery(self):
+        self.index_qq_send_target(kind='group')
         self.hub.set_capabilities({'qq_send': True})
         headers = {'Content-Type': 'application/json'}
         body = json.dumps({'platform': 'qq', 'account_id': '12345678', 'conversation_type': 'group',
@@ -1422,6 +1472,20 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(json.loads(config_lines['args'])[-1], self.hub.storage.resolve().as_posix())
         self.assertEqual(json.loads(config_lines['cwd']), root.as_posix())
         self.assertEqual(settings['operations'][0]['tool'], 'search_messages')
+
+    def test_mcp_config_maps_global_search_and_source_list_capabilities(self):
+        self.hub.set_capabilities({'chat': False, 'mcp': True, 'stats': True})
+        with self.request('/api/mcp') as response:
+            stats_enabled = json.load(response)['config_text']
+        self.assertIn('- search_messages', stats_enabled)
+        self.assertIn('- list_sources', stats_enabled)
+        self.assertNotIn('- list_conversations', stats_enabled)
+
+        self.hub.set_capabilities({'stats': False})
+        with self.request('/api/mcp') as response:
+            stats_disabled = json.load(response)['config_text']
+        self.assertIn('- search_messages', stats_disabled)
+        self.assertNotIn('- list_sources', stats_disabled)
 
     def test_mcp_write_setting_is_opt_in_and_updates_client_allowlist(self):
         with self.request('/api/mcp') as response:
@@ -1506,6 +1570,38 @@ class ServerTest(unittest.TestCase):
                 self.hub.store.get_message('qq', 'account', 'photo'))
         self.assertEqual((payload, mime), (image, 'image/png'))
         provider.cached_media.assert_called_once()
+
+    def test_mcp_media_read_rejects_cache_replacement_before_open(self):
+        import os
+        from unittest.mock import Mock
+        from integrations.qq.provider import QQProvider
+
+        image = b'\x89PNG\r\n\x1a\noriginal-image'
+        cache = Path(self.temp.name) / 'qq' / 'media-cache'
+        cache.mkdir(parents=True)
+        path = cache / 'cached.png'
+        path.write_bytes(image)
+        self.hub.store.ingest('qq', 'account', [{'id': 'room', 'title': 'Photos'}], [{
+            'id': 'photo', 'conversation_id': 'room', 'timestamp': 100,
+            'type': 'image', 'file_name': 'cached.png',
+        }])
+        provider = Mock()
+        provider.cached_media.return_value = {'available': True, 'path': str(path)}
+        self.hub.providers['qq'] = provider
+        original_open = Path.open
+
+        def replace_before_open(candidate, mode='r', *args, **kwargs):
+            if candidate == path and mode == 'rb':
+                replacement = cache / 'replacement.png'
+                with original_open(replacement, 'wb') as writer:
+                    writer.write(b'\x89PNG\r\n\x1a\nreplacement-image')
+                os.replace(replacement, path)
+            return original_open(candidate, mode, *args, **kwargs)
+
+        with patch.object(QQProvider, '_media_cache_dir', return_value=cache), \
+                patch.object(Path, 'open', new=replace_before_open):
+            with self.assertRaisesRegex(ValueError, '读取前发生变化'):
+                self.hub.read_cached_image(self.hub.store.get_message('qq', 'account', 'photo'))
 
     def test_mcp_image_read_returns_cached_bmp_as_image_content(self):
         from unittest.mock import Mock
@@ -2444,8 +2540,9 @@ class ServerTest(unittest.TestCase):
                             for index in range(limit)]
                 if len(calls) == 2:
                     raise RuntimeError('simulated interruption')
-                return [{'id': 'wx:last', 'sender_id': 'user', 'content': 'fixture',
-                         'local_type': 1, 'timestamp': 2001}]
+                return [{'id': 'wx:last', 'sender_id': 'user',
+                         'content': 'wxid-user:<msg><emoji md5="' + ('b2' * 16) + '"/></msg>',
+                         'local_type': 11000, 'timestamp': 2001}]
 
             def status(self):
                 return {'state': 'connected'}
@@ -2468,6 +2565,8 @@ class ServerTest(unittest.TestCase):
                 restarted.sync_wechat()
             self.assertEqual(calls, [0, 2000, 2000])
             self.assertEqual(restarted.store.count('wechat'), 2001)
+            self.assertEqual(restarted.store.get_message('wechat', 'wx-account', 'wx:last')['extra']['emoji_md5'],
+                             'b2' * 16)
             self.assertTrue(restarted.store.sync_checkpoint(
                 'wechat', 'wx-account', 'room')['complete'])
             restarted.close()
@@ -2504,7 +2603,9 @@ class ServerTest(unittest.TestCase):
                     return {'messages': [
                         {'id': 'wx:1', 'sender_id': 'user', 'content': 'one', 'local_type': 1,
                          'timestamp': 1, 'sort_seq': 10, 'shard': 'message_1.db', 'local_id': 1},
-                        {'id': 'wx:2', 'sender_id': 'user', 'content': 'two', 'local_type': 1,
+                        {'id': 'wx:2', 'sender_id': 'user',
+                         'content': 'wxid-user:<msg><emoji md5="' + ('a1' * 16) + '"/></msg>',
+                         'local_type': 11000,
                          'timestamp': 2, 'sort_seq': 20, 'shard': 'message_1.db', 'local_id': 2},
                     ], 'next_cursor': {'version': 1, 'session_id': 'room', 'sort_seq': 20,
                                        'shard': 'message_1.db', 'local_id': 2}, 'has_more': False}
@@ -2527,6 +2628,8 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(calls[0], None)
             self.assertEqual(calls[1]['sort_seq'], 20)
             self.assertEqual(hub.store.count('wechat'), 3)
+            self.assertEqual(hub.store.get_message('wechat', 'wx-account', 'wx:2')['extra']['emoji_md5'],
+                             'a1' * 16)
             checkpoint = hub.store.sync_checkpoint('wechat', 'wx-account', 'room')
             self.assertEqual(checkpoint['cursor']['sort_seq'], 30)
             self.assertTrue(checkpoint['complete'])
@@ -3475,8 +3578,10 @@ class ServerTest(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
             self.assertIn('text/event-stream', response.getheader('Content-Type'))
-            self.assertTrue(response.readline().startswith(b'retry:'))
-            response.readline()
+            checkpoint = self.read_sse_block(response)
+            self.assertTrue(checkpoint[0].startswith(b'retry:'))
+            self.assertTrue(any(line.startswith(b'event: checkpoint') for line in checkpoint))
+            self.assertTrue(any(line.startswith(b'id: 1') for line in checkpoint))
             self.hub.store.ingest('wechat', 'account', [{'id': 'new-wechat', 'title': 'WeChat'}], [
                 {'id': 'event-wechat', 'conversation_id': 'new-wechat', 'timestamp': 200,
                  'text': 'wechat private fixture'}])
@@ -3489,20 +3594,64 @@ class ServerTest(unittest.TestCase):
             self.hub.store.ingest('qq', 'account', [{'id': 'visible', 'title': 'Visible'}], [
                 {'id': 'event-visible', 'conversation_id': 'visible', 'timestamp': 202,
                  'text': 'visible private fixture'}])
-            lines = []
+            message_block = []
             for _ in range(8):
-                line = response.readline()
-                lines.append(line)
-                if line.startswith(b'data:'):
+                block = self.read_sse_block(response)
+                if any(line.startswith(b'event: message') for line in block):
+                    message_block = block
                     break
-            payload_line = next(line for line in lines if line.startswith(b'data:'))
+            payload_line = next(line for line in message_block if line.startswith(b'data: '))
             payload = json.loads(payload_line.removeprefix(b'data: '))
             self.assertEqual(payload['conversation_id'], 'visible')
             self.assertEqual(payload['platform'], 'qq')
+            self.assertEqual(set(payload), {
+                'platform', 'account_id', 'conversation_id',
+                'conversation_title', 'conversation_kind'})
             self.assertNotIn('private fixture', payload_line.decode())
             self.assertNotIn('text', payload)
         finally:
             connection.close()
+
+    def test_message_event_stream_reconnect_keeps_initial_cursor_before_first_message(self):
+        self.hub.set_capabilities({'notifications': True})
+        with self.hub.store._lock:
+            self.hub.store._require_connection().execute('DELETE FROM messages')
+        self.assertEqual(self.hub.store.message_rowid(), 0)
+        first = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=4)
+        try:
+            first.request('GET', '/api/events/messages')
+            response = first.getresponse()
+            self.assertEqual(response.status, 200)
+            checkpoint = self.read_sse_block(response)
+            self.assertTrue(any(line.startswith(b'event: checkpoint') for line in checkpoint))
+            self.assertTrue(any(line.startswith(b'id: 0') for line in checkpoint))
+        finally:
+            first.close()
+
+        self.hub.store.ingest('qq', 'account', [{'id': 'after-disconnect', 'title': 'Fixture'}], [
+            {'id': 'after-disconnect-event', 'conversation_id': 'after-disconnect',
+             'timestamp': 204, 'text': 'synthetic message during reconnect gap'}])
+        self.assertTrue(any(row['conversation_id'] == 'after-disconnect'
+                            for row in self.hub.store.incoming_message_events(0)))
+
+        resumed = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=4)
+        try:
+            resumed.request('GET', '/api/events/messages', headers={'Last-Event-ID': '0'})
+            response = resumed.getresponse()
+            self.assertEqual(response.status, 200)
+            self.read_sse_block(response)
+            message = []
+            for _ in range(5):
+                block = self.read_sse_block(response)
+                message.extend(block)
+                if any(line.startswith(b'event: message') for line in block):
+                    break
+            self.assertTrue(any(line.startswith(b'event: message') for line in message))
+            payload = json.loads(next(line[6:] for line in message if line.startswith(b'data: ')))
+            self.assertEqual(payload['conversation_id'], 'after-disconnect')
+            self.assertNotIn('text', payload)
+        finally:
+            resumed.close()
 
     def test_open_message_event_stream_closes_when_notifications_are_disabled(self):
         self.hub.set_capabilities({'notifications': True})
@@ -3511,10 +3660,11 @@ class ServerTest(unittest.TestCase):
             connection.request('GET', '/api/events/messages')
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
-            self.assertTrue(response.readline().startswith(b'retry:'))
-            response.readline()
-            self.assertTrue(response.readline().startswith(b': keep-alive'))
-            response.readline()
+            checkpoint = self.read_sse_block(response)
+            self.assertTrue(checkpoint[0].startswith(b'retry:'))
+            self.assertTrue(any(line.startswith(b'event: checkpoint') for line in checkpoint))
+            keepalive = self.read_sse_block(response)
+            self.assertTrue(keepalive[0].startswith(b': keep-alive'))
 
             self.hub.set_capabilities({'notifications': False})
             self.hub.store.ingest('qq', 'account', [{'id': 'revoked-room', 'title': 'Fixture'}], [
@@ -3537,10 +3687,11 @@ class ServerTest(unittest.TestCase):
                 'Cookie': f'lmh_session={token}'})
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
-            self.assertTrue(response.readline().startswith(b'retry:'))
-            response.readline()
-            self.assertTrue(response.readline().startswith(b': keep-alive'))
-            response.readline()
+            checkpoint = self.read_sse_block(response)
+            self.assertTrue(checkpoint[0].startswith(b'retry:'))
+            self.assertTrue(any(line.startswith(b'event: checkpoint') for line in checkpoint))
+            keepalive = self.read_sse_block(response)
+            self.assertTrue(keepalive[0].startswith(b': keep-alive'))
 
             self.hub.account_safety.lock()
             self.assertEqual(response.readline(), b'')
@@ -4378,6 +4529,16 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(problem['code'], 'capability_disabled')
         self.assertEqual(problem['capability'], 'chat')
 
+    def test_core_search_remains_available_when_chat_capability_is_disabled(self):
+        self.hub.set_capabilities({'chat': False})
+        with self.request('/api/search?q=hello') as response:
+            result = json.load(response)
+        self.assertEqual([item['id'] for item in result['items']], ['room:1'])
+        self.assertEqual(Handler.capability_for_path('/api/search'), 'search')
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/messages?platform=wechat&account_id=account&conversation_id=room')
+        self.assertEqual(error.exception.code, 403)
+
     def test_wechat_quote_media_preview_uses_only_exact_local_target(self):
         from unittest.mock import Mock
         self.hub.store.ingest('wechat', 'account', [{'id': 'quote-room'}], [
@@ -4822,6 +4983,34 @@ class ServerTest(unittest.TestCase):
                 'message_id': 'room:1', 'resource_index': 50,
             })
         provider.media.assert_not_called()
+
+    def test_boolean_attachment_index_is_rejected_before_platform_resolution(self):
+        from unittest.mock import Mock
+        self.hub.store.ingest('wecom', 'account', [{'id': 'work', 'title': 'Work'}], [{
+            'id': 'work:1', 'conversation_id': 'work', 'type': 'image', 'timestamp': 100,
+            'attachments': [{'name': 'first.png'}, {'name': 'second.png'}],
+        }])
+        self.hub.store.ingest('qq', 'account', [{'id': 'room', 'title': 'QQ'}], [{
+            'id': 'room:1', 'conversation_id': 'room', 'type': 'image', 'timestamp': 100,
+            'roaming_resources': [{'name': 'first.png'}, {'name': 'second.png'}],
+        }])
+        wecom = Mock()
+        qq = Mock()
+        self.hub.providers.update({'wecom': wecom, 'qq': qq})
+        cases = (
+            {'platform': 'wecom', 'account_id': 'account', 'conversation_id': 'work',
+             'message_id': 'work:1', 'resource_index': True},
+            {'platform': 'qq', 'account_id': 'account', 'conversation_id': 'room',
+             'message_id': 'room:1', 'resource_index': True},
+        )
+
+        for params in cases:
+            with self.subTest(platform=params['platform']), self.assertRaisesRegex(
+                    ValueError, '附件序号无效'):
+                self.hub.resolve_media(params)
+
+        wecom.media.assert_not_called()
+        qq.resolve_cached_resource.assert_not_called()
 
     def test_qq_local_resource_index_100_reaches_provider_and_101_is_rejected(self):
         from unittest.mock import Mock

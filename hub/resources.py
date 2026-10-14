@@ -253,9 +253,10 @@ class ResourceJobManager:
                 try:
                     path, suggested_name = self.resolver(request)
                     source = Path(path)
-                    if not source.is_file():
+                    if source.is_symlink() or not source.is_file():
                         raise FileNotFoundError
-                    size = source.stat().st_size
+                    source_stat = source.stat()
+                    size = source_stat.st_size
                     if size > MAX_ITEM_BYTES or total_bytes + size > MAX_TOTAL_BYTES:
                         raise OverflowError
                     if job["cancel"].is_set():
@@ -267,6 +268,9 @@ class ResourceJobManager:
                     digest = hashlib.sha256()
                     try:
                         with source.open("rb") as reader, target.open("xb") as writer:
+                            opened_stat = os.fstat(reader.fileno())
+                            if self._source_signature(opened_stat) != self._source_signature(source_stat):
+                                raise OSError("source changed before read")
                             while True:
                                 if job["cancel"].is_set():
                                     raise InterruptedError
@@ -278,6 +282,8 @@ class ResourceJobManager:
                                     raise OverflowError
                                 writer.write(block)
                                 digest.update(block)
+                            if self._source_signature(os.fstat(reader.fileno())) != self._source_signature(opened_stat):
+                                raise OSError("source changed during read")
                         if copied != size:
                             raise OverflowError
                     except Exception:
@@ -337,3 +343,9 @@ class ResourceJobManager:
                 if not block:
                     return
                 target.write(block)
+
+    @staticmethod
+    def _source_signature(stat_result):
+        # shortcut: metadata catches ordinary edits; use immutable cache snapshots for hostile writers.
+        return (stat_result.st_dev, stat_result.st_ino, stat_result.st_size,
+                stat_result.st_mtime_ns)

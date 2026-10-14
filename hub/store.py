@@ -1241,6 +1241,17 @@ class ChatStore:
             ).fetchall()
         return [row[0] for row in rows]
 
+    def export_conversation_kinds(self, platform="all"):
+        scope, params = self._scope_clause(platform, "m.platform")
+        with self._lock:
+            rows = self._require_connection().execute(f"""
+                SELECT DISTINCT c.kind
+                FROM messages m LEFT JOIN conversations c
+                  ON c.platform=m.platform AND c.account_id=m.account_id AND c.id=m.conversation_id
+                WHERE 1=1{scope}
+            """, params).fetchall()
+        return [row[0] for row in rows]
+
     def iter_export_members(self, platform="all", batch_size=500):
         scope, params = self._scope_clause(platform, "m.platform")
         where = "WHERE 1=1" + scope

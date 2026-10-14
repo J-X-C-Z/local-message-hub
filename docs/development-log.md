@@ -1,5 +1,187 @@
 # Development Log
 
+## 2026-10-15 - P14 Package Refresh After P11 Media Changes
+
+- Rebuilt the Windows portable package (9,783 files; 586,789,162 bytes) and
+  sanitized source ZIP (690 files). Portable executable,
+  extracted source Hub, three-source UI, read-only MCP and standalone MCP stdio
+  smoke checks passed, as did package privacy scans.
+- Portable executable SHA-256:
+  `9ec003cc141fc582d04a104bb9c1b9ad4efa293a1af0effb3c1d41d176929782`.
+  Manifest run ID: `local-019-p11-variants`.
+- The manifest verifies exact package inventories and bytes against base commit
+  `75fa73185b5b1acf960da35ef331901c3284deef`. Hosted CI and artifact
+  round-trip remain separate and open.
+
+## 2026-10-15 - P11 WeChat Variant Cache Fallback
+
+- The Hub now resolves WeFlow `_b/.b/_w/.w/_c/.c` DAT variants as the lowest
+  image tier. Best-available preview/export can use these local files; an
+  original-only request still refuses to downgrade. The mapping follows the
+  vendored WeFlow `getCachedPathTier` rule without assigning guessed dimensions.
+- A focused synthetic regression covers all six suffixes, best-available
+  fallback, and the original-only boundary. Broader real-cache and
+  resource/decryption parity remain open.
+
+## 2026-10-15 - P9 WeChat Preparation Gate and P14 Source Archive Refresh
+
+- The local Hub started through the repository launcher and responded on its
+  loopback endpoint. WeChat request preparation was refused while the
+  `wechat_send` capability remained disabled; no request was created and no
+  message was sent. Real delivery still requires a separate local approval.
+- Refreshed the sanitized source ZIP after genericizing device-specific public
+  documentation and removing local media-sample counts. Its 690 entries passed
+  the source privacy scan and isolated WebUI, three-source and read-only MCP
+  startup checks. The portable runtime was unchanged and reused; the regenerated
+  `local-worktree` manifest verified both package byte inventories.
+- Hosted CI and the uploaded/downloaded artifact round trip remain unverified
+  for this worktree.
+
+## 2026-10-14 - P14 Current Worktree Package Refresh
+
+- Rebuilt the portable Windows package (9,783 files; 586,760,039 bytes) and
+  sanitized source archive (690 files; 25,102,137 bytes). Isolated Hub/UI/MCP
+  startup, source privacy scans, and manifest byte verification passed. The
+  manifest uses `local-worktree` provenance and run ID
+  `local-currentworktree-20261014-008`.
+- Portable executable SHA-256:
+  `ceba334b9b7c47bf65639429913b3e3affd22450fd81d81137b32171db902b0b`.
+  Source ZIP SHA-256:
+  `34586f51f7142f354ebc621268637fb19f15392e23f004cdb481d85fae71b027`.
+  Manifest SHA-256:
+  `2d93a91cf820c3ca17d540b28c289109e0ea71711e348b8123b50a7cd9a297eb`.
+- This is a current-worktree package, not hosted release evidence; hosted CI
+  and artifact round-trip still refer to the committed revision.
+
+## 2026-10-14 - P11 WeChat and QQ Cached Image Parity
+
+- WeChat local image lookup recognizes the pinned WeFlow reader's original and
+  thumbnail suffix variants and selects the largest cache file within each
+  tier. Its focused media suite passed 59 tests.
+- QQ local parsing now exposes QCE `market_face` items as account-scoped image
+  resources for the existing preview and export path. The focused parser/cache
+  test and QQ rich-content WebUI regression passed. Real device cache naming
+  remains unverified.
+
+## 2026-10-14 - P12 Notification Payload Minimization
+
+- The body-free SSE message payload now includes only platform, account,
+  conversation ID, title, and conversation kind. Sender name, timestamp,
+  message type, and internal row ID are omitted from JSON; the row ID remains
+  only as the SSE event ID for reconnect. A focused HTTP regression passed.
+- Real desktop-notification delivery remains unverified.
+
+## 2026-10-14 - P14 Current Worktree Package Refresh
+
+- Rebuilt the portable Windows package (9,783 files, 586,751,885 bytes) and
+  sanitized 690-file source ZIP (25,101,179 bytes). Isolated Hub startup,
+  standalone MCP protocol, source privacy scans, and local manifest verification
+  all passed. The manifest uses `local-worktree` provenance and run ID
+  `local-currentworktree-20261014-006`; it is not hosted artifact evidence.
+- Portable executable SHA-256:
+  `1fef6a05655abfcba6e395c64996d52b0b28eac635d36b04451e77ae2bc208f`.
+  Source ZIP SHA-256:
+  `ebc1a6cbbce0dc8d70d0e5ffbf3b91451b856b607b14fad0339457da82d7c714`.
+  Manifest SHA-256:
+  `9860a2b6f39a60377587db7dc658de5e1d2823a1e8d354bf7365b4388a6e4888`.
+- The package includes current uncommitted source changes but no `.local`
+  account data. Hosted CI and artifact round-trip for this exact worktree remain
+  unverified.
+
+## 2026-10-14 - P9 QQ Readiness Receipt Validation
+
+- QQ login readiness now requires `retcode` to be an exact integer zero, matching
+  the existing delivery receipt check. Synthetic `false` and `0.0` responses
+  report the API unavailable and do not expose an account identity.
+- The focused readiness regression passed. No NapCat endpoint was contacted.
+
+## 2026-10-14 - P11 QQ Cache Gallery Thumbnails
+
+- Visible QQ global-cache image tiles now join the existing lazy preview queue
+  and resolve through account-scoped opaque resource IDs. Concurrency remains
+  bounded and page changes cancel pending reads; no source download was added.
+- The focused media gallery regression passed for URL, MIME, account, resource
+  identity, and tile update. Real cached-media acceptance remains open.
+
+## 2026-10-14 - P8 MCP Client Capability Mapping
+
+- MCP client config now exposes `search_messages` through the core search
+  capability and gates `list_sources` through statistics. A focused HTTP
+  regression verifies search stays available with chat browsing disabled and
+  the source-list tool follows the stats switch.
+- A prior operation reported the exact user-provided WeChat request queued for
+  local approval; a later sanitized probe reported no request queued. With the
+  Hub stopped and private storage uninspected, current persisted status is
+  unverified. No message was delivered; request contents and identifiers stay
+  out of this public log.
+
+## 2026-10-14 - P11 Single Image Best-Tier Preview
+
+- The media gallery now offers an explicit local best-tier read for one WeChat
+  chat image. It updates only the selected tile; a cache miss leaves its current
+  preview intact, and ordinary viewport previews still request `mid`.
+- The gallery regression covers selected-message identity, tile-local updates,
+  and cache-miss preservation. No source-client/network download path was added.
+- At this point a local operation reported a text-only WeChat test request as
+  `pending_approval`. A later sanitized probe reported no request queued. The
+  Hub is stopped, so current persisted status is unverified; no message was
+  delivered. Request content and identifiers stay out of public docs.
+
+## 2026-10-14 - P11 Stable MCP Cache Reads
+
+- Cached-image and Moments media reads now compare the path's regular-file
+  identity with the opened file handle, then recheck that handle after the
+  bounded read. A cache replacement before open is rejected by regression
+  coverage; the complete Hub server suite passed 208 tests.
+- A same-inode writer that restores modification time can still evade the
+  metadata check. Real cache/decryption coverage remains open.
+
+## 2026-10-14 - P13 Localized WeChat Window Detection
+
+- The sender now recognizes the exact localized main-window title `微信` as
+  well as `Weixin`, while continuing to require the expected window class and
+  an exact title. A sanitized live readiness probe reports the account/window
+  ready and desktop input available; the main window is not foreground. The
+  focused sender suite passed all 25 tests.
+- That probe found no composed or queued request and no delivered message. The
+  Hub was stopped and `wechat_send` was disabled in local settings. Current
+  persisted status is unverified because the Hub is stopped. Delivery still
+  requires the Hub, the user enabling sending, the target window, and
+  per-request approval.
+
+## 2026-10-14 - P8-P14 Local Gate and Package Refresh
+
+- The full local gate passed: 795 Python tests, four source-mutation gate
+  checks, 32 WebUI checks, package/privacy and deterministic ZIP checks, and
+  the 25,000-message performance run. Ingest took 1.712s, first search 0.035s,
+  50-page pagination 1.585s, backup 0.107s, and restore 0.274s; WAL reported
+  zero failures.
+- Rebuilt the Windows portable package (7,554 files, 288,298,893 bytes) and
+  sanitized source ZIP (690 files, 25,055,029 bytes). Isolated startup, MCP,
+  and package privacy checks passed. The local-worktree manifest verifies the
+  package bytes for base commit `75fa73185b5b1acf960da35ef331901c3284deef`;
+  these packages include uncommitted worktree changes and are not a release.
+- A sanitized probe at that time found no WeChat request queued; a later
+  operation reported one prepared. The Hub is stopped, so current persisted
+  status is unverified. No content was entered through the desktop and nothing
+  was delivered. QQ/NapCat live receipt, real-cache parity,
+  desktop notification/native mutation acceptance, and clean hosted artifact
+  verification for the current worktree remain open.
+
+## 2026-10-14 - P9 Exact QQ Delivery Receipt Validation
+
+- NapCat OneBot receipts now require `retcode` to be an exact integer. Boolean
+  and floating-point lookalikes cannot be reported as sent or rejected.
+- All 17 focused sender tests passed. No QQ or NapCat endpoint was contacted;
+  live delivery acceptance remains open.
+
+## 2026-10-14 - Stable media ZIP reads
+
+- Resource export now rejects a source cache file that changes identity, size,
+  or modification time during its streamed copy, and removes the partial item.
+- Synthetic same-size mutation, growth-after-stat, and cancellation checks
+  passed. This does not close real-device cache coverage.
+
 ## 2026-10-14 - P14 Review Package p371
 
 - Rebuilt the portable package and sanitized source ZIP from the current
@@ -79,7 +261,7 @@
   different message, a non-string value is ignored, and status reads keep
   returning the resolved number as the target.
 - Validation: the whole `scripts/check-local-hub.ps1` Python set (773 tests)
-  and the 28 WebUI test files pass on this machine with the interpreter that
+  and the 28 WebUI test files pass in the local environment with the interpreter that
   has pytest-free `unittest` and no QQ client contact. Real message delivery
   still needs a fully exited QQ client, an online NapCat account matching the
   request's account, and an explicit approval per message.
@@ -2541,7 +2723,7 @@
   static scan covered 10,222 files, found no database/config/key/certificate
   files, and confirmed both Hub/MCP executables plus the bundled
   `hub.resources` module. Executable smoke test was skipped because Windows
-  application control blocks launching the unsigned build on this machine.
+  the environment's application-control policy blocks launching the unsigned build.
 - A separate isolated synthetic preview verified that two QQ roaming resources
   attached to one image message appear as two independently selectable media
   entries and the library reports message and attachment counts separately; its
@@ -2572,7 +2754,7 @@
   statically audited 10,222 files: no SQLite databases, account configuration,
   private keys, or certificates; Hub, standalone MCP, QQ sender, resource, and
   WeChat provider modules are present. Runtime smoke testing remains blocked by
-  this machine's application-control policy for unsigned executables.
+  the environment's application-control policy for unsigned executables.
 
 ## 2026-10-11 - Read-only WeChat Moments
 
@@ -2929,7 +3111,7 @@
   are not stored in the index or written to a transcript file.
 - Added an optional offline SenseVoice adapter for 16-bit PCM WAV. It uses only
   an already-installed Node/Sherpa package and the existing local WeFlow model
-  directory; it never downloads either. This machine currently has neither
+  directory; it never downloads either. When those optional components are absent,
   component, so status returns an explicit unavailable reason. A fake
   recognizer verifies the complete API/UI flow without external networking.
 - Verification: `python -m unittest hub.test_voice_transcription -v`,
@@ -5621,7 +5803,7 @@
   uses the setup action's reported MSYS2 directory. The three archives were
   downloaded and hash-verified against the [GCC package](https://packages.msys2.org/packages/mingw-w64-x86_64-gcc), [libgcc package](https://packages.msys2.org/packages/mingw-w64-x86_64-libgcc), and [libstdc++ package](https://packages.msys2.org/packages/mingw-w64-x86_64-libstdc%2B%2B) pages.
   The setup action updates installed packages first. A read-only pacman
-  transaction against this machine's older MSYS2 install rejected its
+  transaction against the local MSYS2 installation rejected its
   `16.2.0-4` runtime dependency, and changed no packages; this does not verify
   the hosted runner sequence. Local YAML/PowerShell syntax checks pass. Hosted
   installation and end-to-end artifact upload/download remain unverified.
@@ -7041,16 +7223,17 @@ key is absent.
 
 - WeChat message type `11000` now follows the existing sticker placeholder
   across message normalization, media filtering/counts, cached-preview refusal,
-  quoted-message preview, and MCP attachment metadata. It is never assigned an
-  emoji hash from message text; no cache path is inferred without a verified
-  key.
+  quoted-message preview, and MCP attachment metadata. Both cursor and offset
+  sync preserve only a 32-character hexadecimal MD5 found in the XML emoji
+  element. The existing account-bound cache resolver still decides whether any
+  local file is readable, and no cache path is inferred.
 - WebUI treats type 11000 as a sticker and excludes it from ordinary image
   preview requests. The anti-recall settings description now accurately states
   that only read-only status checks are available.
 - Added focused synthetic regressions for the placeholder and sticker counts.
   Real type-11000 cache rendering and broader P11 attachment-byte acceptance
-  remain open; the user's bounded QQ scan was already short-circuited because
-  the local QQ database was readable.
+  remain open; the user's bounded QQ scan was short-circuited because the local
+  QQ database was already readable.
 
 ## 2026-10-14 - P9 WeChat Group Preparation and P14 Tabular Privacy Scan
 
@@ -7175,10 +7358,12 @@ key is absent.
 
 ## 2026-10-14 - P8 MCP Chat Capability Gate
 
-- `search_messages` now requires the `chat` capability. With chat disabled,
-  MCP omits the tool and rejects direct calls without returning indexed text.
-- Regression coverage also asserts every declared MCP tool has an explicit
-  capability mapping. The focused regressions passed; Hindsight was unavailable.
+- At this checkpoint `search_messages` was temporarily mapped to `chat`, so the
+  tool was omitted when chat was disabled. A later P8 contract review found
+  this contradicted P8-01's always-available core search requirement; the
+  follow-up below restores search under its own core capability while keeping
+  conversation and message reads gated. Every MCP tool still has an explicit
+  capability mapping.
 
 ## 2026-10-14 - P13 WeChat Receipt Baseline
 
@@ -7339,3 +7524,438 @@ key is absent.
   refused a repeat scan because the QQ database is already readable. Its
   existing key/index were left untouched. The separate QQ online-history
   import capability remains disabled; no import or message delivery occurred.
+
+## 2026-10-14 - P14 Hosted Verification on Current Roadmap Commit
+
+- Hosted run 38550004873 passed on commit
+  `75fa73185b5b1acf960da35ef331901c3284deef`, including the full Windows gate,
+  portable and sanitized source package builds, isolated startup/MCP smokes,
+  artifact manifest verification, upload/download, and downloaded-byte and
+  provenance checks.
+- `LocalMessageHub-windows-release` is 251,741,288 bytes and expires
+  2026-10-21. This reran P14 against the current documentation commit; the
+  product code is unchanged from the previously verified code commit.
+
+## 2026-10-14 - Local Three-Platform Sync and Avatar Display
+
+- Started the Hub on loopback with automatic sync disabled, then explicitly
+  requested one read-only sync for all configured sources. WeChat, WeCom, and
+  QQ completed with connected status and no reported errors.
+- The live WebUI loaded the indexed conversations and visually rendered cached
+  WeChat avatars. No message contents or account totals are recorded here.
+- A separate QQ key-discovery request returned the existing-key short circuit;
+  no fresh process-memory scan ran and no source-client database was modified.
+
+## 2026-10-14 - Approved QQ Read-Only Scan Retry
+
+- Ran the bounded scanner directly after the Hub's normal endpoint correctly
+  skipped key discovery for an already-readable database. It found no QQ
+  process accessible to the current user and read 0 MiB; the existing local key
+  still reports the database as ready.
+- No key/configuration was changed, and no history import was needed or started.
+  The scanner output exposed no candidate material; QQ database files were not
+  modified.
+
+## 2026-10-14 - P8 Search Capability Enforcement
+
+- Follow-up contract review corrected the new HTTP and MCP gates: search is an
+  always-enabled core capability under P8-01, so both search interfaces remain
+  available when chat browsing is disabled. Conversation, message-page, and
+  message-context reads continue to require the `chat` capability.
+- Focused regressions confirm both sides of that boundary.
+
+## 2026-10-14 - P14 Full Gate on Current Worktree
+
+- After aligning HTTP and MCP search to the core `search` capability, the
+  complete local gate passed: 789 Python tests, four source-client mutation
+  gate checks, 32 primary WebUI checks, package/privacy checks, deterministic
+  source ZIP verification and the 25,000-message performance benchmark.
+- The run recorded 2.041 seconds for synthetic ingest, 0.038 seconds for the
+  first search, 1.948 seconds for 25,000 paged rows, 0.109 seconds for backup,
+  0.339 seconds for restore, and no WAL failures. Hosted artifact verification
+  still refers to committed HEAD; these worktree changes remain uncommitted.
+
+## 2026-10-14 - P11 Bounded Local Media Resolution
+
+- A read-only probe used the WebUI's indexed identities and media resolver,
+  checking at most 12 items per platform and media type. Bounded byte reads
+  succeeded for cached WeChat image and WeChat/QQ voice items.
+- The sampled WeChat video, WeCom media, and QQ image/video entries had no
+  readable local cache. No chat text, names, account identifiers, or totals
+  were recorded. This does not verify full media decode or playback.
+
+## 2026-10-14 - P11 QQ Relationship Media Aliases
+
+- Objective media achievements now fall back from an empty QQ attachment
+  `type` to the provider's `kind` or legacy `k` category field. A synthetic
+  regression covers image and voice counts without reading local media.
+- The analytics suite passed 26 tests. Full resource/decryption parity and
+  real-cache acceptance remain open.
+
+## 2026-10-14 - P12 Native Trigger Source Audit
+
+- Checked the repository and WeFlow pinned commit
+  `2f23e72cebf7f309a0f4d129307d16d7b0cd41c3`. Both contain the WCDB wrapper
+  and trigger ABI declarations, but no auditable native trigger source or
+  WCDB library; upstream says users supply the native component.
+- The source-mutation gate passed 4 tests and the optional-export harness passed
+  44 synthetic tests. No native binary or database was accessed. P12-03/04
+  remain `NOT_STARTED` pending inspectable implementation and isolated
+  install/check/uninstall/rollback evidence.
+
+## 2026-10-14 - P12 Browser Notification API Check
+
+- An isolated Edge context with a temporary SQLite store granted browser
+  notification permission and consumed one synthetic incoming message. The
+  browser notification `show` event fired with only the generic platform
+  message; a sentinel message body was absent from the notification fields.
+- The hidden-page state was simulated in the isolated test page. This verifies
+  the browser Notification API path, not delivery by the Windows notification
+  center. Real desktop-notification acceptance remains open. The isolated
+  browser and Hub process were closed; recursive cleanup of the synthetic
+  temporary data directory was blocked by the automatic review gate.
+
+## 2026-10-14 - P11 QQ Compact Attachment Export
+
+- QQ export normalization now maps compact attachment keys `k` and `sz` to
+  the standard `type` and `size` fields. A synthetic regression confirms the
+  fields survive JSON export and the source cache path is omitted.
+- Focused export regressions passed. Real-device cache/export coverage and
+  broader media parity remain open, so P11 stays `IN_PROGRESS`.
+
+## 2026-10-14 - P11 Group Roster Count Semantics
+
+- Group analytics now preserves an explicit roster count of zero and falls
+  back to observed senders only when the roster count is absent (`NULL`). A
+  synthetic group with one observed sender verifies the roster and observed
+  counts stay distinct.
+- All 27 analytics tests passed. Real-device roster completeness remains part
+  of the broader P11 acceptance.
+
+## 2026-10-14 - P11 Boolean Attachment Index Validation
+
+- Media resolution now rejects Boolean `resource_index` values before WeCom or
+  QQ roaming provider lookup; Python otherwise treats `true` as integer index
+  1. A synthetic regression verifies both paths leave their providers untouched.
+- The new regression and adjacent WeCom bound and QQ local-index tests passed.
+
+## 2026-10-14 - P14 Full Local Gate After P11 Follow-Ups
+
+- `scripts/check-local-hub.ps1` passed from the current worktree: 792 Python
+  tests, four source-client mutation-gate checks, 32 WebUI checks, package
+  privacy and deterministic ZIP checks, plus the 25,000-message benchmark.
+- The benchmark recorded 1.577 seconds for ingest, 0.035 seconds for first
+  search, 2.223 seconds for 50 cursor pages, 0.092 seconds for backup and
+  0.295 seconds for restore, with zero WAL failures. The worktree changes are
+  uncommitted; hosted CI and artifact round-trip evidence still applies to
+  committed HEAD `75fa73185b5b1acf960da35ef331901c3284deef`.
+
+## 2026-10-14 - P14 Current-Worktree Package Verification
+
+- Rebuilt the Windows portable and sanitized source ZIP from the current code
+  worktree. The portable Hub served the WebUI and three source entries from
+  isolated storage; the standalone MCP executable completed initialize,
+  `tools/list`, and exit over stdio.
+- Privacy scans passed for the portable and extracted source package. A
+  `local-worktree` manifest verified every package file hash and size. This is
+  local package evidence only; it does not replace hosted artifact transfer
+  evidence for a committed revision.
+
+## 2026-10-14 - P11 QQ Reply Preview Attachments
+
+- Local QQ parsing now retains bounded media metadata embedded in kind-7
+  reply previews. The WebUI offers cache resolution inside the quoted block
+  and filters quoted entries from the ordinary attachment strip.
+- Synthetic parser and local-cache resolution regressions pass; all 28 local
+  QQ provider tests and the QQ rich-content WebUI check pass. Real-account
+  cache coverage remains unverified, so P11 remains `IN_PROGRESS`.
+
+## 2026-10-14 - P11 Orphan Message Analytics Scope
+
+- Private-profile aggregation now excludes messages without a matching,
+  explicitly private conversation row, following the established daily
+  analytics classification rule.
+- The existing synthetic private-profile fixture now includes an orphan
+  message and verifies the recognized private profile still returns its
+  original counts.
+
+## 2026-10-14 - P13 WeChat Delivery Readiness Probe
+
+- The user selected one indexed conversation and supplied a test message for
+  a live acceptance attempt. The Hub resolved one matching conversation but
+  the sender readiness probe found no WeChat window.
+- No send request was prepared or delivered. The temporary `wechat_send`
+  capability enablement was reverted to off; real delivery awaits a logged-in
+  desktop client and the existing per-message approval.
+
+## 2026-10-14 - P14 Final Current-Worktree Gate
+
+- The full local gate passed 793 Python tests, four source-mutation gate checks,
+  32 WebUI checks, package privacy/determinism checks, and the synthetic
+  25,000-message benchmark. Ingest/search/50-page pagination/backup/restore
+  took 1.427/0.031/1.959/0.095/0.245 seconds; WAL failures: zero.
+- The refreshed Windows portable and sanitized source packages passed isolated
+  Hub/MCP/source startup, privacy scanning, and manifest byte/provenance checks.
+  Hosted CI/artifact evidence remains for the last committed revision only.
+- Port 8765 was unavailable at final UI refresh. The prior process was no longer
+  running, but automatic review rejected starting the replacement as `blocked
+  by policy`; the running UI was not updated by this gate.
+- Public-source review replaced a machine-specific anecdote in a vendored
+  comment with the general rowid-mapping rule; Git-visible and package scans
+  pass without carrying that local acceptance detail.
+
+## 2026-10-14 - P11 QQ Attachment Index and P13 Readiness
+
+- Filtering quoted QQ reply attachments no longer renumbers the remaining
+  message attachments. The renderer keeps each original resource index, so a
+  later attachment action resolves the intended cached resource.
+- The regression and full local gate passed: 793 Python tests, four source
+  mutation checks, 32 WebUI checks, package privacy/startup checks, and the
+  25,000-message benchmark. Search was 0.044 seconds, 50-page pagination was
+  3.001 seconds, and WAL failures were zero.
+- The Hub is currently not running on the local UI ports and `wechat_send` is
+  off. No live WeChat request was prepared or delivered; P13 remains open.
+
+## 2026-10-14 - P12 Current-Worktree Audit
+
+- Rechecked the P12 capability gates and current implementation: Moments,
+  notifications, auto-export, account safety and relationship footprint remain
+  independently gated; the three relationship-footprint MCP tools are
+  capability-gated and return content-free metrics. Anti-recall and Moments
+  source mutation remain unavailable behind the Electron/HTTP fail-closed
+  gate.
+- Focused local verification passed 74 Python tests across auto-export,
+  account safety, analytics, Moments parsing/export, Hub HTTP and MCP; all four
+  source-mutation gate checks and four notification/lock/Moments WebUI test
+  files passed. No live source database or client was accessed.
+- P12-01 remains `IN_PROGRESS` for real desktop notification delivery and
+  remaining real-account/cache acceptance. P12-03/04 remain `NOT_STARTED`
+  until an auditable native implementation and isolated backup/rollback
+  lifecycle are available.
+
+## 2026-10-14 - P8-P14 Latest Local Gate and Package
+
+- The current worktree passed 797 Python tests, four source-client mutation
+  gates, 32 WebUI checks, privacy and deterministic ZIP checks, and the
+  25,000-message benchmark. Ingest/search/50-page pagination/backup/restore
+  took 1.552/0.030/1.519/0.099/0.260 seconds; WAL failures: zero.
+- The refreshed local-worktree portable package contains 7,554 files
+  (288,305,491 bytes); the sanitized source ZIP is 25,056,673 bytes. Isolated
+  Hub/UI/MCP startup, package privacy scans, and manifest byte/provenance
+  verification passed. These packages include uncommitted worktree changes;
+  hosted CI and artifact round-trip remain open for this exact state.
+- The Hub was not running on the checked local ports, `wechat_send` was
+  disabled, and the exact chat window was not open during that probe. It found
+  no queued request then; current persisted status is unverified. No message
+  was sent.
+
+## 2026-10-14 - P9 Boolean Port Validation
+
+- NapCat OneBot configuration now rejects JSON booleans wherever an integer
+  port is required, both when repairing the saved config and when reading the
+  endpoint for use. Focused coverage verifies invalid `true` is replaced with
+  an allocated integer port and rejected at the transport boundary.
+- `python -m unittest integrations.qq.test_sender` passed 19 tests. Live
+  NapCat and real-account delivery remain unverified.
+
+## 2026-10-14 - P11 Moments Video Gallery Tiles
+
+- Media-library tiles no longer place playable Moments video URLs in `<img>`;
+  videos without a separate cached poster show the existing video icon. Cached
+  Moments image thumbnails remain unchanged.
+- `node --test webui/test-wecom-resource-render.cjs` passed with synthetic
+  image and video tile assertions. Real media-cache acceptance remains open.
+
+## 2026-10-14 - P14 Package Refresh After Focused Fixes
+
+- Rebuilt the Windows portable package and sanitized source ZIP after the P9
+  and P11 follow-ups. Isolated Hub/UI/MCP startup, source-package smoke, and
+  privacy scans passed. The portable package contains 7,554 files
+  (288,307,456 bytes); the source ZIP is 25,098,410 bytes.
+- The local-worktree package manifest verified both packages against base
+  commit `75fa73185b5b1acf960da35ef331901c3284deef` and run label
+  `local-worktree-final4-20261014`; manifest SHA-256:
+  `BD3C5BBD0F75154BD68E0EF3B104D59A82E59E88FC21F378C53DB25E2C6C6287`.
+  These uncommitted changes still lack a matching hosted artifact round trip.
+
+## 2026-10-14 - P14 Complete QQ Runtime Package
+
+- Built the vendored QCE server with the pinned Rust 1.98.1 GNU toolchain,
+  GCC 16.2.0, loopback-source guards, and the locked Cargo dependency graph.
+  QCE SHA-256: `e471dd4bc3b3fee22c518de122e8144bab734b1693b120f65fda1d61caf3dc89`.
+- Rebuilt a complete Windows portable package containing the verified NapCat
+  6.3.2 shell and QCE server, plus the sanitized 690-file source bundle.
+  Isolated Hub/UI/MCP and source-package smokes passed; package privacy checks
+  passed. The portable tree has 9,783 files (586,737,019 bytes).
+- These package bytes are verified by the local manifest, but the working
+  tree remains uncommitted and has no matching hosted CI/artifact round trip.
+
+## 2026-10-14 - WeChat Cache, Export, Sending, and Notification Follow-up
+
+- WeChat media lookup accepts WeFlow's original, mid, and thumbnail suffix
+  variants and uses `<id>_raw.mp4` when `<id>.mp4` is absent. Synthetic media
+  tests passed without reading a real account cache.
+- ChatLab preserves group type in JSON/JSONL and rejects mixed group/private
+  render or auto-export scopes before a destination file is published. The
+  auto-export path obtains distinct conversation kinds with a bounded SQL
+  snapshot and keeps message output paginated.
+- A send adapter receipt only marks delivery `sent` when it returns a bounded,
+  nonblank string message ID; malformed receipts resolve to `unknown` and are
+  not automatically retried. Focused send service tests passed.
+- Message-event SSE now sends a body-free checkpoint on connect and after
+  filtered batches, preserving the initial cursor across disconnects. Focused
+  SSE regressions passed; event payloads remain conversation metadata only.
+- MCP initialization documents personal WeChat request preparation while
+  retaining local human approval for all delivery. Focused MCP checks passed.
+- No local Hub port was listening during the user's WeChat request. The exact
+  test target and text were not queued or sent, and are intentionally omitted
+  from this public log. Live request preparation still requires the local Hub
+  and enabled, ready WeChat sender; delivery still requires explicit in-UI approval.
+
+## 2026-10-14 - P14 Current-Worktree Package 009
+
+- Rebuilt the Windows portable package and sanitized source bundle from the
+  current worktree. Isolated Hub/UI/MCP startup, standalone MCP stdio, source
+  bundle smoke, and user-path privacy checks passed.
+- The portable package contains 9,783 files (586,786,811 bytes); the 690-file
+  source ZIP is 25,104,236 bytes. Local manifest verification matched both
+  package byte inventories and base commit `75fa73185b5b1acf960da35ef331901c3284deef`.
+  Manifest SHA-256: `423DDC3D91EE319A6E3618DE01BB2859A4753B4C260431EF7D35DC63098034A5`.
+- This is local-worktree provenance; hosted CI/artifact round-trip remains
+  outstanding for these uncommitted changes.
+
+## 2026-10-15 - P9 Indexed QQ Send Target Guard
+
+- QQ send preparation now resolves every target, including numeric UINs and
+  group codes, through the exact account-scoped local conversation index and
+  rejects private/group type mismatches before creating the approval record.
+- `py -3 -m unittest hub.test_server -k send` passed 19 focused HTTP/send
+  tests with synthetic records. No sender adapter delivered a message.
+- MCP QQ preparation now uses the same account-scoped resolver as HTTP. It
+  rejects unindexed, wrong-account and wrong-kind numeric targets before queue
+  creation, keeps indexed UID-to-UIN conversion, and hides the prepare tool if
+  the resolver is unavailable. Three focused MCP send tests passed; no delivery
+  adapter ran.
+- Full `scripts/check-local-hub.ps1` then passed with 811 Python tests, four
+  source-mutation gate checks, 32 WebUI checks, package privacy/determinism and
+  isolated source smoke. The 25,000-message benchmark measured 1.542 s ingest,
+  0.034 s first search, 1.565 s for 50 pages, 0.120 s backup and 0.299 s
+  restore, with zero WAL failures.
+- P11 audit confirmed that full resource-library/decryption parity and live
+  cache coverage remain open. WeFlow image suffix variants with separate
+  priority semantics are not mapped until their meaning is verified.
+
+## 2026-10-15 - P8-P14 Local Gate Follow-up
+
+- The 810-test local gate found one assertion issue in the SSE privacy test:
+  it could select a checkpoint payload instead of the message event payload.
+  The test now reads data from the event block it matched. Both focused SSE
+  regressions pass; the full gate has not been rerun after this test-only fix.
+- `git diff --check` passed. Public docs contain no exact local send target or
+  test text. P14 hosted CI/artifact round-trip and real-client acceptance stay
+  open.
+
+## 2026-10-15 - P14 Current-Worktree Package 010
+
+- Rebuilt the Windows portable package and sanitized source bundle after the
+  indexed QQ target guard and public-document privacy correction. Isolated
+  Hub/UI/MCP startup, standalone MCP stdio, source extraction smoke, user-path
+  privacy scan, and exact-target archive scan passed.
+- Portable package: 9,783 files / 586,784,821 bytes. Sanitized source ZIP:
+  690 files / 25,104,868 bytes. The local-worktree manifest verified both
+  inventories against base commit `75fa73185b5b1acf960da35ef331901c3284deef`;
+  SHA-256: `B08553F2FD41F99E185387D2CD7CA00FCE554134672F8A15770E6B60611E2A74`.
+- These changes remain uncommitted, so hosted CI and uploaded/downloaded
+  artifact verification for the current source state remain outstanding.
+
+## 2026-10-15 - P14 Privacy-Refreshed Package 012
+
+- Removed machine-specific cache sample counts, dates, window measurements and
+  operator anecdotes from the vendored WeChat reader comments while preserving
+  its decryption logic and calibrated click coordinates. Roadmap notes now use
+  generic local acceptance wording and omit the test request details.
+- Rebuilt the portable package with the hash-verified QCE server and rebuilt the
+  source bundle. Isolated executable/UI startup, all three source entries,
+  read-only MCP, standalone MCP initialize/tools/list/exit, and package privacy
+  checks passed.
+- Portable package: 9,783 files. Source ZIP: 690 entries. Local-worktree manifest
+  verification passed for both package
+  inventories and hashes against base commit
+  `75fa73185b5b1acf960da35ef331901c3284deef`.
+- At this checkpoint the Hub was stopped, so the test request was not queued.
+  The later startup and disabled-capability state are recorded below; no message
+  was sent.
+
+## 2026-10-15 - Local Hub Startup and Send-Gate Check
+
+- Started the Hub with the repository launcher on `127.0.0.1:8765`; the UI and
+  source-status API returned successfully, and all three source entries
+  reported connected without errors.
+- `wechat_send` remains disabled in local settings. No approval request was
+  created and no message was delivered. Public documentation omits the exact
+  target and test text.
+- P9/P13 real-delivery acceptance, P11 complete media parity, P12 native and
+  desktop-notification acceptance, and P14 hosted verification for the current
+  uncommitted worktree remain open.
+
+## 2026-10-15 - P11 Unknown WeChat Image Variant Tier
+
+- A review against the pinned WeFlow active image selector found that `_b/.b`,
+  `_w/.w`, and `_c/.c` are not classified there as a thumbnail quality tier.
+  Removed those suffixes from the Hub thumbnail resolver so `best` and explicit
+  `thumb` do not silently treat an unknown cache variant as a thumbnail.
+- Updated synthetic coverage for the known `_t/.t/_thumb` tier and all six
+  unknown B/W/C suffix forms. Focused verification is recorded below.
+- The WeChat send path now refuses duplicate indexed display names and the
+  final approval warning names the unsent-draft clearing behavior. Focused
+  sender/provider/WebUI checks passed; the full local gate passed before these
+  narrow corrections.
+- Post-change verification passed one focused media-resolver test, 45 WeChat
+  sender/provider tests, the WebUI send-review contract, and `git diff --check`.
+- The current-worktree portable package (9,783 files) and sanitized source ZIP
+  (690 entries) were rebuilt. Isolated Hub/UI/MCP startup, standalone MCP
+  protocol, package privacy scans, and `local-worktree` manifest verification
+  passed for both outputs; hosted verification of this uncommitted worktree
+  remains open.
+- Broader WeFlow resource/decryption parity and real-cache acceptance remain
+  open.
+
+## 2026-10-15 - ChatLab Kind Validation and Package Refresh
+
+- ChatLab exports now fail closed when a message has an unknown, null, or empty
+  conversation kind. The store retains null kinds from orphaned message rows,
+  so automated export cannot mistake a non-empty dataset for an empty one.
+  Truly empty ChatLab exports keep their established private default.
+- The WeChat sender now checks indexed display-name uniqueness even when a
+  resolved display name equals the target conversation ID; synthetic coverage
+  passes for this case and existing ambiguous-name cases.
+- Corrected the roadmap's P11 B/W/C suffix description and clarified that
+  disabling a send capability revokes unused approval challenges but does not
+  erase queued requests or cancel delivery already authorized by the user.
+- Focused ChatLab and WeChat sender tests passed. The earlier local gate
+  reported 813 passing Python tests and four passing source-mutation checks;
+  its final combined-script exit was not captured, so this log does not claim a
+  complete gate pass for that run.
+- A fresh Windows portable package and sanitized source archive passed isolated
+  startup, MCP, privacy, and local-worktree manifest checks. Real-platform
+  delivery, complete P11 media parity, P12 desktop/native acceptance, and
+  hosted verification of the current uncommitted tree remain open.
+
+## 2026-10-15 - Live Queue Snapshot and ChatLab Regression
+
+- Confirmed the existing Hub listener returned HTTP 200. A read-only aggregate
+  query was performed; no approval was consumed and no message was sent. The
+  process predates the current source edits, so this is not live verification
+  of the latest code. Queue state is omitted from public project documentation.
+- Re-ran five focused ChatLab export regressions for orphan/null kinds,
+  group preservation, mixed/unsupported kinds, empty export defaults and
+  compact QQ attachment aliases; all five passed.
+- Removed accidental patch-marker characters from the roadmap. The exact
+  target, account, message text, queue counts and request ID are omitted from
+  public docs.
+- Rebuilt both Windows packages from the current worktree: the portable bundle
+  contains 9,783 files and the sanitized source archive contains 690 entries.
+  Isolated Hub/UI/MCP startup, standalone MCP initialize/tools/list/exit,
+  privacy scans and local manifest byte/provenance verification passed.
+- Hosted CI and artifact upload/download verification for these uncommitted
+  changes remain outstanding.

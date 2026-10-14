@@ -24,10 +24,12 @@ from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 try:  # package-relative when imported as hub.test_store
-    from .exports import render_contact_export, render_group_member_export, render_export
+    from .exports import (render_contact_export, render_group_member_export, render_export,
+                          resolve_chatlab_conversation_type, write_export)
     from .store import ChatStore, parse_bound
 except ImportError:  # direct execution from inside the package directory
-    from exports import render_contact_export, render_group_member_export, render_export
+    from exports import (render_contact_export, render_group_member_export, render_export,
+                         resolve_chatlab_conversation_type, write_export)
     from store import ChatStore, parse_bound
 
 CST = timezone(timedelta(hours=8))
@@ -253,6 +255,15 @@ class StoreTestCase(unittest.TestCase):
         self.assertEqual(qq["total"], 1)
         self.assertEqual(wx["items"][0]["text"], "hello from wechat")
         self.assertEqual(qq["items"][0]["text"], "hello from qq")
+
+    def test_chatlab_export_kinds_keep_orphan_null_conversations(self):
+        self.store.ingest("wechat", "acc1", [], [
+            msg("orphan", "missing-conversation", ts(2024, 3, 1, 9), "body")
+        ])
+        kinds = self.store.export_conversation_kinds()
+        self.assertEqual(kinds, [None])
+        with self.assertRaisesRegex(ValueError, "unsupported conversation types"):
+            resolve_chatlab_conversation_type(kinds)
 
     def test_same_id_different_accounts_isolated(self):
         self.store.ingest("wechat", "a1", [conv("c1")], [msg("m1", "c1", ts(2024, 3, 1, 9), "one")])
@@ -1266,6 +1277,7 @@ class ExportTestCase(unittest.TestCase):
                 "media_url": None,
                 "file_name": None,
                 "raw_type": "text",
+                "conversation_kind": "private",
             },
             {
                 "id": "m2",
@@ -1282,6 +1294,7 @@ class ExportTestCase(unittest.TestCase):
                 "media_url": "http://example/1.png",
                 "file_name": "a.png",
                 "raw_type": "image",
+                "conversation_kind": "private",
             },
         ]
 
@@ -1517,6 +1530,44 @@ class ExportTestCase(unittest.TestCase):
         self.assertEqual(records[0]["_type"], "header")
         self.assertEqual([record["_type"] for record in records[1:]], ["member", "member", "message", "message"])
 
+    def test_chatlab_exports_preserve_group_conversation_type(self):
+        group_messages = [dict(self.messages[0], conversation_kind="group")]
+
+        document = json.loads(render_export(group_messages, "chatlab")[0])
+        self.assertEqual(document["meta"]["type"], "group")
+        jsonl = [json.loads(line) for line in render_export(group_messages, "chatlab-jsonl")[0].decode().splitlines()]
+        self.assertEqual(jsonl[0]["meta"]["type"], "group")
+
+        streamed = io.BytesIO()
+        write_export(iter(group_messages), streamed, "chatlab-jsonl", conversation_type="group")
+        self.assertEqual(json.loads(streamed.getvalue().splitlines()[0])["meta"]["type"], "group")
+
+    def test_chatlab_rejects_mixed_group_and_private_conversations(self):
+        mixed_messages = [
+            dict(self.messages[0], conversation_kind="group"),
+            dict(self.messages[1], conversation_kind="private"),
+        ]
+
+        for format in ("chatlab", "chatlab-jsonl"):
+            with self.subTest(format=format), self.assertRaisesRegex(ValueError, "mixed group and private"):
+                render_export(mixed_messages, format)
+
+        with self.assertRaisesRegex(ValueError, "one conversation type"):
+            write_export(iter(mixed_messages), io.BytesIO(), "chatlab-jsonl",
+                         conversation_type="mixed")
+
+    def test_chatlab_rejects_unsupported_conversation_kinds(self):
+        for kind in ("unknown", "moment", "contact", None, ""):
+            message = dict(self.messages[0], conversation_kind=kind)
+            with self.subTest(kind=kind):
+                for format in ("chatlab", "chatlab-jsonl"):
+                    with self.subTest(format=format), self.assertRaisesRegex(
+                            ValueError, "unsupported conversation types"):
+                        render_export([message], format)
+                with self.assertRaisesRegex(ValueError, "unsupported conversation types"):
+                    resolve_chatlab_conversation_type(["group", kind])
+        self.assertEqual(json.loads(render_export([], "chatlab")[0])["meta"]["type"], "private")
+
     def test_exports_preserve_all_attachment_metadata_without_cache_paths_or_urls(self):
         resources = [
             {"fileName": "photo-1.png", "kind": "image", "fileSize": 123,
@@ -1572,6 +1623,19 @@ class ExportTestCase(unittest.TestCase):
             self.assertNotIn(secret, payload.decode("utf-8"))
         jsonl_records = [json.loads(line) for line in render_export([qq], "chatlab-jsonl")[0].decode().splitlines()]
         self.assertEqual(jsonl_records[-1]["resources"], exported[0]["resources"])
+
+    def test_exports_normalize_compact_qq_attachment_aliases(self):
+        message = dict(self.messages[0], platform="qq", extra={
+            "media": [{"n": "compact.png", "k": "image", "sz": 42,
+                       "p": "C:/private/compact.png"}],
+        })
+
+        exported = json.loads(render_export([message], "json")[0])[0]
+
+        self.assertEqual(exported["resources"], [
+            {"name": "compact.png", "type": "image", "size": 42},
+        ])
+        self.assertNotIn("C:/private", json.dumps(exported))
 
     def test_json_export_sanitizes_top_level_attachment_aliases(self):
         message = dict(self.messages[0], attachments=[{

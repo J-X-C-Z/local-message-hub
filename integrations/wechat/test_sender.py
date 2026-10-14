@@ -8,7 +8,8 @@ import tempfile
 import unittest
 import ctypes
 
-from .sender import _INPUT, _Win32, WeChatDeliveryUnknown, WeChatGUISender, WeChatSendError
+from .sender import (MAIN_WINDOW_TITLES, WINDOW_CLASS, _INPUT, _Win32,
+                     WeChatDeliveryUnknown, WeChatGUISender, WeChatSendError)
 
 
 class FakeGrab:
@@ -38,7 +39,7 @@ class FakeWin32:
 
     def main_window(self):
         for handle, _cls, title in self.windows:
-            if title == "Weixin":
+            if _cls == WINDOW_CLASS and title in MAIN_WINDOW_TITLES:
                 return handle
         return None
 
@@ -87,6 +88,9 @@ class FakeReader:
 
     def get_nickname(self, username):
         return self.nickname
+
+    def usernames_for_display_name(self, display_name):
+        return ["wxid_friend001"]
 
 
 class UnconfirmedReader(FakeReader):
@@ -194,6 +198,17 @@ class WeChatSenderTest(unittest.TestCase):
         self.assertFalse(win32.input_desktop_locked())
         self.assertEqual(closed, [4321])
 
+    def test_main_window_accepts_exact_localized_title_and_class(self):
+        win32 = _Win32.__new__(_Win32)
+        win32.enumerate_visible = lambda: [
+            (7, WINDOW_CLASS, "微信"),
+            (8, "OtherWindowClass", "微信"),
+            (9, WINDOW_CLASS, "微信 企业版"),
+        ]
+        win32.size_of = lambda handle: {7: (1024, 768), 8: (1280, 900), 9: (1400, 950)}[handle]
+
+        self.assertEqual(win32.main_window(), 7)
+
     def test_rejects_delivery_when_no_window_proves_the_target(self):
         with self.assertRaises(WeChatSendError) as missing:
             self.sender.deliver(self.request)
@@ -225,6 +240,25 @@ class WeChatSenderTest(unittest.TestCase):
     def test_ambiguous_windows_fail_closed_without_typing(self):
         self.open_chat_window("Synthetic Friend", 9)
         self.open_chat_window("Synthetic Friend", 10)
+        with self.assertRaises(WeChatSendError) as ambiguous:
+            self.sender.deliver(self.request)
+        self.assertEqual(ambiguous.exception.code, "wechat_conversation_ambiguous")
+        self.assertEqual(self.win32.keys, [])
+
+    def test_duplicate_contact_names_fail_closed_without_typing(self):
+        self.open_chat_window()
+        self.reader.usernames_for_display_name = lambda _name: [
+            "wxid_friend001", "wxid_other001"]
+        with self.assertRaises(WeChatSendError) as ambiguous:
+            self.sender.deliver(self.request)
+        self.assertEqual(ambiguous.exception.code, "wechat_conversation_ambiguous")
+        self.assertEqual(self.win32.keys, [])
+
+    def test_duplicate_contact_name_equal_to_target_id_fails_closed(self):
+        self.reader.nickname = "wxid_friend001"
+        self.reader.usernames_for_display_name = lambda _name: [
+            "wxid_friend001", "wxid_other001"]
+        self.open_chat_window("wxid_friend001")
         with self.assertRaises(WeChatSendError) as ambiguous:
             self.sender.deliver(self.request)
         self.assertEqual(ambiguous.exception.code, "wechat_conversation_ambiguous")

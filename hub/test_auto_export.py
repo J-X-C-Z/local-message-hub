@@ -245,6 +245,23 @@ class AutoExportTest(unittest.TestCase):
                         self.assertIn(b"synthetic export record",
                                       archive.read("xl/worksheets/sheet1.xml"))
 
+    def test_chatlab_auto_export_rejects_mixed_conversation_types(self):
+        self.store.ingest("wechat", "synthetic", [
+            {"id": "room", "title": "Fixture", "kind": "private"},
+            {"id": "group-room", "title": "Synthetic group", "kind": "group"},
+        ], [{"id": "group-message", "conversation_id": "group-room", "timestamp": 30,
+             "type": "text", "text": "synthetic group record"}])
+        output_dir = self.root / "mixed-chatlab"
+        self.manager.configure({"format": "chatlab-jsonl", "platform": "wechat",
+                                "output_dir": str(output_dir)})
+
+        self.manager.run_now()
+        self.wait_finished()
+
+        self.assertEqual(self.manager.status()["state"], "failed")
+        self.assertEqual(self.manager.status()["last_error"], "ValueError")
+        self.assertEqual(list(output_dir.iterdir()), [])
+
     def test_cancel_after_temp_file_fsync_leaves_no_partial_or_final_file(self):
         original_fsync = os.fsync
         output_dir = self.root / "cancelled-after-write"

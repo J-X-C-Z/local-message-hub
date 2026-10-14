@@ -173,6 +173,67 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(downloader._image_files("fixture", md5), {})
             self.assertEqual(outside.read_bytes(), b"private synthetic file")
 
+    def test_image_cache_resolver_accepts_weflow_dat_tier_suffixes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            account = root / "account"
+            reader = Mock()
+            reader.account_dir = str(account)
+            downloader = MediaDownloader(reader, save_dir=str(root / "hub-cache"))
+            md5 = "a" * 32
+            image_dir = (account / "msg" / "attach" / downloader._chat_md5("fixture") /
+                         "2026-10" / "Img")
+            image_dir.mkdir(parents=True)
+            variants = {
+                "original": ("_h.dat", ".h.dat", "_hd.dat", ".hd.dat"),
+                "thumb": ("_t.dat", ".t.dat", "_thumb.dat"),
+            }
+            for tier, suffixes in variants.items():
+                for suffix in suffixes:
+                    for candidate in image_dir.glob(f"{md5}*"):
+                        candidate.unlink()
+                    path = image_dir / f"{md5}{suffix}"
+                    path.write_bytes(b"x" * 2048)
+                    self.assertEqual(Path(downloader._image_files("fixture", md5)[tier][0]),
+                                     path.resolve())
+            for candidate in image_dir.glob(f"{md5}*"):
+                candidate.unlink()
+            for tier, suffixes in variants.items():
+                sizes = (2046, 2045, 2048, 2047) if tier == "original" else (100, 102, 101)
+                for suffix, size in zip(suffixes, sizes):
+                    (image_dir / f"{md5}{suffix}").write_bytes(b"x" * size)
+            (image_dir / f"{md5}.dat").write_bytes(b"mid")
+
+            found = downloader._image_files("fixture", md5)
+
+            self.assertEqual(Path(found["original"][0]).name, f"{md5}_hd.dat")
+            self.assertEqual(Path(found["thumb"][0]).name, f"{md5}.t.dat")
+            self.assertEqual(Path(found["mid"][0]).name, f"{md5}.dat")
+
+            reader.get_message_row.return_value = {
+                "local_type": 3, "packed_info": md5.encode("ascii"),
+            }
+            decoded = b"\xff\xd8\xffsynthetic-image\xff\xd9"
+            with patch.object(downloader, "decrypt_image", return_value=decoded) as decrypt:
+                best = downloader.download_image("fixture", 7, tier="best")
+                decrypt.assert_called_with(str((image_dir / f"{md5}_hd.dat").resolve()), None, None)
+                thumb = downloader.download_image("fixture", 7, tier="thumb")
+                decrypt.assert_called_with(str((image_dir / f"{md5}.t.dat").resolve()), None, None)
+            self.assertTrue(best.endswith("fixture_7_h.jpg"))
+            self.assertTrue(thumb.endswith("fixture_7_thumb.jpg"))
+
+            for candidate in image_dir.glob(f"{md5}*"):
+                candidate.unlink()
+            for suffix in ("_b.dat", ".b.dat", "_w.dat", ".w.dat", "_c.dat", ".c.dat"):
+                for candidate in image_dir.glob(f"{md5}*"):
+                    candidate.unlink()
+                (image_dir / f"{md5}{suffix}").write_bytes(b"x" * 2048)
+                self.assertNotIn("thumb", downloader._image_files("fixture", md5))
+                with patch.object(downloader, "decrypt_image") as decrypt:
+                    self.assertIsNone(downloader.download_image("fixture", 7, tier="thumb"))
+                    self.assertIsNone(downloader.download_image("fixture", 7, tier="best"))
+                    decrypt.assert_not_called()
+
     def test_uncached_voice_does_not_attempt_decode(self):
         provider = self.provider({"local_type": 34})
         provider.reader.get_voice_rows.return_value = []
@@ -294,6 +355,26 @@ class MediaTests(unittest.TestCase):
             self.assertTrue(read_sizes)
             self.assertEqual(set(read_sizes), {1024 * 1024})
             self.assertFalse(list(output.glob("*.part")))
+
+    def test_video_resolver_uses_weflow_raw_mp4_fallback(self):
+        message_id = "d" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            account = root / "account"
+            video_dir = account / "msg" / "video" / "2026-10"
+            video_dir.mkdir(parents=True)
+            source = video_dir / f"{message_id}_raw.mp4"
+            payload = b"synthetic-raw-video"
+            source.write_bytes(payload)
+            downloader = self._file_media_downloader(
+                account, root / "hub-cache", {"local_type": 43,
+                    "packed_info": message_id.encode(), "create_time": 1790899200})
+
+            result = downloader.download_video("wxid_fixture", 7)
+
+            self.assertIsNotNone(result)
+            self.assertEqual(Path(result).read_bytes(), payload)
+            self.assertEqual(source.read_bytes(), payload)
 
     def test_cached_attachment_size_limit_preserves_existing_complete_file(self):
         message_id = "b" * 32

@@ -59,6 +59,9 @@ class AnalyticsTestCase(unittest.TestCase):
         }
 
     def test_private_profile_has_message_counts_and_media(self):
+        self.store.ingest("wechat", "acct", [], [
+            self.message("orphan", "missing-room", ts(2024, 1, 2), "unknown scope", "peer", "Peer"),
+        ])
         profiles = self.analytics.private_profiles("wechat", "acct")
         self.assertEqual(len(profiles), 1)
         row = profiles[0].to_dict()
@@ -127,8 +130,8 @@ class AnalyticsTestCase(unittest.TestCase):
             "id": "qq-media-alias-image", "conversation_id": "qq-media-alias",
             "timestamp": ts(2024, 2, 2, 11), "type": "text", "text": "caption",
             "sender_id": "peer", "sender_name": "Peer", "media": [
-                {"name": "photo.png", "type": "image"},
-                {"name": "voice.silk", "type": "audio"},
+                {"name": "photo.png", "kind": "图片"},
+                {"name": "voice.silk", "k": "audio"},
             ],
         }])
 
@@ -185,6 +188,19 @@ class AnalyticsTestCase(unittest.TestCase):
 
         self.assertEqual(group["members"], [])
         self.assertEqual(group["observed_member_count"], 2)
+
+    def test_group_profile_preserves_zero_roster_count_separately_from_observed_senders(self):
+        self.store.ingest("wechat", "fixture", [{
+            "id": "empty-roster-group", "title": "Empty roster", "kind": "group", "member_count": 0,
+        }], [
+            self.message("observed-sender", "empty-roster-group", ts(2024, 6, 5),
+                         "synthetic only", "peer", "Peer"),
+        ])
+
+        group = self.analytics.group_profiles("wechat", "fixture", conversation_id="empty-roster-group")[0]
+
+        self.assertEqual(group["member_count"], 0)
+        self.assertEqual(group["observed_member_count"], 1)
 
     def test_annual_report_uses_inclusive_cst_calendar_year(self):
         report = self.analytics.annual_report(2024, "wechat", "acct", "dm").to_dict()

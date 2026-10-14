@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import sys
 import threading
 import time
@@ -50,6 +51,28 @@ NATIVE_PLATFORMS = ('wechat', 'wecom', 'qq')
 MOMENT_MEDIA_TOKEN_TTL_SECONDS = 15 * 60
 MEDIA_TOKEN_LIMIT = 4096
 MAX_SYNC_CONVERSATION_ID_LENGTH = 512
+MCP_MEDIA_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _read_cached_snapshot(path, limit, limit_error='附件超过 MCP 单次读取的 8 MiB 限制'):
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError('本机缓存内容不是普通文件')
+    signature = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    if before.st_size > limit:
+        raise ValueError(limit_error)
+    with path.open('rb') as source:
+        opened = os.fstat(source.fileno())
+        if signature(opened) != signature(before):
+            raise ValueError('本机缓存内容在读取前发生变化')
+        payload = source.read(limit + 1)
+        if signature(os.fstat(source.fileno())) != signature(opened):
+            raise ValueError('本机缓存内容在读取过程中发生变化')
+    if len(payload) > limit:
+        raise ValueError(limit_error)
+    if len(payload) != opened.st_size:
+        raise ValueError('本机缓存内容在读取过程中发生变化')
+    return payload
 
 
 class QQConversationNotFound(ValueError):
@@ -890,7 +913,7 @@ class Hub:
                         raw_type = int(row.get('local_type') or 1) & 0xffffffff
                         source_id = source_message_id(row.get('server_id'))
                         kind, body, filename = message_body(row.get('content'), raw_type)
-                        emoji_md5 = message_emoji_md5(row.get('content')) if raw_type == 47 else None
+                        emoji_md5 = message_emoji_md5(row.get('content')) if raw_type in (47, 11000) else None
                         location = message_location(row.get('content')) if raw_type == 48 else None
                         quote = message_quote(row.get('content'), raw_type)
                         messages.append({**row, 'conversation_id': cid, 'type': kind, 'text': body,
@@ -934,7 +957,7 @@ class Hub:
                     raw_type = int(row.get('local_type') or 1) & 0xffffffff
                     source_id = source_message_id(row.get('server_id'))
                     kind, body, filename = message_body(row.get('content'), raw_type)
-                    emoji_md5 = message_emoji_md5(row.get('content')) if raw_type == 47 else None
+                    emoji_md5 = message_emoji_md5(row.get('content')) if raw_type in (47, 11000) else None
                     location = message_location(row.get('content')) if raw_type == 48 else None
                     quote = message_quote(row.get('content'), raw_type)
                     messages.append({**row, 'conversation_id': cid, 'type': kind, 'text': body,
@@ -1042,11 +1065,18 @@ class Hub:
         platform = 'qq'
         account_id = str(account_id or '')
         conversation_id = str(conversation_id or '')
-        if is_uin(conversation_id):
-            return {'conversation_id': conversation_id}
+        if conversation_type not in ('private', 'group'):
+            raise ValueError('QQ 会话类型无效')
         row = self.store.get_conversation(platform, account_id, conversation_id)
         if row is None or row.get('platform') != platform:
             raise ValueError('该 QQ 会话不在本机索引中，请先同步后再试')
+        indexed_kind = row.get('kind')
+        indexed_type = 'group' if indexed_kind == 'group' else (
+            'private' if indexed_kind in ('private', 'direct') else None)
+        if indexed_type != conversation_type:
+            raise ValueError('QQ 会话类型与本机索引不匹配')
+        if is_uin(conversation_id):
+            return {'conversation_id': conversation_id}
         extra = row.get('extra') if isinstance(row.get('extra'), dict) else {}
         # Prefer the uin the online sync recorded; fall back to the local
         # reader's own uid mapping for conversations synced from the database.
@@ -1607,6 +1637,8 @@ class Hub:
                                           params.get('resource_index') is not None):
             raise ValueError('视频预览选项仅适用于微信聊天视频')
         resource_index = params.get('resource_index')
+        if platform in ('qq', 'wecom') and isinstance(resource_index, bool):
+            raise ValueError('附件序号无效')
         qq_local = platform == 'qq' and row.get('local_database') is True
         if platform == 'qq' and resource_index is not None and not qq_local:
             try:
@@ -2014,12 +2046,7 @@ class Hub:
                            self.storage / 'integrations' / 'qq-local' / 'media']
         if not any(path.is_relative_to(root.resolve()) for root in cache_roots):
             raise ValueError('图片不在本机缓存目录中')
-        if path.stat().st_size > 8 * 1024 * 1024:
-            raise ValueError('附件超过 MCP 单次读取的 8 MiB 限制')
-        with path.open('rb') as source:
-            payload = source.read(8 * 1024 * 1024 + 1)
-        if len(payload) > 8 * 1024 * 1024:
-            raise ValueError('附件超过 MCP 单次读取的 8 MiB 限制')
+        payload = _read_cached_snapshot(path, MCP_MEDIA_MAX_BYTES)
         signatures = {
             'image/jpeg': payload.startswith(b'\xff\xd8\xff'),
             'image/png': payload.startswith(b'\x89PNG\r\n\x1a\n'),
@@ -2254,13 +2281,10 @@ class Hub:
             if (Path(path).is_symlink() or not resolved.is_file() or
                     not resolved.is_relative_to(resolved_root)):
                 raise ValueError('朋友圈图片缓存引用无效')
-            size = resolved.stat().st_size
-            if size <= 0 or size > 8 * 1024 * 1024:
+            if resolved.stat().st_size <= 0:
                 raise ValueError('朋友圈媒体超过 MCP 返回大小限制（8 MiB）')
-            with resolved.open('rb') as source:
-                payload = source.read(8 * 1024 * 1024 + 1)
-            if len(payload) > 8 * 1024 * 1024:
-                raise ValueError('朋友圈媒体超过 MCP 返回大小限制（8 MiB）')
+            payload = _read_cached_snapshot(
+                resolved, MCP_MEDIA_MAX_BYTES, '朋友圈媒体超过 MCP 返回大小限制（8 MiB）')
         except (OSError, RuntimeError) as exc:
             raise ValueError('朋友圈图片缓存不可用') from exc
         signatures = {
@@ -2537,13 +2561,14 @@ class Handler(BaseHTTPRequestHandler):
             self.json({'error': '本机服务处理失败，请检查数据源状态'}, 500)
 
     def message_events(self):
+        last_event_id = self.headers.get('Last-Event-ID')
         try:
-            cursor = int(self.headers.get('Last-Event-ID', '0') or 0)
+            cursor = int(last_event_id) if last_event_id is not None else None
         except ValueError:
             self.json({'error': '事件游标无效'}, 400)
             return
         high_water = self.hub.store.message_rowid()
-        if cursor < 1 or cursor > high_water:
+        if cursor is None or cursor < 0 or cursor > high_water:
             cursor = high_water
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
@@ -2553,7 +2578,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'keep-alive')
         self.end_headers()
         try:
-            self.wfile.write(b'retry: 2000\n\n')
+            self.wfile.write(
+                f'retry: 2000\nid: {cursor}\nevent: checkpoint\ndata: {{}}\n\n'.encode('ascii'))
             self.wfile.flush()
             while not self.hub.stop.is_set():
                 if not self.hub.capability_enabled('notifications'):
@@ -2579,12 +2605,13 @@ class Handler(BaseHTTPRequestHandler):
                             (allowlist_only and identity not in allowed)):
                         continue
                     payload = {key: row[key] for key in (
-                        'event_id', 'platform', 'account_id', 'conversation_id',
-                        'conversation_title', 'conversation_kind', 'sender_name',
-                        'timestamp', 'type')}
+                        'platform', 'account_id', 'conversation_id',
+                        'conversation_title', 'conversation_kind')}
                     data = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
                     self.wfile.write(f"id: {row['event_id']}\nevent: message\ndata: {data}\n\n".encode('utf-8'))
                 if rows:
+                    self.wfile.write(
+                        f'id: {cursor}\nevent: checkpoint\ndata: {{}}\n\n'.encode('ascii'))
                     self.wfile.flush()
                 else:
                     self.wfile.write(b': keep-alive\n\n')
@@ -2732,6 +2759,8 @@ class Handler(BaseHTTPRequestHandler):
                     and isinstance(wecom_bot_identity.get('bot_id'), str)):
                 tools += ('prepare_wecom_bot_send', 'get_wecom_bot_send_status')
             tool_capabilities = {
+                'search_messages': 'search',
+                'list_sources': 'stats',
                 'search_moments': 'moments',
                 'get_moment_media': 'moments',
                 'list_conversations': 'chat', 'list_messages': 'chat', 'get_message_context': 'chat',
@@ -3680,6 +3709,8 @@ class Handler(BaseHTTPRequestHandler):
             return 'notifications'
         if path in ('/api/avatar', '/api/contacts'):
             return 'contacts'
+        if path == '/api/search':
+            return 'search'
         if path in ('/api/conversations', '/api/messages', '/api/context',
                     '/api/quoted-message', '/api/conversation-members'):
             return 'chat'

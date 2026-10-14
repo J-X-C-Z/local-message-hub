@@ -197,7 +197,7 @@ class MCPServerTest(unittest.TestCase):
         self.assertEqual(chats["items"][0]["id"], "room")
         store.close()
 
-    def test_chat_capability_gates_search_tool_and_direct_call(self):
+    def test_core_search_remains_available_when_chat_capability_is_disabled(self):
         store = ChatStore(":memory:")
         store.ingest("wechat", "account", [{"id": "room", "title": "Room"}], [
             {"id": "message", "conversation_id": "room", "timestamp": 1, "text": "private"},
@@ -207,11 +207,12 @@ class MCPServerTest(unittest.TestCase):
 
         tools = server.handle({"jsonrpc": "2.0", "id": 1,
             "method": "tools/list"})["result"]["tools"]
-        self.assertNotIn("search_messages", {tool["name"] for tool in tools})
-        denied = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        self.assertIn("search_messages", {tool["name"] for tool in tools})
+        self.assertNotIn("list_conversations", {tool["name"] for tool in tools})
+        result = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "search_messages", "arguments": {"query": "private"}}})["result"]
-        self.assertTrue(denied["isError"])
-        self.assertNotIn("private", denied["content"][0]["text"])
+        self.assertFalse(result["isError"])
+        self.assertIn("private", json.dumps(result))
         store.close()
 
     def test_wechat_quote_context_resolves_only_from_exact_indexed_reference(self):
@@ -683,10 +684,9 @@ class MCPServerTest(unittest.TestCase):
         store.close()
 
     def test_qq_send_mcp_only_prepares_pending_request_and_reads_status(self):
-        from hub.sending import SendRepository, SendService
+        from hub.server import Hub
 
         with tempfile.TemporaryDirectory() as storage:
-            store = ChatStore(f"{storage}/hub.sqlite3")
             deliveries = []
 
             class Adapter:
@@ -694,36 +694,65 @@ class MCPServerTest(unittest.TestCase):
                     deliveries.append(request)
                     return {"message_id": "should-not-run"}
 
-            service = SendService(SendRepository(f"{storage}/hub.sqlite3"), Adapter())
-            server = MCPServer(store, send_service=service, capabilities={"qq_send": True})
-            tools = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
-            names = {tool["name"] for tool in tools}
-            self.assertIn("prepare_qq_send", names)
-            self.assertIn("get_qq_send_status", names)
-            self.assertFalse(names & {"approve_qq_send", "send_qq_message", "deliver_qq_send"})
-            prepare_schema = next(tool["inputSchema"] for tool in tools
-                                  if tool["name"] == "prepare_qq_send")
-            self.assertIn("request_id", prepare_schema["required"])
+            hub = Hub(storage, resume_imports=False, send_adapter=Adapter())
+            try:
+                hub.store.ingest("qq", "12345678", [
+                    {"id": "87654321", "title": "Synthetic peer", "kind": "private"},
+                    {"id": "group-123", "title": "Synthetic group", "kind": "group"},
+                    {"id": "u_synthetic_peer", "title": "Synthetic local peer", "kind": "private",
+                     "raw": {"peerUin": "12345001"}},
+                ], [])
+                server = MCPServer(
+                    hub.store, send_service=hub.send_service, capabilities={"qq_send": True},
+                    qq_send_target_resolver=hub.resolve_qq_send_target)
+                tools = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
+                names = {tool["name"] for tool in tools}
+                self.assertIn("prepare_qq_send", names)
+                self.assertIn("get_qq_send_status", names)
+                self.assertFalse(names & {"approve_qq_send", "send_qq_message", "deliver_qq_send"})
+                prepare_schema = next(tool["inputSchema"] for tool in tools
+                                      if tool["name"] == "prepare_qq_send")
+                self.assertIn("request_id", prepare_schema["required"])
 
-            prepared = server.call_tool("prepare_qq_send", {
-                "account_id": "12345678", "conversation_type": "private",
-                "conversation_id": "87654321", "text": "synthetic test", "request_id": "test_send_01",
-            })
-            self.assertEqual(prepared["status"], "pending_approval")
-            self.assertTrue(prepared["created"])
-            self.assertEqual(deliveries, [])
-            status = server.call_tool("get_qq_send_status", {"request_id": "test_send_01"})
-            self.assertEqual(status["status"], "pending_approval")
-            self.assertEqual([event["action"] for event in status["audit"]], ["prepared"])
-            with self.assertRaisesRegex(ValueError, "Unknown tool"):
-                server.call_tool("approve_qq_send", {"request_id": "test_send_01"})
-            with self.assertRaisesRegex(ValueError, "Missing required tool argument"):
-                server.call_tool("prepare_qq_send", {
+                invalid_targets = (
+                    {"account_id": "12345678", "conversation_type": "private",
+                     "conversation_id": "87654322", "request_id": "missing_send_01"},
+                    {"account_id": "12345679", "conversation_type": "private",
+                     "conversation_id": "87654321", "request_id": "wrongacct_send_01"},
+                    {"account_id": "12345678", "conversation_type": "group",
+                     "conversation_id": "87654321", "request_id": "wrongtype_send_01"},
+                )
+                for target in invalid_targets:
+                    with self.subTest(target=target), self.assertRaises(ValueError):
+                        server.call_tool("prepare_qq_send", {
+                            **target, "text": "synthetic test"})
+                    self.assertIsNone(hub.send_repository.get(target["request_id"]))
+
+                prepared = server.call_tool("prepare_qq_send", {
                     "account_id": "12345678", "conversation_type": "private",
-                    "conversation_id": "87654321", "text": "retry-safe test",
+                    "conversation_id": "87654321", "text": "synthetic test", "request_id": "test_send_01",
                 })
-            service.repository.close()
-            store.close()
+                self.assertEqual(prepared["status"], "pending_approval")
+                self.assertTrue(prepared["created"])
+                self.assertEqual(deliveries, [])
+                mapped = server.call_tool("prepare_qq_send", {
+                    "account_id": "12345678", "conversation_type": "private",
+                    "conversation_id": "u_synthetic_peer", "text": "synthetic UID target",
+                    "request_id": "mapped_send_01"})
+                self.assertEqual(mapped["conversation_id"], "12345001")
+                self.assertEqual(mapped["source_conversation_id"], "u_synthetic_peer")
+                status = server.call_tool("get_qq_send_status", {"request_id": "test_send_01"})
+                self.assertEqual(status["status"], "pending_approval")
+                self.assertEqual([event["action"] for event in status["audit"]], ["prepared"])
+                with self.assertRaisesRegex(ValueError, "Unknown tool"):
+                    server.call_tool("approve_qq_send", {"request_id": "test_send_01"})
+                with self.assertRaisesRegex(ValueError, "Missing required tool argument"):
+                    server.call_tool("prepare_qq_send", {
+                        "account_id": "12345678", "conversation_type": "private",
+                        "conversation_id": "87654321", "text": "retry-safe test",
+                    })
+            finally:
+                hub.close()
 
     def test_wecom_bot_mcp_only_prepares_matching_bot_request_and_reads_status(self):
         from hub.sending import SendRepository, SendService
@@ -910,6 +939,23 @@ class MCPServerTest(unittest.TestCase):
             service.repository.close()
             store.close()
 
+    def test_qq_send_prepare_is_hidden_without_local_target_resolver(self):
+        from hub.sending import SendRepository, SendService
+
+        with tempfile.TemporaryDirectory() as storage:
+            store = ChatStore(f"{storage}/hub.sqlite3")
+            service = SendService(SendRepository(f"{storage}/hub.sqlite3"), object())
+            server = MCPServer(store, send_service=service, capabilities={"qq_send": True})
+            self.assertNotIn("prepare_qq_send", {tool["name"] for tool in server.tools()})
+            with self.assertRaisesRegex(ValueError, "QQ 本机目标校验暂不可用"):
+                server.call_tool("prepare_qq_send", {
+                    "account_id": "12345678", "conversation_type": "private",
+                    "conversation_id": "87654321", "text": "synthetic",
+                    "request_id": "no_resolver_01"})
+            self.assertIsNone(service.repository.get("no_resolver_01"))
+            service.repository.close()
+            store.close()
+
     def test_qq_send_mcp_validates_text_type_and_ids(self):
         from hub.sending import SendRepository, SendService
 
@@ -932,7 +978,7 @@ class MCPServerTest(unittest.TestCase):
             service.repository.close()
             store.close()
 
-    def test_disabled_mcp_module_is_hidden_and_direct_calls_are_denied_without_data_changes(self):
+    def test_disabled_mcp_modules_are_hidden_and_direct_calls_are_denied_without_data_changes(self):
         with tempfile.TemporaryDirectory() as storage:
             store = ChatStore(f"{storage}/hub.sqlite3")
             store.ingest("wechat", "account", [{"id": "room", "title": "Room"}], [{
@@ -942,12 +988,15 @@ class MCPServerTest(unittest.TestCase):
             server = MCPServer(store, allow_writes=True,
                                capabilities={"media": False, "chat": False, "organization": False})
             names = {tool["name"] for tool in server.tools()}
-            self.assertNotIn("search_messages", names)
+            self.assertIn("search_messages", names)
+            self.assertNotIn("list_conversations", names)
             self.assertNotIn("get_message", names)
             self.assertNotIn("list_media", names)
             self.assertNotIn("update_conversation_metadata", names)
+            self.assertEqual(server.call_tool("search_messages", {"query": "photo"})["items"][0]["text"],
+                             "photo marker")
             with self.assertRaisesRegex(ValueError, "已在设置中关闭"):
-                server.call_tool("search_messages", {"query": "photo"})
+                server.call_tool("list_conversations", {"platform": "wechat"})
             with self.assertRaisesRegex(ValueError, "已在设置中关闭"):
                 server.call_tool("get_message", {"platform": "wechat", "account_id": "account",
                                                   "message_id": "message"})
@@ -1202,6 +1251,8 @@ class MCPServerTest(unittest.TestCase):
             initialized = mcp.handle({"jsonrpc": "2.0", "id": 8, "method": "initialize", "params": {}})["result"]
             self.assertIn("resources", initialized["capabilities"])
             self.assertIn("prompts", initialized["capabilities"])
+            self.assertIn("personal WeChat", initialized["instructions"])
+            self.assertIn("MCP cannot approve or deliver", initialized["instructions"])
             self.assertEqual(len(mcp.handle({"jsonrpc": "2.0", "id": 7, "method": "resources/list"})["result"]["resources"]), 1)
             self.assertEqual(len(mcp.handle({"jsonrpc": "2.0", "id": 6, "method": "prompts/list"})["result"]["prompts"]), 2)
             retrieved = mcp.handle({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {

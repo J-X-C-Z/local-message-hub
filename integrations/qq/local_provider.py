@@ -111,6 +111,28 @@ def _find(fields, wanted, depth=0):
     return None
 
 
+def _media_entry(detail, kind, name_field=45402):
+    name = _text(_find(detail, name_field))
+    digest = None
+    for number in (45424, 45406, 45407, 45408):
+        candidate = _find(detail, number)
+        if isinstance(candidate, bytes):
+            candidate = candidate.hex() if len(candidate) == 16 else _text(candidate)
+        if isinstance(candidate, str) and re.fullmatch(r'[a-fA-F0-9]{32}', candidate):
+            digest = candidate.lower()
+            break
+    media_type = {2: 'image', 3: 'file', 4: 'voice', 5: 'video'}[kind]
+    item = {'kind': media_type, 'type': media_type, 'file_name': name, 'name': name}
+    for field, label in ((45405, 'size'), (45411, 'width'), (45412, 'height'),
+                         (45906 if kind == 4 else 45410, 'duration')):
+        value = _find(detail, field)
+        if type(value) is int and 0 <= value <= 2**63 - 1:
+            item[label] = value
+    if digest:
+        item['md5'] = digest
+    return item
+
+
 def _decode(blob):
     if not isinstance(blob, bytes):
         return [], []
@@ -127,44 +149,37 @@ def _decode(blob):
             if kind == 1 or (kind is None and text):
                 rich.append({'type': 'text', 'data': {'text': text}})
             elif kind in (2, 3, 4, 5):
-                name = _text(_find(detail, 45402))
-                digest = None
-                for number in (45424, 45406, 45407, 45408):
-                    candidate = _find(detail, number)
-                    if isinstance(candidate, bytes):
-                        candidate = candidate.hex() if len(candidate) == 16 else _text(candidate)
-                    if isinstance(candidate, str) and re.fullmatch(r'[a-fA-F0-9]{32}', candidate):
-                        digest = candidate.lower()
-                        break
-                media_type = {2: 'image', 3: 'file', 4: 'voice', 5: 'video'}[kind]
-                item = {'kind': media_type, 'type': media_type, 'file_name': name, 'name': name}
-                for field, label in ((45405, 'size'), (45411, 'width'), (45412, 'height'),
-                                     (45906 if kind == 4 else 45410, 'duration')):
-                    value = _find(detail, field)
-                    if type(value) is int and 0 <= value <= 2**63 - 1:
-                        item[label] = value
-                if isinstance(digest, str) and re.fullmatch(r'[a-fA-F0-9]{32}', digest):
-                    item['md5'] = digest.lower()
-                media.append(item)
+                media.append(_media_entry(detail, kind))
                 transcript = _text(_find(detail, 45923)) if kind == 4 else ''
                 if transcript:
                     rich.append({'type': 'text', 'data': {'text': transcript}})
             elif kind == 7:
                 quoted = [value for number, wire, value in detail if number == 47423 and wire == 2]
-                parts = []
+                parts, resources = [], []
                 for value in quoted[:50]:
                     quote_fields = _fields(value)
                     quote_text = _text(_find(quote_fields, 45101))
                     quote_kind = _find(quote_fields, 45002)
                     parts.append(quote_text or {2: '[图片]', 3: '[文件]', 4: '[语音]', 5: '[视频]'}.get(quote_kind, ''))
+                    if quote_kind in (2, 3, 4, 5) and len(media) < 101:
+                        entry = _media_entry(quote_fields, quote_kind)
+                        entry['quoted'] = True
+                        media.append(entry)
+                        resources.append({'resource_index': len(media) - 1,
+                                          'type': entry['type'], 'name': entry['file_name'],
+                                          'size': entry.get('size')})
                 text = ''.join(parts) or _text(_find(detail, 47413))
-                rich.append({'type': 'reply', 'data': {'content': text[:4096],
-                    'senderUid': _text(_find(detail, 40020)),
-                    'messageId': _text(_find(detail, 47416) or _find(detail, 47401))}})
+                reply = {'content': text[:4096], 'senderUid': _text(_find(detail, 40020)),
+                         'messageId': _text(_find(detail, 47416) or _find(detail, 47401))}
+                if resources:
+                    reply['resources'] = resources
+                rich.append({'type': 'reply', 'data': reply})
             elif kind == 6:
                 rich.append({'type': 'face', 'data': {'name': _text(_find(detail, 47602)) or '[表情]'}})
             elif kind == 11:
-                rich.append({'type': 'face', 'data': {'name': _text(_find(detail, 80900)) or '[商城表情]'}})
+                name = _text(_find(detail, 80900)) or '[商城表情]'
+                media.append(_media_entry(detail, 2, 80900))
+                rich.append({'type': 'market_face', 'data': {'name': name}})
             elif kind == 10:
                 card = _text(_find(detail, 47901))[:65536]
                 rich.append({'type': 'json', 'data': {'text': card or '[卡片]'}})

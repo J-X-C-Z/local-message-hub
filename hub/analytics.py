@@ -22,7 +22,9 @@ def _has_attachment_type(alias, kinds):
         ELSE '[]' END ELSE '[]' END"""
     return f"""({alias}.platform IN ('wecom','qq') AND EXISTS (
         SELECT 1 FROM json_each({attachments}) AS resource
-        WHERE lower(COALESCE(json_extract(resource.value,'$.type'),'file')) IN ({values})
+        WHERE lower(COALESCE(NULLIF(json_extract(resource.value,'$.type'),''),
+                             NULLIF(json_extract(resource.value,'$.kind'),''),
+                             json_extract(resource.value,'$.k'),'file')) IN ({values})
     ))"""
 
 
@@ -223,8 +225,8 @@ class AnalyticsService:
                 FROM messages m LEFT JOIN conversations c
                   ON c.platform=m.platform AND c.account_id=m.account_id AND c.id=m.conversation_id
                 WHERE {scope}{bounds}
+                  AND LOWER(COALESCE(c.kind, '')) IN ({','.join('?' for _ in self.PRIVATE_CONVERSATION_KINDS)})
                 GROUP BY m.platform,m.account_id,m.conversation_id
-                HAVING LOWER(COALESCE(c.kind, 'private')) IN ({','.join('?' for _ in self.PRIVATE_CONVERSATION_KINDS)})
                 ORDER BY message_count DESC, last_timestamp DESC, title COLLATE NOCASE
                 LIMIT ? OFFSET ?
                 """, params + list(self.PRIVATE_CONVERSATION_KINDS) + [limit, offset]
@@ -321,7 +323,8 @@ class AnalyticsService:
                     "received_count": int(group["message_count"] - (group["sent_count"] or 0)),
                     "sent_ratio": round((group["sent_count"] or 0) / group["message_count"], 6),
                     "first_timestamp": group["first_timestamp"], "last_timestamp": group["last_timestamp"],
-                    "member_count": int(group["roster_member_count"] or observed_member_count),
+                    "member_count": int(group["roster_member_count"] if group["roster_member_count"] is not None
+                                         else observed_member_count),
                     "observed_member_count": observed_member_count,
                     "members": members,
                 })

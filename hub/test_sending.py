@@ -125,6 +125,22 @@ class SendServiceTest(unittest.TestCase):
         self.assertEqual(again["status"], "unknown")
         self.assertEqual(self.adapter.calls, 1)
 
+    def test_malformed_receipt_ids_are_unknown_and_are_not_retried(self):
+        for index, message_id in enumerate((True, 123, {}, ["id"], "", " ", "x" * 201)):
+            with self.subTest(message_id=type(message_id).__name__):
+                adapter = FakeAdapter({"message_id": message_id})
+                service = SendService(self.repository, adapter)
+                request_id = f"bad-receipt-{index:02d}"
+                prepared = service.prepare({**self.payload, "request_id": request_id})
+
+                result = service.approve_and_deliver(prepared["request_id"])
+                again = service.approve_and_deliver(prepared["request_id"])
+
+                self.assertEqual(result["status"], "unknown")
+                self.assertEqual(result["error_code"], "invalid_receipt")
+                self.assertEqual(again["status"], "unknown")
+                self.assertEqual(adapter.calls, 1)
+
     def test_validation_rejects_non_qq_targets_and_non_text_payloads(self):
         with self.assertRaisesRegex(ValueError, "request_id 格式无效"):
             self.service.prepare({key: value for key, value in self.payload.items() if key != "request_id"})

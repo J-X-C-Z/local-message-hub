@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from .provider import WeChatProvider, avatar_database_status
+from .vendor.db import WeChatDB
 
 
 class WeChatContactTests(unittest.TestCase):
@@ -43,6 +44,21 @@ class WeChatContactTests(unittest.TestCase):
              "nickname": "Two", "alias": "", "kind": "contact",
              "avatar_url": "https://wx.qlogo.cn/mmhead/two"},
         ])
+
+    def test_exact_display_name_lookup_returns_all_matching_local_contacts(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE contact (username TEXT, nick_name TEXT, remark TEXT)")
+        conn.executemany("INSERT INTO contact VALUES (?, ?, ?)", [
+            ("wxid-one", "Friend", "Shared"),
+            ("wxid-two", "Shared", ""),
+            ("wxid-three", "Other", ""),
+        ])
+        conn.commit()
+        reader = WeChatDB.__new__(WeChatDB)
+        reader._contact_conn = lambda: conn
+
+        self.assertEqual(reader.usernames_for_display_name("Shared"), ["wxid-one", "wxid-two"])
 
     def test_contacts_ignore_unknown_or_unsafe_avatar_fields(self):
         with tempfile.TemporaryDirectory() as directory:

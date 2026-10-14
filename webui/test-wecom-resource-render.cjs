@@ -17,7 +17,7 @@ const context = {
   matchMedia: () => ({addEventListener: () => {}}),
 };
 vm.runInNewContext(source.replace(initCall,
-  '\nglobalThis.__mediaEntries = mediaEntries; globalThis.__resourceExportItems = resourceExportItems; globalThis.__renderMessage = renderMessage; globalThis.__renderResourceToolbar = renderResourceToolbar; globalThis.__state = state; globalThis.__mediaEntryKey = mediaEntryKey; globalThis.__mediaEntryAvailable = mediaEntryAvailable; globalThis.__renderListing = renderListing; globalThis.__previewMedia = previewMedia;\n'), context);
+  '\nglobalThis.__mediaEntries = mediaEntries; globalThis.__resourceExportItems = resourceExportItems; globalThis.__renderMediaTile = renderMediaTile; globalThis.__renderMessage = renderMessage; globalThis.__renderResourceToolbar = renderResourceToolbar; globalThis.__state = state; globalThis.__mediaEntryKey = mediaEntryKey; globalThis.__mediaEntryAvailable = mediaEntryAvailable; globalThis.__renderListing = renderListing; globalThis.__previewMedia = previewMedia;\n'), context);
 
 const wecomMessage = {
   platform: 'wecom', account_id: 'fixture-account', id: 'fixture-message',
@@ -157,6 +157,8 @@ context.__state.items = [{resource_kind: 'moment', platform: 'wechat', account_i
 const momentEntries = context.__mediaEntries();
 assert.equal(momentEntries.length, 1);
 assert.equal(context.__mediaEntryAvailable(momentEntries[0]), true);
+assert.match(context.__renderMediaTile(momentEntries[0], 0), /<img src="\/local-moment-media\/abcdefghijklmnopqrstuvwx12345678"/,
+  'cached Moments images render their local media token as an image');
 assert.deepEqual(JSON.parse(JSON.stringify(context.__resourceExportItems(momentEntries))), [{
   resource_kind: 'moment', platform: 'wechat', account_id: 'fixture-account',
   post_id: 'post-1', media_index: 0, variant: 'original',
@@ -164,6 +166,16 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.__resourceExportItems(momentE
 assert.match(context.__mediaEntryKey(momentEntries[0]), /moment/);
 context.__state.items[0].media_entry.resource.media_url = null;
 assert.equal(context.__mediaEntryAvailable(context.__mediaEntries()[0]), false);
+
+context.__state.items = [{resource_kind: 'moment', platform: 'wechat', account_id: 'fixture-account',
+  id: 'post-video', post_id: 'post-video', media_index: 0, variant: 'video', timestamp: 100,
+  media_entry: {resource_kind: 'moment', post_id: 'post-video', media_index: 0, variant: 'video',
+    resource: {name: 'moment.mp4', media_url: '/local-moment-media/video-token'}, type: 'video'}}];
+const momentVideoTile = context.__renderMediaTile(context.__mediaEntries()[0], 0);
+assert.doesNotMatch(momentVideoTile, /<img[^>]+video-token/,
+  'playable Moments video URLs are never rendered as image thumbnails');
+assert.match(momentVideoTile, /data-lucide="video"/,
+  'Moments videos without a poster render the video placeholder icon');
 
 context.__state.items = [{platform: 'qq', account_id: 'qq-account', id: 'opaque-resource-id',
   conversation_id: 'qq-cache-gallery', conversation_title: 'QQ 缓存资源库', type: 'image',

@@ -61,7 +61,7 @@ def ensure_local_http_server(config_path):
     else:
         server.update({"enable": True, "host": "127.0.0.1", "enableCors": False,
                        "enableWebsocket": False, "messagePostFormat": "array", "debug": False})
-        if not isinstance(server.get("port"), int) or not 1 <= server["port"] <= 65535:
+        if type(server.get("port")) is not int or not 1 <= server["port"] <= 65535:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 server["port"] = sock.getsockname()[1]
@@ -117,9 +117,10 @@ class NapCatOneBotSender:
             raise QQDeliveryUnknown("onebot_invalid_response") from None
         if not isinstance(payload, dict):
             raise QQDeliveryUnknown("onebot_invalid_response")
-        if payload.get("status") == "failed" and isinstance(payload.get("retcode"), int) and payload["retcode"] != 0:
+        retcode = payload.get("retcode")
+        if payload.get("status") == "failed" and type(retcode) is int and retcode != 0:
             raise QQSendError("onebot_rejected")
-        if payload.get("status") != "ok" or payload.get("retcode") != 0:
+        if payload.get("status") != "ok" or type(retcode) is not int or retcode != 0:
             raise QQDeliveryUnknown("onebot_invalid_receipt")
         data = payload.get("data")
         message_id = data.get("message_id") if isinstance(data, dict) else None
@@ -163,7 +164,8 @@ class NapCatOneBotSender:
             result["endpoint_reachable"] = True
             result["state"] = "invalid_response"
             return result
-        if not isinstance(payload, dict) or payload.get("status") != "ok" or payload.get("retcode") != 0:
+        if (not isinstance(payload, dict) or payload.get("status") != "ok" or
+                type(payload.get("retcode")) is not int or payload["retcode"] != 0):
             result["state"] = "api_unavailable"
             return result
         data = payload.get("data")
@@ -191,7 +193,7 @@ class NapCatOneBotSender:
         except (OSError, ValueError, KeyError, TypeError, StopIteration):
             raise QQSendError("onebot_config_unavailable") from None
         host, port, token = server.get("host"), server.get("port"), server.get("token")
-        if (host != "127.0.0.1" or not isinstance(port, int) or not 1 <= port <= 65535 or
+        if (host != "127.0.0.1" or type(port) is not int or not 1 <= port <= 65535 or
                 not isinstance(token, str) or len(token) < 32 or server.get("enable") is not True):
             raise QQSendError("onebot_endpoint_invalid")
         return {"host": host, "port": port, "token": token}

@@ -10,7 +10,7 @@ import threading
 import tempfile
 import time
 
-from .exports import write_export
+from .exports import resolve_chatlab_conversation_type, write_export
 from .store import ChatStore
 
 
@@ -224,6 +224,11 @@ class AutoExportManager:
                     total = first["total"]
                     if total > MAX_MESSAGES:
                         raise ValueError(f"索引超过单次自动导出的 {MAX_MESSAGES} 条上限")
+                    conversation_type = None
+                    if config["format"] in {"chatlab", "chatlab-jsonl"}:
+                        conversation_type = resolve_chatlab_conversation_type(
+                            snapshot.export_conversation_kinds(config["platform"])
+                        )
 
                     def message_rows():
                         page = first
@@ -256,6 +261,7 @@ class AutoExportManager:
                             message_rows(), stream, config["format"], "本地消息档案", count=total,
                             source_platforms=snapshot.export_platforms(config["platform"]),
                             members=member_rows(),
+                            conversation_type=conversation_type,
                         )
                         stream.flush()
                         os.fsync(stream.fileno())

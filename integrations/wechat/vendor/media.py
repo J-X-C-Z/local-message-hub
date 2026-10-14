@@ -12,18 +12,17 @@ server_id、packed_info），本模块负责把媒体内容从本地取回/解�
     local_type 49  文件     → msg/file/<YYYY-MM>/<原文件名>，原名取自
                             message_resource.db MessageResourceDetail.packed_info
 
-图片加密（v2 格式，本库已在本机验证）::
+图片加密（v2 格式）::
 
     结构: [6B sig 07 08 56 32 08 07][4B aes_size LE][4B xor_size LE][1B pad]
           [aes 密文(ECB, PKCS7, 对齐 16B)][raw 明文][xor 密文]
 
     - AES 密钥: 16 字节 ASCII（字母/数字），仅在 Weixin.exe 进程内存中。
       通过 AES-ECB 解首块密文、校验 JPEG/PNG 魔数反推出（内存正则扫描）。
-    - XOR 密钥: 单字节，等于 cfgDword 低字节（本机 2026-09-19 实测
-      295/295 个 Sns 缓存容器与聊天 .dat 一致）；拿不到 cfg 时才退回
+    - XOR 密钥: 单字节，等于 cfgDword 低字节；拿不到 cfg 时才退回
       缩略图尾部统计反推（``key = tail[0] ^ 0xFF``）。
-    - 尾部页脚: Sns 缓存有 189/295 个容器在 ``FF D9`` 之后还追加 24 字节
-      页脚，所以「明文末尾 == FF D9」不能当硬判据，解密后按结束标记裁剪。
+    - 尾部页脚: Sns 缓存容器可能在 ``FF D9`` 之后追加页脚，所以不能只按
+      「明文末尾 == FF D9」判断，解密后按结束标记裁剪。
 
 用法::
 
@@ -77,7 +76,7 @@ def aligned_aes_block_size(aes_size: int) -> int:
     return aes_size + (16 - aes_size % 16) if aes_size % 16 else aes_size + 16
 
 
-# Sns 缓存容器会在图片结束标记之后再追加一段页脚（实测 24 字节）。只按
+# Sns 缓存容器会在图片结束标记之后再追加一段页脚。只按
 # 「明文末尾 == FF D9」判定密钥，会让这类容器退回错误密钥并留下坏尾。
 _FOOTER_MAX = 32
 
@@ -116,7 +115,7 @@ class MediaDownloader:
 
     @staticmethod
     def derive_image_keys(cfg_dword: int, wxid: str) -> Tuple[str, int]:
-        """cfgDword 派生图片密钥(微信 4.x 最佳方案, 实测 3000/3000 验证)。
+        """cfgDword 派生图片密钥。
 
         imageXorKey = cfgDword & 0xFF
         imageAesKey = MD5(str(cfgDword) + wxid)[:16]   # 前 16 位即真 AES-128 密钥
@@ -528,7 +527,7 @@ class MediaDownloader:
         return None
 
     # ------------------------------------------------------------------
-    # 三档副本：_h.dat(原件) / .dat(微信下发的那一份，可能是完整图也可能是预览版) / _t.dat(预览图)
+    # 三档副本：_h.dat 原件 / .dat 默认下发版本 / 低档缓存变体
     # ------------------------------------------------------------------
     IMAGE_TIERS = ("original", "mid", "thumb")
 
@@ -544,8 +543,16 @@ class MediaDownloader:
         一次目录扫描出全部三档。原来每查一档就 ``os.walk`` 一整棵会话附件树，
         批量状态接口如果也这么写，300 张图就是 900 次全树遍历。
         """
-        want = {md5 + "_h.dat": "original", md5 + ".dat": "mid",
-                md5 + "_t.dat": "thumb"}
+        base_name = str(md5).lower()
+        want = {
+            base_name + suffix: tier
+            for tier, suffixes in (
+                ("original", ("_h.dat", ".h.dat", "_hd.dat", ".hd.dat")),
+                ("mid", (".dat",)),
+                ("thumb", ("_t.dat", ".t.dat", "_thumb.dat")),
+            )
+            for suffix in suffixes
+        }
         account_root = os.path.realpath(self.db.account_dir)
         attach_root = os.path.realpath(os.path.join(account_root, "msg", "attach"))
         chat_root = os.path.join(attach_root, self._chat_md5(user))
@@ -558,11 +565,11 @@ class MediaDownloader:
                 return {}
         except ValueError:
             return {}
-        out = {}
+        candidates = {}
         for root, _, files in os.walk(base):
             for f in files:
-                tier = want.get(f)
-                if tier and tier not in out:
+                tier = want.get(f.lower())
+                if tier:
                     p = os.path.join(root, f)
                     try:
                         if os.path.islink(p):
@@ -571,25 +578,24 @@ class MediaDownloader:
                         if (os.path.commonpath((base, resolved)) != base or
                                 not os.path.isfile(resolved)):
                             continue
-                        out[tier] = (resolved, os.path.getsize(resolved))
+                        size = os.path.getsize(resolved)
+                        rank = (-size, -os.path.getmtime(resolved), resolved.lower())
+                        if tier not in candidates or rank < candidates[tier][0]:
+                            candidates[tier] = (rank, (resolved, size))
                     except OSError:
                         continue
                     except ValueError:
                         continue
-        return out
+        return {tier: candidate[1] for tier, candidate in candidates.items()}
 
     @staticmethod
     def original_ready(h_size: Optional[int], mid_size: Optional[int] = None,
                        min_bytes: int = 1024) -> bool:
         """``_h.dat`` 存不存在、是不是空壳。**不比大小**——尺寸不能当「下完没下完」的判据。
 
-        两代错判都在这儿：
-        - 1.2.4.2 之前是硬编码 ``> 102400``：本机 705 个 ``_h.dat`` 中位数只有 91.5KB，
-          51.3% 的真原图被当成「还没下载」。
-        - 1.2.4.2 换成「不比压缩版 ``.dat`` 小 10% 以上」，用户实机证明**这条也是错的**：
-          同一张图的 ``.dat`` 有时就是比 ``_h.dat`` 大（实测 h/mid 有 0.55、0.82 的，
-          两种编码各存一份），于是真原图又被判成没下完，代码去点「图片原始大小」——
-          而原图本来就在盘上，那个按钮只是切显示缩放，点了自然没有任何反应。
+        固定字节阈值和不同缓存档位之间的比例都无法可靠判断下载是否完成：
+        压缩图可能比原图更大，编码也可能不同。错误判断会让已有原图被当成未完成，
+        并触发不必要的界面操作。
 
         判「完整」改看**解密后的结构**（:meth:`_image_complete`：JPEG 有没有 ``FF D9``、
         PNG 有没有 ``IEND``）；正在下载中的截断由 :meth:`_wait_h_dat` 的「大小不再变化」
@@ -680,7 +686,7 @@ class MediaDownloader:
         chosen = ordered.pop(idx)
         return [chosen[0]] + [ch for ch, _ in ordered]
 
-    # 可视行类名 → 参与对齐的种类。实机对着数据库核过一遍（同一会话同一屏）：
+    # 可视行类名 → 参与对齐的种类：
     #   ``mmui::ChatTextItemView``          = 文本（Name 是被截断的正文）
     #   ``mmui::ChatBubbleReferItemView``   = 图片气泡，但**只有 Name=='图片' 的那几行**
     #       （同一个类名还用来渲染引用卡片等，Name 是摘要文字）
@@ -771,8 +777,8 @@ class MediaDownloader:
                      min_text_anchors: int = 2):
         """目标消息在**可视行**里的下标；认不出、或认得不唯一，一律 ``None``。
 
-        实机撞过可视区只剩一行时「吻合度 1.00」的假高分（那种情况任何偏移都算完美吻
-        合），所以要求至少 ``min_text_anchors`` 条正文对得上的文本行 + 吻合度
+        可视区只剩一行时任何偏移都可能得到假高分，所以要求至少
+        ``min_text_anchors`` 条正文对得上的文本行 + 吻合度
         ≥ ``min_score``；再要求**所有并列最优偏移都指向同一行**——否则宁可退回
         :meth:`_order_bubbles` 的计数法，也不要点到别人的图上。
 
@@ -814,12 +820,7 @@ class MediaDownloader:
         return (-120 if delta_rows > 0 else 120, notches)
 
     # 气泡离「发送方那一侧边缘」的绝对锚点（物理像素）。
-    # 为什么用绝对值而不是百分比：气泡的位置**不随行宽等比缩放**——头像列加边距是
-    # 固定像素，气泡本身也有个上限宽度。实测两种布局：
-    #   宽窗口 行宽 2598 → 气泡在左边缘 +44~+632（+1.7%~+24.3%）
-    #   竖屏   行宽  720 → 气泡在左边缘 +141~+459（+19.6%~+63.8%）
-    # 「行宽的 12%」在前者是 311px（命中），在后者只有 86px（落在底色上，点不中）。
-    # 300px 这个锚点在两种布局里都落在气泡内（竖屏 300∈[141,459]，宽窗 300∈[44,632]）。
+    # 气泡位置不随行宽等比缩放，使用绝对锚点并保留比例位置作为后备。
     BUBBLE_ANCHOR_PX = 300
 
     @classmethod
@@ -827,9 +828,8 @@ class MediaDownloader:
         """缩略图在这一行里的可点 x：先发送方那一侧，再试另一侧。
 
         行矩形是**整行宽**，气泡只占其中一块，而且这块位置不随行宽等比缩放
-        （见 :attr:`BUBBLE_ANCHOR_PX` 上面那两组实测数）。所以候选按「绝对锚点 →
-        旧的行宽 12%」排，两侧各给一次：宽窗口里两个数算出同一个 x（311 与 300 取
-        大 = 311），行为和以前逐字一致；竖屏里绝对锚点先命中，12% 那个只是后备。
+        （见 :attr:`BUBBLE_ANCHOR_PX`）。所以候选按「绝对锚点 → 旧的行宽 12%」排，
+        两侧各给一次；绝对锚点先尝试，比例位置作为后备。
         每个候选都有「有没有新弹出预览窗」这个可观察事件兜着，点空不算成功，
         也不可能点到别的行（y 一直是这一行的中线）。
         """
@@ -852,12 +852,8 @@ class MediaDownloader:
         """这条消息是不是本机账号自己发的。
 
         ``real_sender_id`` 是 ``message_resource.db`` 里 ``SenderName2Id`` 的 rowid，
-        **本机账号落在哪个 rowid 不是一定的**：代码里原本写死 ``== 2``（1.1.8 从
-        别人那台机器带过来的取值），本机实测自己是 1——文件传输助手 400 条消息
-        全是 ``sender_id=1``，而 ``SenderName2Id`` 里解析成本机 wxid 的 rowid 也是 1，
-        ``2`` 反而是某个常联系的好友（图片消息里有 512 条）。写错这一条的代价很直接：
-        自己发的图被当成别人发的，先去点左边那块，永远点不中气泡，看起来就是
-        「我发的图片提示找不到原图」。
+        不同数据库中的 rowid 不固定，必须通过表内映射识别本机账号，不能硬编码。
+        分类错误会导致本机发送的媒体使用错误的缓存查找身份。
         """
         sid = row.get("sender_id")
         if sid is None:
@@ -876,7 +872,7 @@ class MediaDownloader:
             return who == own
         return sid == 1                  # 索引没覆盖（多库账号）时兜底：自己一般是 1
 
-    # 预览窗的顶层形状实测有两种（同一台机、同一个微信版本）：
+    # 预览窗的顶层形状有两种：
     #   ① 桌面的直接子节点就是 ``mmui::PreviewWindow``（Name 是 'Weixin'）；
     #   ② 顶层是 ``Qt51514QWindowIcon``、标题「图片和视频」，``mmui::PreviewWindow``
     #      在它**里面一层**。
@@ -972,10 +968,8 @@ class MediaDownloader:
             - ``available``：有没有**原件** ``_h.dat``（且不是空壳）。**只有这一档是
               确定的原图**。
             - ``has_mid``：有没有 ``.dat`` 这一份。注意它**不保证是"完整图"**——
-              ``.dat`` 是"微信下发的那一份"，可能是完整图，也可能本身就是预览版
-              （实测例：某条 ``.dat`` 44,002 字节、预览图 2,961 字节，那张 ``.dat``
-              仍是预览图）。本机分不出来，只有预览窗里有没有「图片原始大小」那颗键
-              能回答。
+              ``.dat`` 是"微信下发的那一份"，可能是完整图，也可能本身就是预览版。
+              单靠缓存文件无法判断，只有预览窗里有没有「图片原始大小」那颗键能回答。
             ``shard``：把消息行里的 ``shard``（分片库文件名）原样传回，用于跨分片
                 同号时锁定那一条；不传则按 ``sort_seq`` 取最新并告警。
             ``reason`` 取值：``ok``、``no_message_row``、``not_image``、``no_md5``、
@@ -1278,7 +1272,7 @@ class MediaDownloader:
                 :meth:`download_image_original`（本机没有 ``_h.dat`` 就驱动界面去下载）。
                 想要「本机有什么就给什么」的调用方应该用这个或 ``'best'``，而不是
                 ``'original'``——``'original'`` 要的是"发的时候勾了原图"那一档，本机多数图
-                根本没有（实测自发图 554 条里 19 条有、别人发的 3401 条里 611 条有）。
+                通常没有；是否存在必须检查本机缓存。
                 以前 ``tier=None`` 拿到压缩版时文件名不带任何标记，调用方分不清
                 自己拿到的是原图还是压缩版，只能靠大小猜——「只要原图」的调用方
                 因此要么误收、要么反复重试。
@@ -1466,7 +1460,7 @@ class MediaDownloader:
     def _save_dialog():
         """找微信「保存」弹出的 Windows 通用另存为对话框。
 
-        实机结构：顶层类名 ``#32770``，但**标题是「保存」而不是「另存为」**——
+        顶层类名为 ``#32770``，但**标题是「保存」而不是「另存为」**——
         按标题里有没有「另存」去匹配会认不出。判据改成「``#32770`` + 里面有以
         「保存」开头的按钮」，标题只当辅助。
         """
@@ -1488,7 +1482,7 @@ class MediaDownloader:
         return None
 
     # 「保存」对话框里**不能往里写值**的那几颗 Edit：文件格式选择器（保存类型:）里面
-    # 也有一颗 Edit，实机就把目标路径写进过那儿；右上角搜索栏也是 Edit。
+    # 也有一颗 Edit，右上角搜索栏也是 Edit。
     _BAD_EDIT_WORDS = ("类型", "格式", "搜索")
 
     @staticmethod
@@ -1513,7 +1507,7 @@ class MediaDownloader:
     def _dialog_button(dlg, names):
         """对话框里文案以 ``names`` 任一开头的**按钮**（``保存(S)`` 带助记符后缀）。
 
-        以前只按 Name 找，实机点到了「选择文件格式」那颗下拉框——它在 UIA 里的 Name
+        只按 Name 找可能命中「选择文件格式」下拉框——它在 UIA 里的 Name
         也叫「保存」，``Invoke`` 它只会把格式列表展开，保存根本没发生、模态框还留着。
         所以命中名字之后还要看控件类型：``ControlTypeName`` 里没有 Button 的一律不算。
         """
@@ -1554,7 +1548,7 @@ class MediaDownloader:
                 blob = ""
             if any(w in blob for w in MediaDownloader._BAD_EDIT_WORDS):
                 # 「保存类型」那颗下拉框里也有一颗 Edit（当前格式就显示在那儿）。
-                # 实机撞到过：文件名框没认出来、值写进了格式选择器，保存当然没发生。
+                # 文件名框未识别时，值可能写进格式选择器而没有保存。
                 continue
             return e
         return None
@@ -1563,7 +1557,7 @@ class MediaDownloader:
     def _file_name_edit(dlg):
         """文件名输入框：优先 Name 含「文件名」。
 
-        实机对话框里还有一个 ``Name='搜索框'`` 的 Edit（右上角搜索栏），拿「第一个
+        对话框里还可能有一个 ``Name='搜索框'`` 的 Edit（右上角搜索栏），拿「第一个
         Edit」会填到那里去；而且「文件名:」在树上出现**两层**——外层是
         ``ComboBoxControl(Name='文件名:')``，真正可写值的是它里面那个
         ``EditControl(Name='文件名:')``，所以命中容器之后还要再往里找 Edit。
@@ -1610,7 +1604,7 @@ class MediaDownloader:
     def _looks_preview(size, ref_thumb=None, ref_mid=None):
         """「保存」写出来的这一份像不像**预览图**（拿本机已有档位的尺寸当参照）。
 
-        实机反馈：在预览窗直接点「保存」，微信写出的是**当前显示的那一幅**——原件
+        在预览窗直接点「保存」，微信写出的是**当前显示的那一幅**——原件
         还没进显示时它就是预览版，点「图片原始大小」再存一次才是更大的那幅。参照不足
         （本机本来就没有 ``.dat``/``_t.dat``）时**不猜**：返回 ``False``，宁可少点一轮
         界面。
@@ -1641,15 +1635,15 @@ class MediaDownloader:
                          ref_thumb=None, ref_mid=None, attempts=2):
         """点预览窗的「保存」，把微信写出的明文图片收进 ``save_dir``。
 
-        实机确认：微信「保存」**弹的是 Windows 通用保存对话框**（标题「保存」，
+        微信「保存」**弹出 Windows 通用保存对话框**（标题「保存」，
         默认目录 ``temp\\InputTemp``，文件名预填 ``微信图片_YYYYMMDDHHMMSS_***.jpg``），
         不是静默落盘，所以路径不固定——直接把目标全路径填进「文件名:」再点「保存(S)」，
         一步到位。万一以后版本改成静默保存，仍然用「点之前拍快照、点之后找新文件」兜底。
         **任何失败路径都会点「取消」把模态框关掉**，不留在屏幕上挡事。
 
-        ``ref_thumb`` / ``ref_mid`` 传本机那两档的字节数：第一次「保存」拿回来的如果
+        ``ref_thumb`` / ``ref_mid`` 传缩略图和中图的字节数：第一次「保存」拿回来的如果
         按尺寸看就是预览图，会先点「图片原始大小」让原件进显示，**再点一次「保存」**
-        （用户实测：第一遍点出来的确实是预览图，得重新下载才是原图），两次里取大的那份。
+        （可能是预览图，需重新下载原图），两次里取大的那份。
         参照不足就不重试，也不无脑多点一轮界面。
         """
         target = self._out(save_dir, stem + ".jpg")
@@ -1748,7 +1742,7 @@ class MediaDownloader:
                     self._cancel_save_dialog(dlg)
                     return None
                 # 点完「保存」，对话框**必须关掉**——这是唯一能证明那一下点中的是按钮的
-                # 信号。实机就点到过旁边那颗「选择文件格式」下拉框：模态框还开着、文件
+                # 信号。否则可能命中「选择文件格式」下拉框，模态框仍打开且文件
                 # 根本没写，而那时目标文件要等 8 秒才判失败，看起来像「点了没反应」。
                 closed = False
                 end2 = time.time() + 4.0
@@ -1843,9 +1837,8 @@ class MediaDownloader:
         """列出会话里的语音消息，并逐条说明**音频到底在不在本地**。
 
         ``download_voice()`` 取不到时只返回 ``None``，调用方分不清「微信本地根本没
-        存这段音频」和「库读挂了」——issue #20「26 条语音只识别到 19 条」就是被这个
-        歧义卡住的。本机 975 条语音实测：``download_status != 0`` 与「音频在本地」
-        完全一一对应（914 条在 / 59 条 ds=0 且确实不在），所以这个字段就是判据。
+        存这段音频」和「库读挂了」。``download_status`` 可辅助判断本地文件是否可用；
+        缺少状态或客户端行为变化时仍需检查实际文件。
 
         Returns:
             按时间降序的 dict 列表，字段：
@@ -1978,7 +1971,9 @@ class MediaDownloader:
 
     def download_video(self, user: str, local_id: int, save_dir: Optional[str] = None,
                        shard: Optional[str] = None) -> Optional[str]:
-        """视频：按 packed_info 中的 id 在 msg/video 下查找 <id>.mp4
+        """视频：按 packed_info 中的 id 在 msg/video 下查找已缓存文件。
+
+        WeFlow 的视频索引也会将 ``<id>_raw.mp4`` 作为 ``<id>`` 的回退副本。
 
         ``shard``：把消息行里的 ``shard``（分片库文件名）原样传回，用于跨分片
             同号时锁定那一条；不传则按 ``sort_seq`` 取最新并告警。
@@ -1995,7 +1990,10 @@ class MediaDownloader:
         create_time = row.get("create_time")
         if not vid or not isinstance(create_time, int) or create_time <= 0:
             return None
-        source = os.path.join(base, self._month_of(create_time), vid + ".mp4")
+        month_dir = os.path.join(base, self._month_of(create_time))
+        source = os.path.join(month_dir, vid + ".mp4")
+        if not os.path.lexists(source):
+            source = os.path.join(month_dir, vid + "_raw.mp4")
         return self._copy_cached_attachment(
             source, base, "%s_%s.mp4" % (user, local_id), save_dir)
 
@@ -2098,8 +2096,8 @@ class MediaDownloader:
         """回头看一眼本机 ``_h.dat`` 在不在：在就直接解密交出去。
 
         只认 ``_h.dat``——**.dat 不算拿到**：它是"微信下发的那一份"，可能是完整图，
-        也可能本身就是预览版（本机实测一张 ``.dat`` 44KB 的仍是预览图）。所以本机
-        只有 ``.dat`` 时这里返回 ``None``，让调用方继续走点击路径去要原件。
+        也可能本身就是预览版。所以本机只有 ``.dat`` 时这里返回 ``None``，让调用方
+        继续走点击路径去要原件。
 
         存在的意义是堵「第一遍明明已经拿到、却报下载失败；第二遍一起来说已在本地」：
         微信经常在我们要它的那一档**之后**才把文件写完。所以每个决策点（进门、点下一张
@@ -2139,7 +2137,6 @@ class MediaDownloader:
 
         - ``_t.dat`` 预览图/缩略图；
         - ``.dat`` 微信下发的那一份 —— 可能是完整图，也可能**本身就是预览版**
-          （本机实测例：一条 ``.dat`` 44,002 字节、``_t.dat`` 2,961 字节，那张仍是预览图）；
           在本机**看不出来**是哪一种；
         - ``_h.dat`` 真正的原件（发的时候勾了「原图」，或点过「查看原图」才会落盘）。
 
@@ -2191,13 +2188,12 @@ class MediaDownloader:
             return got0
 
         if self._sent_by_self(row) and mid_sz and not files.get('original'):
-            # 自己发出去的图，本机一般不存在原件（实测 554 条自发图片里只有 19 条带
-            # _h.dat，而那 19 条**都没有** .dat —— 只有发的时候勾了「原图」才留原件）。
+            # 自己发出去的图，本机一般不存在原件；只有发的时候勾了「原图」才留原件。
             # 但这里**不提前返回**：.dat 有可能就是预览版，到底有没有更大的那份，
             # 只能让界面去回答（点开后看有没有「图片原始大小」那颗键）。
-            wxlog.info("这条图是自己发出去的，本机只有 .dat（实测 554 条自发图片里只有 "
-                       "19 条有 _h.dat）；仍然走点击路径确认一下 —— .dat 有时本身就是"
-                       "预览版。只想拿本机那份的话用 download_image(tier='full')。")
+            wxlog.info("这条图是自己发出去的，本机只有 .dat；仍然走点击路径确认一下 —— "
+                       ".dat 有时本身就是预览版。只想拿本机那份的话用 "
+                       "download_image(tier='full')。")
 
         from .uia_driver import WeChatUIA
         from .guia import WinInput
@@ -2205,7 +2201,7 @@ class MediaDownloader:
         def give_up(why, *args):
             """界面这条路走不通 / 等不到时，**先再查一次盘**再说失败。
 
-            用户实测的两个现象都出在这里：点完第一张之后微信才把文件写完，于是
+            有两种常见情况会出现在这里：点完第一张之后微信才把文件写完，于是
             「明明已经拿到了还在一张一张瞎点，最后报下载失败；重新运行又说已在本地」。
             查到了就交文件（并说明是在哪一步查到的），查不到才把失败原因原样报出去。
             """
@@ -2253,8 +2249,7 @@ class MediaDownloader:
         except Exception:
             pass
         if not pid:
-            # 跳过搜索时没有 WeChat 对象。滚轮的落点校验不能因此省掉——
-            # 2026-09-25 就有一次自检把滚轮打进了压在微信上面的 IDE。
+            # 跳过搜索时没有 WeChat 对象。滚轮的落点校验不能因此省掉。
             try:
                 hs = _uia._wechat_hwnds()
                 if hs:
@@ -2275,8 +2270,7 @@ class MediaDownloader:
             time.sleep(1.0)
             lst = _uia._message_list()
             if lst is None:
-                # 主窗停在朋友圈页时 `mmui::RecyclerListView` **真的不在树里**
-                # （实测各导航页里只有朋友圈会掉，通讯录/收藏/发现那几页树是一样的），
+                # 页面变化可能导致 `mmui::RecyclerListView` 不在控件树里，
                 # 于是这里拿到 None。以前只警告一句就返回，看起来就是「UIA 没有任何操作」。
                 wxlog.debug("消息列表不在树里（主窗大概率停在朋友圈页），"
                             "点「微信」标签回聊天页再试一次")
@@ -2352,8 +2346,8 @@ class MediaDownloader:
                 wxlog.debug("没认出具体哪一行（%s）：目标下面有 %d 张更新的图，可视气泡 %d 个，"
                             "按此排定尝试顺序", note, n_newer, len(order))
             is_self = self._sent_by_self(row)
-            # 屏幕上已经开着预览窗时，「有没有新窗口」这个判据会失真（实测撞上过一次
-            # 假成功），所以记下已有句柄，只把**新出现**的窗口算作点开。
+            # 屏幕上已有预览窗时，「有没有新窗口」这个判据会失真，所以只把
+            # **新出现**的窗口算作点开。
             before = {h for h, _w in self._preview_windows()}
             if before:
                 wxlog.warning("屏幕上已有 %d 个预览窗：本轮只把新出现的窗口算作点开成功"
@@ -2374,7 +2368,7 @@ class MediaDownloader:
                 r = img_ch.BoundingRectangle
                 cy = int((r.top + r.bottom) / 2)
                 preview_win = btn = None
-                # 行矩形是**整行宽**（实测 2598px），缩略图只占其中一小块，而且
+                # 行矩形是**整行宽**，缩略图只占其中一小块，而且
                 # 自己发的图气泡在右边——先点该中的那一侧，没点开再试另一侧。
                 for cx in self._bubble_click_xs(r, is_self):
                     if time.time() >= deadline:

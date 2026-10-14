@@ -38,7 +38,7 @@ can be prepared for delivery:
 - Delivery remains the existing `QQAccountBoundSender` check: the NapCat
   account must be online and its `get_login_info` uin must equal the request's
   account id. Local reading and NapCat sending therefore stay bound to the
-  same QQ account, which on this machine is the account directory name.
+  same QQ account, whose local account directory is used to bind read and send paths.
 
 Group numbers require no mapping. Every indexed group peer already equals its
 group code, matching NapCat's group behaviour.

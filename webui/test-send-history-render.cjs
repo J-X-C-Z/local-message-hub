@@ -117,6 +117,8 @@ assert.match(wxBody, /当前登录的本机微信账号（GUI 拟人操作）/);
 assert.match(wxBody, /wxid_friend01/);
 assert.match(wxBody, /hello &lt;world&gt;/);
 assert.match(wxBody, new RegExp(wechatReview.request_id));
+assert.match(wxBody, /同名联系人.*直接拒绝/);
+assert.match(wxBody, /输入框.*未发送的草稿/);
 assert.match(wxFooter, new RegExp(`data-action="reject-send:${wechatReview.request_id}"`));
 assert.match(wxFooter, new RegExp(`data-action="approve-send:${wechatReview.request_id}"`));
 

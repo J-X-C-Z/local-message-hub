@@ -1726,6 +1726,8 @@ class WeChatDB:
 
     # 跨分片统一排序键：分片间 local_id 会重复（每片从 1 起），
     # 必须在分片内固定 tie-break，否则同一 sort_seq 的先后会随扫描顺序漂移。
+    # 方向选 local_id ASC：main 的裸扫描在重复 sort_seq 组内使用 local_id 升序
+    # （≈rowid 顺序），因此该方向能与旧输出逐条一致
     # （local_id DESC 会反转这些重复组内的先后）。
     _MSG_ORDER_DESC = "ORDER BY sort_seq DESC, local_id ASC"
     _MSG_ORDER_ASC = "ORDER BY sort_seq ASC, local_id ASC"
@@ -1747,8 +1749,7 @@ class WeChatDB:
     def _shard_label(self, conn: sqlite3.Connection) -> str:
         """分片标识：该连接对应的解密缓存库文件名（如 ``message__message_2.db``）。
 
-        ``local_id`` 只在分片内唯一，跨分片会重复（跨分片会话中
-        存在 ``(会话, local_id)`` 在多片同时命中的情况），因此对外必须给一个
+        ``local_id`` 只在分片内唯一，跨分片会重复，因此对外必须给一个
         能把 ``(user, local_id)`` 钉到唯一一行的字段，``shard`` 就是它。
         """
         try:
@@ -2048,9 +2049,8 @@ class WeChatDB:
             local_id: 消息行号。注意跨分片下 local_id 非全局唯一，
                 同一 local_id 可在不同分片对应不同类型消息。
             local_type: 可选，调用方已知消息类型时传入以精确过滤，
-                避免命中其它分片中的同号异类型消息。**类型相同照样会撞**：
-                存在「同号 + 同类型 + 不同正文」，只靠类型
-                筛不掉，需要唯一就用 ``shard``。
+                避免命中其它分片中的同号异类型消息。类型相同也可能重复，
+                需要唯一就用 ``shard``。
             shard: 可选，分片库文件名——把消息行里的 ``shard`` 字段原样传回
                 即可锁定那一个分片，结果必然唯一。传错名字不会瞎猜：直接返回
                 ``None`` 并告警。
@@ -2283,6 +2283,21 @@ class WeChatDB:
             break
         return user
 
+    def usernames_for_display_name(self, display_name: str) -> List[str]:
+        """Resolve every contact that displays an exact nickname or remark."""
+        conn = self._contact_conn()
+        if not conn:
+            return []
+        try:
+            rows = conn.execute(
+                "SELECT username FROM contact WHERE "
+                "TRIM(COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), username))=?",
+                (display_name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return list(dict.fromkeys(str(row["username"]) for row in rows if row["username"]))
+
     def username_by_nickname(self, nickname: str) -> Optional[str]:
         """通过昵称/备注反查微信号（contact.db）。
 
@@ -2330,7 +2345,7 @@ class WeChatDB:
         """读「标签」定义：[{label_id, name, sort_order}]，按 sort_order 排。
 
         表名/列名带下划线后缀（``contact_label(label_id_, label_name_,
-        sort_order_)``）。整表读不出来时返回 ``[]``
+        sort_order_)``）。表结构或同步状态异常导致读取失败时返回 ``[]``
         而不是抛——标签列表是校验用的旁路，不该让主流程挂在这上面。
         """
         conn = self._contact_conn()

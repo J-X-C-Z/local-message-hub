@@ -10,6 +10,11 @@ assert.ok(source.includes(initCall));
 async function main() {
 const requests = [];
 const observers = [];
+const previews = new Map();
+const previewFor = index => {
+  if (!previews.has(index)) previews.set(index, {innerHTML: ''});
+  return previews.get(index);
+};
 class FakeIntersectionObserver {
   constructor(callback, options) { this.callback = callback; this.options = options; observers.push(this); }
   observe(target) { (this.targets ||= []).push(target); }
@@ -30,7 +35,9 @@ const context = {
     addEventListener: () => {},
     querySelector: selector => {
       const match = selector.match(/data-media-preview-tile="(\d+)"/);
-      return match ? {dataset: {mediaPreviewTile: match[1]}} : null;
+      if (!match) return null;
+      return selector.endsWith('.media-preview') ? previewFor(Number(match[1]))
+        : {dataset: {mediaPreviewTile: match[1]}};
     },
   },
   IntersectionObserver: FakeIntersectionObserver,
@@ -48,7 +55,7 @@ const context = {
 };
 const controlledFetch = context.fetch;
 vm.runInNewContext(source.replace(initCall,
-  '\nglobalThis.__startMediaPreviews = startMediaPreviews; globalThis.__cancelMediaPreviews = cancelMediaPreviews; globalThis.__state = state; globalThis.__resolveMedia = resolveMedia; globalThis.__renderMediaTile = renderMediaTile; globalThis.__previewMedia = previewMedia; globalThis.__typeOptions = typeOptions; globalThis.__stubMediaUi = (render, preview) => { renderView = render; previewMedia = preview; };\n'), context);
+  '\nglobalThis.__startMediaPreviews = startMediaPreviews; globalThis.__cancelMediaPreviews = cancelMediaPreviews; globalThis.__state = state; globalThis.__resolveMedia = resolveMedia; globalThis.__loadBestWechatImage = loadBestWechatImage; globalThis.__renderMediaTile = renderMediaTile; globalThis.__previewMedia = previewMedia; globalThis.__typeOptions = typeOptions; globalThis.__stubMediaUi = (render, preview) => { renderView = render; previewMedia = preview; };\n'), context);
 
 const state = context.__state;
 state.view = 'media';
@@ -135,7 +142,9 @@ assert.ok(images.every(message => !message.media_url), 'aborted results do not m
 
 const one = {id: 'wechat-visible', platform: 'wechat', account_id: 'fixture-account',
   conversation_id: 'fixture-room', type: 'image', timestamp: 1};
-state.items = [one];
+const otherImage = {id: 'wechat-other', platform: 'wechat', account_id: 'fixture-account',
+  conversation_id: 'fixture-room', type: 'image', timestamp: 1, media_url: '/local-media/other-mid'};
+state.items = [one, otherImage];
 context.fetch = async (url, options) => {
   assert.equal(new URL(url, 'http://localhost').searchParams.get('image_tier'), 'mid');
   return {ok: true, json: async () => ({media_url: '/local-media/fixture-token'})};
@@ -144,6 +153,32 @@ context.__startMediaPreviews(9);
 observers[1].show([0]);
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(one.media_url, '/local-media/fixture-token', 'resolved local thumbnail is attached to its message');
+const bestTile = context.__renderMediaTile({message: one, type: 'image', name: 'wechat.png',
+  resourceKind: 'message', resourceIndex: null, resource: null}, 0);
+assert.match(bestTile, /data-action="wechat-best-image:0"/);
+assert.match(bestTile, /title="读取本机缓存中的最佳画质"/);
+const otherPreview = previewFor(1).innerHTML;
+context.toast = () => {};
+context.fetch = async url => {
+  const params = new URL(url, 'http://localhost').searchParams;
+  assert.equal(params.get('image_tier'), 'best');
+  assert.equal(params.get('platform'), 'wechat');
+  assert.equal(params.get('message_id'), 'wechat-visible');
+  assert.equal(params.get('conversation_id'), 'fixture-room');
+  return {ok: true, json: async () => ({media_url: '/local-media/fixture-best', mime_type: 'image/png'})};
+};
+await context.__loadBestWechatImage(0);
+assert.equal(one.media_url, '/local-media/fixture-best', 'explicit action replaces only the selected image preview');
+assert.equal(one.media_mime_type, 'image/png');
+assert.equal(otherImage.media_url, '/local-media/other-mid', 'other image previews are unchanged');
+assert.equal(previewFor(0).innerHTML, '<img src="/local-media/fixture-best" alt="图片" loading="lazy">');
+assert.equal(previewFor(1).innerHTML, otherPreview, 'only the selected tile DOM is updated');
+const retainedBestUrl = one.media_url;
+const retainedPreview = previewFor(0).innerHTML;
+context.fetch = async () => ({ok: true, json: async () => ({media_url: null, available: false})});
+await context.__loadBestWechatImage(0);
+assert.equal(one.media_url, retainedBestUrl, 'a local-cache miss preserves the current preview');
+assert.equal(previewFor(0).innerHTML, retainedPreview, 'a local-cache miss leaves the tile unchanged');
 
 const video = {id: 'wechat-poster', platform: 'wechat', account_id: 'fixture-account',
   conversation_id: 'fixture-room', type: 'video', timestamp: 1};
@@ -208,6 +243,28 @@ assert.equal(resolvedCalls[0].searchParams.get('resource_index'), '3');
 assert.equal(pagedFile.media_entry.resource.media_url, '/local-media/paged-file-token',
   'paged attachment rows resolve against their selected media_entry resource');
 assert.deepEqual(preview, ['/local-media/paged-file-token', 'file', 'report.pdf', undefined]);
+
+const qqCacheImage = {id: 'opaque-qq-cache-image', platform: 'qq', account_id: 'fixture-account',
+  type: 'image', file_name: 'cached.png', media_available: true,
+  extra: {resource_kind: 'qq_cache', resource_id: 'opaque-qq-cache-image', mime_type: 'image/png'}};
+state.items = [qqCacheImage];
+context.fetch = async url => {
+  const params = new URL(url, 'http://localhost').searchParams;
+  assert.equal(params.get('resource_kind'), 'qq_cache');
+  assert.equal(params.get('platform'), 'qq');
+  assert.equal(params.get('account_id'), 'fixture-account');
+  assert.equal(params.get('resource_id'), 'opaque-qq-cache-image');
+  assert.equal(params.has('image_tier'), false);
+  return {ok: true, json: async () => ({media_url: '/local-media/qq-cache-image', mime_type: 'image/png'})};
+};
+context.__startMediaPreviews(9);
+observers[5].show([0]);
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(qqCacheImage.media_url, '/local-media/qq-cache-image',
+  'QQ global-cache images use the opaque local resolver identity');
+assert.equal(qqCacheImage.media_mime_type, 'image/png');
+assert.equal(previewFor(0).innerHTML,
+  '<img src="/local-media/qq-cache-image" alt="cached.png" loading="lazy">');
 
 console.log('PASS visible WeChat, WeCom, and QQ images resolve through bounded local preview paths');
 }
