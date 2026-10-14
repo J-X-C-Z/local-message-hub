@@ -295,6 +295,12 @@ class WeComBotSenderTest(unittest.TestCase):
         self.assertEqual(len(timeout_updates), len(transport.sent))
         self.assertTrue(all(0 < timeout <= 300 for timeout in timeout_updates))
 
+        with patch("integrations.wecom.bot_sender.time.monotonic", side_effect=[100, 99]):
+            sender._send(transport, {"cmd": "aibot_upload_media_chunk",
+                                     "headers": {"req_id": "timeout-cap"}}, 400,
+                         {"last_sent_at": None})
+        self.assertEqual(timeout_updates[-1], 300)
+
     def test_media_upload_fills_each_chunk_after_short_stream_reads(self):
         data = b"streamed media payload"
         transport = FakeTransport([])

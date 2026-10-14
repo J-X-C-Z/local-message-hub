@@ -343,7 +343,7 @@ class WeComBotTextSender:
         remaining = self._remaining(deadline)
         set_timeout = getattr(transport, "settimeout", None)
         if set_timeout is not None:
-            set_timeout(remaining)
+            set_timeout(min(remaining, self.media_timeout))
         if heartbeat["last_sent_at"] is None:
             heartbeat["last_sent_at"] = now
         elif now - heartbeat["last_sent_at"] >= _HEARTBEAT_INTERVAL:
