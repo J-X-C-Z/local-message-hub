@@ -7306,6 +7306,10 @@ key is absent.
   and Moments tests. CI now sets `TEMP` and `TMP` to the runner's dedicated
   temp directory to keep those paths canonical. One short synchronization
   timeout may remain; the focused rerun will confirm.
+- Hosted run 38546410777 failed at workflow validation before creating a job
+  because the runner temp expression was placed at job scope. The temp
+  environment is now set through `GITHUB_ENV` in a PowerShell step after runner
+  startup, before the Windows checks and package smokes.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.

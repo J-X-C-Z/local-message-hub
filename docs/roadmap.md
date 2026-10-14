@@ -547,9 +547,14 @@ pending.
 
 Run 38545314515 then passed GCC and npm installation, but 788 Windows tests
 reported 17 failures and 8 errors. Most were caused by temp paths alternating
-between the runner's long profile path and its 8.3 alias. The CI now pins
-`TEMP`/`TMP` to `${{ runner.temp }}`; its complete test/build/artifact gate must
-be rerun before P14 can close.
+between the runner's long profile path and its 8.3 alias. CI now pins
+`TEMP`/`TMP` to the runner's `RUNNER_TEMP` before checks; its complete
+test/build/artifact gate must be rerun before P14 can close.
+
+Run 38546410777 failed before job creation because `runner.temp` was used in a
+job-level environment block. CI now sets the temp variables from
+`RUNNER_TEMP` in a PowerShell step after the runner starts. The next hosted run
+will verify both the context fix and Windows tests.
 
 **P14 acceptance status (2026-10-12):** The P14-01 row above is an earlier
 checkpoint; its 478/20-test and p163/p164 figures are superseded by the local
