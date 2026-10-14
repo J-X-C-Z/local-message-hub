@@ -7975,3 +7975,20 @@ key is absent.
 - The release artifact is 251,776,531 bytes and retained through 2026-10-21.
 - P14-01 is complete. Live P9/P13 delivery, P11 real-cache parity, and P12
   desktop/native acceptance remain open.
+
+## 2026-10-15 - Isolated Notification and Local Media Probes
+
+- A temporary Hub with synthetic-only storage and a headed Edge session
+  exercised the real browser Notification API after a body-free SSE event. The
+  notification used the fixed title/body, omitted a sentinel message string,
+  and had a click handler. The automation overrode `document.hidden`, so this
+  is not evidence of a visibly presented or clicked Windows toast; P12 remains
+  open for that native acceptance.
+- A bounded read-only local WeChat image resolver request returned HTTP 500.
+  The source status was connected, but its image key was not configured and one
+  database was unavailable. The failing request's exact cause remains unknown;
+  no account identifier or message content was recorded, and P11 remains open.
+- Added a focused unavailable-media result for the decoder's explicit missing
+  image AES key error, preserving its user-readable status through the Hub.
+  The provider and Hub regression tests pass. The earlier live 500 has not been
+  retried against the updated process, so its cause remains unconfirmed.

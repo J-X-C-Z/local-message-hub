@@ -4655,11 +4655,29 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(result['reason'], 'unsupported_sticker_cache')
         self.assertIn('表情', result['message'])
         provider.media.assert_not_called()
-
         with self.assertRaises(FileNotFoundError):
             self.hub.resolve_resource({'platform': 'wechat', 'account_id': 'account',
                                        'conversation_id': 'room', 'message_id': 'room:emoji'})
-        provider.media.assert_not_called()
+
+    def test_wechat_image_key_unavailable_is_preserved_as_media_status(self):
+        from unittest.mock import Mock
+        self.hub.store.ingest('wechat', 'account', [{'id': 'room', 'title': 'Chat'}], [{
+            'id': 'room:image', 'conversation_id': 'room', 'type': 'image',
+            'local_id': 7, 'shard': 'message_0.db',
+        }])
+        provider = Mock()
+        provider.media.return_value = {
+            'available': False, 'path': None, 'reason': 'image_key_unavailable',
+            'message': '缺少微信图片密钥，无法解密此图片',
+        }
+        self.hub.providers['wechat'] = provider
+
+        result = self.hub.resolve_media({'platform': 'wechat', 'account_id': 'account',
+                                         'conversation_id': 'room', 'message_id': 'room:image'})
+
+        self.assertIsNone(result['media_url'])
+        self.assertEqual(result['reason'], 'image_key_unavailable')
+        self.assertEqual(result['message'], '缺少微信图片密钥，无法解密此图片')
 
     def test_wechat_wxgf_resolution_preserves_original_download_mime(self):
         from unittest.mock import Mock

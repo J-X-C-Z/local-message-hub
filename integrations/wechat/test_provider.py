@@ -220,6 +220,21 @@ class WeChatMediaDispatchTests(unittest.TestCase):
         provider.image_key_store.get.assert_called_once_with('wxid-self')
         self.assertEqual(factory.call_args.kwargs['image_key'], 'ImageKey12345678')
 
+    def test_missing_image_key_is_reported_as_unavailable(self):
+        provider = WeChatProvider.__new__(WeChatProvider)
+        provider.reader = SimpleNamespace(wxid='wxid-self', account='fallback')
+        provider.reader.get_message_row = Mock(return_value={'local_type': 3})
+        provider.image_key_store = Mock()
+        provider.image_key_store.get.return_value = None
+        downloader = Mock()
+        downloader.download_image.side_effect = RuntimeError('无法获取图片 AES 密钥：无可用密钥')
+
+        with patch('integrations.wechat.provider.HubMediaDownloader', return_value=downloader):
+            result = provider.media('room', 7, 'message.db')
+
+        self.assertFalse(result['available'])
+        self.assertEqual(result['reason'], 'image_key_unavailable')
+
     def test_image_key_is_validated_before_account_scoped_persistence(self):
         provider = WeChatProvider.__new__(WeChatProvider)
         provider.reader = SimpleNamespace(wxid='wxid-self', account='fallback')

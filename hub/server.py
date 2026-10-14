@@ -1752,7 +1752,11 @@ class Hub:
             from integrations.wecom.engine import OUT
             path = Path(OUT) / path
         if not result.get('available') or not path or not Path(path).is_file():
-            return {'media_url': None, 'message': '本机未缓存此媒体，或暂不支持此格式'}
+            unavailable = {'media_url': None,
+                           'message': result.get('message') or '本机未缓存此媒体，或暂不支持此格式'}
+            if result.get('reason'):
+                unavailable['reason'] = result['reason']
+            return unavailable
         key = self.register_media_path(Path(path).resolve())
         resolved = {'media_url': '/local-media/' + key}
         if silk_fallback:

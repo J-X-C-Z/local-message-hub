@@ -528,7 +528,14 @@ class WeChatProvider:
         media_args = {"shard": shard}
         if local_type == 3:
             media_args["tier"] = image_tier
-        path = getattr(downloader, method)(session_id, local_id, **media_args)
+        try:
+            path = getattr(downloader, method)(session_id, local_id, **media_args)
+        except RuntimeError as exc:
+            if local_type != 3 or not str(exc).startswith("无法获取图片 AES 密钥"):
+                raise
+            return {"available": False, "path": None,
+                    "reason": "image_key_unavailable",
+                    "message": "缺少微信图片密钥，无法解密此图片"}
         if local_type == 34 and path:
             from .voice import voice_media_result
 

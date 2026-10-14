@@ -633,6 +633,28 @@ ID are omitted from JSON; the row ID remains only in the SSE event ID for
 reconnect. A focused HTTP regression verifies the exact field set. Real desktop
 notification delivery remains open.
 
+**P12 isolated Edge notification probe (2026-10-15):** a temporary Hub with
+synthetic-only storage delivered a sentinel SSE event to a headed Edge session
+with notification permission granted. The real browser `Notification` API was
+called with the fixed title/body, omitted the sentinel text, and had a click
+handler. Automation overrode `document.hidden` to exercise the background
+branch, so this does not prove that Windows visibly presented or accepted a
+toast click. OS-level notification acceptance remains open.
+
+**P11 live media resolver probe (2026-10-15):** a bounded read-only WeChat image
+sample returned HTTP 500 from the local media resolver while the source reported
+connected. The image key was not configured and one source database was
+unavailable; the cause of this request failure was not isolated. No account
+identifier or message content was recorded. Real-cache acceptance remains
+open.
+
+**P11 missing-key status follow-up (2026-10-15):** when the WeChat media reader
+explicitly reports that no image AES key is available, the provider now returns
+an `image_key_unavailable` result and the Hub preserves its readable message.
+Two focused regression tests pass. This does not establish that the earlier
+live HTTP 500 had this cause; the same cached sample was not retried against
+the updated process.
+
 ## Phase 13 - Additional Platform Sending
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
