@@ -7278,6 +7278,14 @@ key is absent.
   order, with an immediate failure check after each transaction. YAML and the
   embedded PowerShell/Bash syntax checks pass locally; sequential installation
   still needs a hosted run.
+- Hosted run 38543367064 installed the two hash-pinned runtime packages but
+  pacman still rejected the GCC transaction for those exact sibling
+  dependencies. The workflow now supplies only those pinned versions through
+  pacman's `--assume-installed` option for the GCC transaction, then requires
+  `pacman -Q` to confirm that all three actual installed packages are version
+  `16.2.0-5`. The existing SHA-256 checks and normal checks for all other GCC
+  dependencies remain active. Local syntax and packaging smoke checks pass;
+  this correction still needs hosted verification.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.
