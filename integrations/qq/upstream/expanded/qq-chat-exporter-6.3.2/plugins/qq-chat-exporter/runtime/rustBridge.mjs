@@ -10,6 +10,14 @@ const MAX_BRIDGE_BODY_BYTES = 64 * 1024 * 1024;
 const BRIDGE_HOST = '127.0.0.1';
 const DEFAULT_BRIDGE_PORT = 40654;
 const API_PORT = Number(process.env.QCE_SERVER_PORT || 40653);
+const MAX_QCE_RESTARTS = 5;
+
+export function qceRestartDelayMs(attempt) {
+  if (!Number.isInteger(attempt) || attempt < 0) {
+    throw new RangeError('QCE restart attempt must be a non-negative integer');
+  }
+  return attempt >= MAX_QCE_RESTARTS ? null : Math.min(1000 * 2 ** attempt, 30_000);
+}
 
 export function resolveBridgePort(env = process.env) {
   const configured = env.QCE_BRIDGE_PORT;
@@ -488,49 +496,88 @@ export async function startRustApiServer(core, frontendPath) {
     env.QCE_STATIC_DIR = frontendPath;
   }
   let child;
-  try {
-    child = spawn(binaryPath, [], {
+  let stopped = false;
+  let ready = false;
+  let restartTimer = null;
+  let restartAttempts = 0;
+  let childStartedAt = Date.now();
+  const scheduleRestart = () => {
+    if (stopped || !ready || restartTimer) return;
+    if (Date.now() - childStartedAt >= 5 * 60_000) restartAttempts = 0;
+    const delay = qceRestartDelayMs(restartAttempts);
+    if (delay === null) {
+      appendRuntimeLog(logFile, '[qce-plugin]', 'QCE restart limit reached; manual plugin restart required');
+      return;
+    }
+    restartAttempts += 1;
+    appendRuntimeLog(logFile, '[qce-plugin]', `QCE restart scheduled in ${delay}ms (attempt ${restartAttempts}/${MAX_QCE_RESTARTS})`);
+    restartTimer = setTimeout(async () => {
+      restartTimer = null;
+      if (stopped) return;
+      try {
+        child = spawnQceServer();
+        await waitForPort(child, API_PORT);
+        appendRuntimeLog(logFile, '[qce-plugin]', `qce-server recovered on port ${API_PORT}`);
+      } catch (error) {
+        appendRuntimeLog(logFile, '[qce-plugin]', `QCE restart failed: ${error instanceof Error ? error.name : 'Error'}`);
+        if (child && child.exitCode === null) child.kill();
+        scheduleRestart();
+      }
+    }, delay);
+  };
+  const spawnQceServer = () => {
+    const next = spawn(binaryPath, [], {
       cwd: path.dirname(binaryPath),
       env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    childStartedAt = Date.now();
+    const stdioCaptured = process.env.QCE_STDIO_CAPTURED === '1';
+    next.stdout?.on('data', (chunk) => {
+      if (!stdioCaptured) {
+        appendRuntimeLog(logFile, '[qce-server]', chunk);
+      }
+      core.context.logger.log(`[qce-server] ${String(chunk).trimEnd()}`);
+    });
+    next.stderr?.on('data', (chunk) => {
+      if (!stdioCaptured) {
+        appendRuntimeLog(logFile, '[qce-server]', chunk);
+      }
+      core.context.logger.logError(`[qce-server] ${String(chunk).trimEnd()}`);
+    });
+    next.on('error', (error) => {
+      appendRuntimeLog(logFile, '[qce-plugin]', `process error: ${error.message}`);
+      scheduleRestart();
+    });
+    next.on('exit', (code, signal) => {
+      appendRuntimeLog(logFile, '[qce-plugin]', `qce-server exited code=${code ?? 'null'} signal=${signal ?? 'null'}`);
+      if (stopped) return;
+      scheduleRestart();
+    });
+    return next;
+  };
+  try {
+    child = spawnQceServer();
   } catch (error) {
     appendRuntimeLog(logFile, '[qce-plugin]', `startup failed: ${error instanceof Error ? error.message : String(error)}`);
     await bridge.stop();
     throw error;
   }
 
-  const stdioCaptured = process.env.QCE_STDIO_CAPTURED === '1';
-  child.stdout?.on('data', (chunk) => {
-    if (!stdioCaptured) {
-      appendRuntimeLog(logFile, '[qce-server]', chunk);
-    }
-    core.context.logger.log(`[qce-server] ${String(chunk).trimEnd()}`);
-  });
-  child.stderr?.on('data', (chunk) => {
-    if (!stdioCaptured) {
-      appendRuntimeLog(logFile, '[qce-server]', chunk);
-    }
-    core.context.logger.logError(`[qce-server] ${String(chunk).trimEnd()}`);
-  });
-  child.on('error', (error) => {
-    appendRuntimeLog(logFile, '[qce-plugin]', `process error: ${error.message}`);
-  });
-  child.on('exit', (code, signal) => {
-    appendRuntimeLog(logFile, '[qce-plugin]', `qce-server exited code=${code ?? 'null'} signal=${signal ?? 'null'}`);
-  });
-
   try {
     await Promise.race([
       waitForPort(child, API_PORT),
       new Promise((_, reject) => child.once('error', reject))
     ]);
+    ready = true;
     appendRuntimeLog(logFile, '[qce-plugin]', `qce-server ready on port ${API_PORT}`);
     announceWebUiReady(logFile, API_PORT).catch((error) => {
       appendRuntimeLog(logFile, '[qce-plugin]', `webui url announce failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   } catch (error) {
+    stopped = true;
+    if (restartTimer) clearTimeout(restartTimer);
     appendRuntimeLog(logFile, '[qce-plugin]', `startup failed: ${error instanceof Error ? error.message : String(error)}`);
     child.kill();
     await bridge.stop();
@@ -539,6 +586,11 @@ export async function startRustApiServer(core, frontendPath) {
 
   return {
     async stop() {
+      stopped = true;
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
       if (child.exitCode === null) {
         appendRuntimeLog(logFile, '[qce-plugin]', 'stopping qce-server');
         child.kill();

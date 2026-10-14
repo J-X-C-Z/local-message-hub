@@ -16,6 +16,13 @@ from hub.store import ChatStore
 ROWS = 25_000
 PAGE_SIZE = 500
 SEARCH_TERM = "benchmark"
+MAX_SECONDS = {
+    "ingest": 60.0,
+    "first_search": 10.0,
+    "pagination": 60.0,
+    "backup": 30.0,
+    "restore": 30.0,
+}
 
 
 def timed(action):
@@ -110,6 +117,7 @@ def main():
             "restore_seconds": restore_seconds,
             "recovered_wechat_messages": recovered_count,
             "restored_qq_messages": wal_count,
+            "performance_limits_seconds": MAX_SECONDS,
         }
         writer.close()
         store.close()
@@ -118,6 +126,17 @@ def main():
             raise SystemExit("synthetic search count mismatch")
         if failures or recovered_count != ROWS or wal_count != 200 or paged_rows != total:
             raise SystemExit("concurrency or backup recovery check failed")
+        elapsed = {
+            "ingest": ingest_seconds,
+            "first_search": search_seconds,
+            "pagination": pagination_seconds,
+            "backup": backup_seconds,
+            "restore": restore_seconds,
+        }
+        exceeded = {name: seconds for name, seconds in elapsed.items()
+                    if seconds > MAX_SECONDS[name]}
+        if exceeded:
+            raise SystemExit(f"synthetic performance ceiling exceeded: {exceeded}")
 
 
 if __name__ == "__main__":

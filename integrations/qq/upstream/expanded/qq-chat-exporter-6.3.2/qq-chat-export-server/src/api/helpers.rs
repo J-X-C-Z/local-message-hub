@@ -408,8 +408,8 @@ mod tests {
     #[test]
     fn private_avatar_requires_numeric_uin() {
         assert_eq!(
-            chat_avatar_url("private", "u_peer", Some("1687657986")),
-            Some("https://q1.qlogo.cn/g?b=qq&nk=1687657986&s=640".to_string())
+            chat_avatar_url("private", "u_peer", Some("100000001")),
+            Some("https://q1.qlogo.cn/g?b=qq&nk=100000001&s=640".to_string())
         );
         assert_eq!(chat_avatar_url("private", "u_peer", None), None);
     }

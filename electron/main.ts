@@ -10,6 +10,7 @@ import { readFile, writeFile, mkdir, rm, readdir, copyFile } from 'fs/promises'
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { ConfigService } from './services/config'
 import { wcdbService } from './services/wcdbService'
+import { registerSourceMutationHandlers } from './services/sourceMutationGate'
 import { chatService } from './services/chatService'
 import { imageDecryptService } from './services/imageDecryptService'
 import { imagePreloadService } from './services/imagePreloadService'
@@ -3659,40 +3660,22 @@ function registerIpcHandlers() {
     return chatService.getAntiRevokeSessions()
   })
 
-  ipcMain.handle('chat:updateMessage', async (_, sessionId: string, localId: number, createTime: number, newContent: string) => {
-    const result = await chatService.updateMessage(sessionId, localId, createTime, newContent)
-    return result
-  })
-
-  ipcMain.handle('chat:insertTextMessage', async (_, payload: {
-    sessionId: string
-    content: string
-    status: number
-    createTime?: number
-  }) => {
-    return chatService.insertTextMessage(
-      payload?.sessionId,
-      payload?.content,
-      payload?.status,
-      payload?.createTime
-    )
-  })
-
-  ipcMain.handle('chat:deleteMessage', async (_, sessionId: string, localId: number, createTime: number, dbPathHint?: string) => {
-    const result = await chatService.deleteMessage(sessionId, localId, createTime, dbPathHint)
-    return result
-  })
-
   ipcMain.handle('chat:checkAntiRevokeTriggers', async (_, sessionIds: string[]) => {
     return chatService.checkAntiRevokeTriggers(sessionIds)
   })
 
-  ipcMain.handle('chat:installAntiRevokeTriggers', async (_, sessionIds: string[]) => {
-    return chatService.installAntiRevokeTriggers(sessionIds)
-  })
-
-  ipcMain.handle('chat:uninstallAntiRevokeTriggers', async (_, sessionIds: string[]) => {
-    return chatService.uninstallAntiRevokeTriggers(sessionIds)
+  registerSourceMutationHandlers(ipcMain, {
+    updateMessage: (sessionId: string, localId: number, createTime: number, newContent: string) =>
+      chatService.updateMessage(sessionId, localId, createTime, newContent),
+    insertTextMessage: (payload: { sessionId: string; content: string; status: number; createTime?: number }) =>
+      chatService.insertTextMessage(payload?.sessionId, payload?.content, payload?.status, payload?.createTime),
+    deleteMessage: (sessionId: string, localId: number, createTime: number, dbPathHint?: string) =>
+      chatService.deleteMessage(sessionId, localId, createTime, dbPathHint),
+    installAntiRevoke: (sessionIds: string[]) => chatService.installAntiRevokeTriggers(sessionIds),
+    uninstallAntiRevoke: (sessionIds: string[]) => chatService.uninstallAntiRevokeTriggers(sessionIds),
+    installMomentsBlock: () => snsService.installSnsBlockDeleteTrigger(),
+    uninstallMomentsBlock: () => snsService.uninstallSnsBlockDeleteTrigger(),
+    deleteMomentsPost: (postId: string) => snsService.deleteSnsPost(postId)
   })
 
   ipcMain.handle('chat:getContact', async (_, username: string) => {
@@ -4112,20 +4095,8 @@ function registerIpcHandlers() {
     return { canceled: false, filePath: result.filePaths[0] }
   })
 
-  ipcMain.handle('sns:installBlockDeleteTrigger', async () => {
-    return snsService.installSnsBlockDeleteTrigger()
-  })
-
-  ipcMain.handle('sns:uninstallBlockDeleteTrigger', async () => {
-    return snsService.uninstallSnsBlockDeleteTrigger()
-  })
-
   ipcMain.handle('sns:checkBlockDeleteTrigger', async () => {
     return snsService.checkSnsBlockDeleteTrigger()
-  })
-
-  ipcMain.handle('sns:deleteSnsPost', async (_, postId: string) => {
-    return snsService.deleteSnsPost(postId)
   })
 
   ipcMain.handle('sns:downloadEmoji', async (_, params: { url: string; encryptUrl?: string; aesKey?: string }) => {

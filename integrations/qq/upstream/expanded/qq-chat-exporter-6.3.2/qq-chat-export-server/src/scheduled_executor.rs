@@ -652,14 +652,14 @@ mod tests {
         assert_eq!(sanitize_task_name("CON.", 40), "_CON");
         let file_name = scheduled_export_file_name(
             "friend",
-            "笨蛋 Darf/v2",
-            "1687657986",
-            "20260713_002703456",
+            "测试联系人/v2",
+            "100000001",
+            "20240102_030405006",
             "html",
         );
         assert_eq!(
             file_name,
-            "friend_笨蛋_Darf_v2_1687657986_20260713_002703456.html"
+            "friend_测试联系人_v2_100000001_20240102_030405006.html"
         );
 
         let base = std::env::temp_dir().join(format!(
@@ -672,7 +672,7 @@ mod tests {
         assert_eq!(first, file_name);
         assert_eq!(
             second,
-            "friend_笨蛋_Darf_v2_1687657986_20260713_002703456_2.html"
+            "friend_测试联系人_v2_100000001_20240102_030405006_2.html"
         );
         std::fs::remove_dir_all(base).unwrap();
     }

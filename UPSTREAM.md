@@ -28,12 +28,29 @@ separately; the upstream component-path configuration is not a completed solutio
   ignored, not committed. Do not use the original BAT fallback to write into the
   installed QQ directory.
 
+## QQNT Local Database References
+
+- QQNT_Export: https://github.com/Tealina28/QQNT_Export, schema/cache reference
+  revision `714d228dcd52f74b06bec91d4dba6ab856f16cd1`, GPL-3.0.
+- ARK-1: https://github.com/star-picker/QQNT-Database-Export-Tool, AGPL-3.0.
+  Its SQLCipher configuration confirms page size 4096, KDF iterations 4000,
+  PBKDF2-HMAC-SHA512 and page HMAC-SHA1. It requires an existing pass key.
+- QQBackup Windows key helper:
+  https://github.com/QQBackup/qq-win-db-key. Its debugger extraction is not
+  executed by the read-only local reader.
+
+These are format and behavior references, not vendored source or bundled
+executables. The local implementation uses existing Python/cryptography
+dependencies. Android UID/header key derivation is not treated as a verified
+Windows method. Existing upstream license obligations above still apply.
+
 ## Enterprise WeChat
 
-The user-authorized local reader source is integrated under `integrations/wecom`.
-Private account slots, paths, keys and chat exports were removed from source and
-kept only in ignored local configuration. The adapter copies and decrypts a
-single selected local account snapshot; it never writes the original database.
+The local reader is integrated under `integrations/wecom`. Account slots,
+machine-specific paths, keys and chat exports are kept only in ignored local
+configuration and are excluded from release packages. The adapter copies and
+decrypts a single configured local account snapshot; it never writes the
+original database.
 The supplied local source has no standalone license statement. No right to
 redistribute private data is implied.
 
@@ -57,11 +74,13 @@ publishing or commercially distributing a packaged derivative.
 
 ## Accepted Product Scope
 
-The first delivery runs on Windows locally and connects real WeChat, Enterprise
-WeChat and QQ records. It supports selecting a platform and searching across all
-platforms. The Enterprise WeChat source is the user's own local account.
+The first delivery targets local Windows use with real WeChat, Enterprise WeChat
+and QQ records. It supports selecting a platform and searching across all
+platforms. Enterprise WeChat access is scoped to one explicitly configured
+local account.
 
 The first delivery covers conversations, contacts/groups, media viewing, filtered
 search, export, synchronization and settings. Statistics, reports and
 platform-specific features follow as part of the full WeFlow feature alignment.
-The UI reference is the user's local `noema_mimo_motion_showcase.html`.
+The UI visual direction was informed by a local HTML reference; the reference
+file and its machine-specific path are not part of this repository.

@@ -4,6 +4,8 @@ Windows 本机聊天记录查询工具，统一微信、企业微信和 QQ 的�
 
 需要不依赖本机 Python/Node 的便携版时，按 [Windows 打包说明](docs/windows-package.md) 构建；发布包包含独立 MCP 启动器和经校验的 NapCat/QCE 运行时。
 
+发送能力（QQ、企业微信机器人、个人微信）默认全部关闭，开启后每条消息都要在本机界面逐条审批才会投递；MCP 只能创建待审批请求和查状态，不能审批或发送。
+
 微信和企业微信使用仓库内置的本地读取代码；QQ 随工具提供 NapCat/QCE，复用 QQ Chat Exporter 的历史记录读取链路。QQ 需要本人完成本机登录，服务启动与账号在线是两个不同状态。未连接的数据源不会填充演示记录。
 
 运行说明与第一阶段边界见 [本地工具说明](docs/LOCAL_HUB.md)，代码来源和许可证见 [UPSTREAM.md](UPSTREAM.md)。年度/双人报告、朋友圈和 WeFlow 的其他专属功能尚未移植到统一 WebUI。

@@ -2459,13 +2459,13 @@ export default function SnsPage() {
                             </div>
                             <div className="sns-protect-title">朋友圈防删除</div>
                             <div className={`sns-protect-status-badge ${triggerInstalled ? 'on' : 'off'}`}>
-                                {triggerLoading ? '检查中…' : triggerInstalled ? '已启用' : '未启用'}
+                            {triggerLoading ? '检查中…' : '只读状态'}
                             </div>
                         </div>
 
                         {/* 说明 */}
                         <div className="sns-protect-desc">
-                            启用后，WeFlow将拦截朋友圈删除操作<br/>已同步的动态不会从本地数据库中消失<br/>新的动态仍可正常同步。
+                            源客户端修改当前已禁用<br/>此处仅可检查现有状态<br/>完成原生实现审查、备份与授权流程前不会修改微信数据库。
                         </div>
 
                         {/* 操作反馈 */}
@@ -2476,59 +2476,21 @@ export default function SnsPage() {
                             </div>
                         )}
 
-                        {/* 操作按钮 */}
                         <div className="sns-protect-actions">
-                            {!triggerInstalled ? (
-                                <button
-                                    className="sns-protect-btn primary"
-                                    disabled={triggerLoading}
-                                    onClick={async () => {
-                                        setTriggerLoading(true)
-                                        setTriggerMessage(null)
-                                        try {
-                                            const r = await window.electronAPI.sns.installBlockDeleteTrigger()
-                                            if (r.success) {
-                                                setTriggerInstalled(true)
-                                                setTriggerMessage({ type: 'success', text: r.alreadyInstalled ? '插件已存在，无需重复安装' : '已启用朋友圈防删除保护' })
-                                            } else {
-                                                setTriggerMessage({ type: 'error', text: r.error || '安装失败' })
-                                            }
-                                        } catch (e: any) {
-                                            setTriggerMessage({ type: 'error', text: e.message || String(e) })
-                                        } finally {
-                                            setTriggerLoading(false)
-                                        }
-                                    }}
-                                >
-                                    <Shield size={15} />
-                                    启用保护
-                                </button>
-                            ) : (
-                                <button
-                                    className="sns-protect-btn danger"
-                                    disabled={triggerLoading}
-                                    onClick={async () => {
-                                        setTriggerLoading(true)
-                                        setTriggerMessage(null)
-                                        try {
-                                            const r = await window.electronAPI.sns.uninstallBlockDeleteTrigger()
-                                            if (r.success) {
-                                                setTriggerInstalled(false)
-                                                setTriggerMessage({ type: 'success', text: '已关闭朋友圈防删除保护' })
-                                            } else {
-                                                setTriggerMessage({ type: 'error', text: r.error || '卸载失败' })
-                                            }
-                                        } catch (e: any) {
-                                            setTriggerMessage({ type: 'error', text: e.message || String(e) })
-                                        } finally {
-                                            setTriggerLoading(false)
-                                        }
-                                    }}
-                                >
-                                    <ShieldOff size={15} />
-                                    关闭保护
-                                </button>
-                            )}
+                            <button className="sns-protect-btn" disabled={triggerLoading} onClick={async () => {
+                                setTriggerLoading(true)
+                                try {
+                                    const r = await window.electronAPI.sns.checkBlockDeleteTrigger()
+                                    setTriggerInstalled(r.success ? (r.installed ?? false) : false)
+                                } catch {
+                                    setTriggerInstalled(false)
+                                } finally {
+                                    setTriggerLoading(false)
+                                }
+                            }}>
+                                <RefreshCw size={15} />
+                                刷新状态
+                            </button>
                         </div>
                     </div>
                 </div>

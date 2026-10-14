@@ -18,11 +18,137 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install pinned Rust GNU toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.1-x86_64-pc-windows-gnu --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install Rust 1.98.1 GNU toolchain.' }
+          rustup default 1.98.1-x86_64-pc-windows-gnu
+          rustup target add x86_64-pc-windows-gnu --toolchain 1.98.1-x86_64-pc-windows-gnu
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install Windows GNU target.' }
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW64
+          update: true
+      - name: Install checksum-pinned MinGW GCC 16.2.0
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $packages = @(
+            @{ File = 'mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '97f6eb042afbb1d27237a4479ea444acb3d594789bba5e0182360d2c4b983b88' },
+            @{ File = 'mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '6cc48c5efe5ebab70a1ee1f6806c422205d5515c0f50d7a0e6a67336268c2afe' },
+            @{ File = 'mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst'; Url = 'https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-libstdc%2B%2B-16.2.0-5-any.pkg.tar.zst'; Sha256 = '2ec9a91ce896249b1a440a44e1bc0126f82efb540955827adec30e83a9bfb1f6' }
+          )
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'lmh-pinned-gcc'
+          New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
+          $packagePaths = foreach ($package in $packages) {
+            $path = Join-Path $packageRoot $package.File
+            Invoke-WebRequest -Uri $package.Url -OutFile $path
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $package.Sha256) { throw "SHA-256 mismatch for $($package.File)." }
+            $path
+          }
+          $pacman = Join-Path $env:MSYS2_LOCATION 'usr\bin\pacman.exe'
+          & $pacman -U --noconfirm @packagePaths
+          if ($LASTEXITCODE -ne 0) { throw 'Installing checksum-pinned MinGW GCC packages failed.' }
+          $gcc = Join-Path $env:MSYS2_LOCATION 'mingw64\bin\gcc.exe'
+          $version = & $gcc --version | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '\s16\.2\.0(?:\s|$)') { throw "Expected GCC 16.2.0, found $version." }
+      - name: Add MinGW linker to PATH
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:MSYS2_LOCATION 'mingw64\bin')
       - name: Install public test dependencies
         run: python -m pip install -r requirements-ci.txt
+      - name: Install locked root dependencies for the portable runtime
+        shell: pwsh
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Installing the locked root npm dependencies failed.' }
+          node node_modules/ffmpeg-static/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Installing the package-pinned FFmpeg binary failed.' }
+          if (-not (Test-Path -LiteralPath 'node_modules/ffmpeg-static/ffmpeg.exe' -PathType Leaf)) {
+            throw 'The locked ffmpeg-static package did not install its Windows binary.'
+          }
       - name: Run local hub checks
         shell: pwsh
         run: ./scripts/check-local-hub.ps1
+      - name: Check committed changes for whitespace errors
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ($env:BASE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'Could not determine the base commit for whitespace checking.' }
+          $LASTEXITCODE = 0
+          if ($env:BASE_SHA -match '^0{40}$') {
+            Write-Output 'No base commit exists; skipping committed-range whitespace checking for the initial push.'
+          } else {
+            git fetch --no-tags --depth=1 origin $env:BASE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the base commit for whitespace checking.' }
+            git diff --check $env:BASE_SHA HEAD
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Committed changes contain whitespace errors.' }
+      - name: Build and smoke-test Windows portable package
+        shell: pwsh
+        run: ./scripts/build-windows-portable.ps1 -OutputPath ./output/windows/LocalMessageHub-portable-ci
       - name: Build and smoke-test Windows source bundle
         shell: pwsh
         run: ./scripts/package-windows-source.ps1 -OutputPath ./output/windows/LocalMessageHub-source.zip
+      - name: Write package provenance manifest
+        shell: pwsh
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: >-
+          ./scripts/write-package-manifest.ps1
+          -PortablePath ./output/windows/LocalMessageHub-portable-ci
+          -SourceBundlePath ./output/windows/LocalMessageHub-source.zip
+          -CommitSha $env:COMMIT_SHA
+          -WorkflowRunId $env:WORKFLOW_RUN_ID
+          -BuildContext hosted-ci
+          -OutputPath ./output/windows/LocalMessageHub-artifact-manifest.json
+      - name: Verify package manifest against upload inputs
+        shell: pwsh
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: >-
+          ./scripts/verify-package-manifest.ps1
+          -ManifestPath ./output/windows/LocalMessageHub-artifact-manifest.json
+          -PortablePath ./output/windows/LocalMessageHub-portable-ci
+          -SourceBundlePath ./output/windows/LocalMessageHub-source.zip
+          -CommitSha $env:COMMIT_SHA
+          -WorkflowRunId $env:WORKFLOW_RUN_ID
+          -BuildContext hosted-ci
+      - name: Upload Windows release packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalMessageHub-windows-release
+          path: |
+            output/windows/LocalMessageHub-portable-ci/
+            output/windows/LocalMessageHub-source.zip
+            output/windows/LocalMessageHub-artifact-manifest.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Download and verify uploaded release packages
+        uses: actions/download-artifact@v4
+        with:
+          name: LocalMessageHub-windows-release
+          path: output/windows/uploaded-release
+      - name: Verify downloaded artifact bytes and provenance
+        shell: pwsh
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: >-
+          ./scripts/verify-package-manifest.ps1
+          -ManifestPath ./output/windows/uploaded-release/LocalMessageHub-artifact-manifest.json
+          -PortablePath ./output/windows/uploaded-release/LocalMessageHub-portable-ci
+          -SourceBundlePath ./output/windows/uploaded-release/LocalMessageHub-source.zip
+          -CommitSha $env:COMMIT_SHA
+          -WorkflowRunId $env:WORKFLOW_RUN_ID
+          -BuildContext hosted-ci

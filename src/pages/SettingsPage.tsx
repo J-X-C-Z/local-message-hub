@@ -2336,7 +2336,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
         <div className="anti-revoke-hero">
           <div className="anti-revoke-hero-main">
             <h3>防撤回</h3>
-            <p>你可以根据会话进行防撤回部署，安装后无需保持 WeFlow 运行即可实现防撤回</p>
+            <p>当前仅支持只读检查已有触发器状态；防撤回部署尚不可用，也不会修改微信数据库。</p>
           </div>
           <div className="anti-revoke-metrics">
             <div className="anti-revoke-metric is-total">
@@ -2393,17 +2393,10 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
 
           <div className="anti-revoke-batch-actions">
             <div className="anti-revoke-batch-copy">
-              <span className="anti-revoke-section-label">批量部署</span>
-              <span>对已选会话执行防撤回安装或卸载</span>
+              <span className="anti-revoke-section-label">只读状态</span>
+              <span>源客户端修改当前已禁用；可刷新查看已有触发器状态</span>
             </div>
-            <div className="anti-revoke-btn-group anti-revoke-batch-btns">
-              <button className="btn btn-primary btn-sm" onClick={() => void handleInstallAntiRevokeTriggers()} disabled={busy || selectedCount === 0}>
-                {isAntiRevokeInstalling ? '安装中...' : '批量安装'}
-              </button>
-              <button className="btn btn-secondary btn-sm" onClick={() => void handleUninstallAntiRevokeTriggers()} disabled={busy || selectedCount === 0}>
-                {isAntiRevokeUninstalling ? '卸载中...' : '批量卸载'}
-              </button>
-            </div>
+            <span className="muted small">完成原生实现审查、备份与授权流程前，不会修改微信数据库</span>
           </div>
         </div>
 

@@ -31,6 +31,7 @@ use crate::api::routes::roaming;
 use crate::api::state::{MessageCacheEntry, RunMode, SharedState, CACHE_EXPIRE_TIME_MS};
 
 const MAX_MESSAGE_CACHE_ENTRIES: usize = 64;
+const MAX_MESSAGE_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_QUEUED_TASKS: usize = 1000;
 const MAX_CACHED_MESSAGES_PER_ENTRY: usize = 20_000;
 const MAX_ROAMING_SCAN_DAYS: i64 = 1_461;
@@ -67,6 +68,142 @@ fn now_ms() -> i64 {
 /// 当前 ISO 时间串。
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn message_cache_key(
+    chat_type: i64,
+    peer_uid: &str,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+) -> String {
+    let end = end_time.map_or_else(|| "latest".to_string(), |value| value.to_string());
+    format!("{chat_type}_{peer_uid}_{}_{}", start_time.unwrap_or(0), end)
+}
+
+fn prune_expired_message_cache(cache: &mut HashMap<String, MessageCacheEntry>, now: i64) {
+    cache.retain(|_, entry| now.saturating_sub(entry.last_update) <= CACHE_EXPIRE_TIME_MS);
+}
+
+// shortcut: estimated JSON heap size, not resident bytes; upgrade after allocation profiling.
+fn estimated_json_size(value: &Value) -> usize {
+    const NODE_OVERHEAD: usize = 128;
+    match value {
+        Value::String(value) => NODE_OVERHEAD.saturating_add(value.len()),
+        Value::Array(values) => values.iter().fold(NODE_OVERHEAD, |size, value| {
+            size.saturating_add(estimated_json_size(value))
+        }),
+        Value::Object(values) => values.iter().fold(NODE_OVERHEAD, |size, (key, value)| {
+            size.saturating_add(key.len())
+                .saturating_add(estimated_json_size(value))
+        }),
+        _ => NODE_OVERHEAD,
+    }
+}
+
+fn make_message_cache_room(cache: &mut HashMap<String, MessageCacheEntry>, incoming_bytes: usize) {
+    while cache.len() >= MAX_MESSAGE_CACHE_ENTRIES
+        || cache
+            .values()
+            .map(|entry| entry.estimated_bytes)
+            .fold(incoming_bytes, usize::saturating_add)
+            > MAX_MESSAGE_CACHE_BYTES
+    {
+        let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_update)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
+}
+
+#[cfg(test)]
+mod message_cache_tests {
+    use super::{
+        estimated_json_size, make_message_cache_room, message_cache_key,
+        prune_expired_message_cache, CACHE_EXPIRE_TIME_MS, MAX_MESSAGE_CACHE_BYTES,
+    };
+    use crate::api::state::MessageCacheEntry;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn latest_query_key_is_stable_and_distinct_from_explicit_end_time() {
+        assert_eq!(message_cache_key(1, "peer", None, None), "1_peer_0_latest");
+        assert_eq!(message_cache_key(1, "peer", None, None), "1_peer_0_latest");
+        assert_ne!(
+            message_cache_key(1, "peer", None, None),
+            message_cache_key(1, "peer", None, Some(123))
+        );
+    }
+
+    #[test]
+    fn each_fetch_prunes_expired_entries_even_for_other_peers() {
+        let mut cache = HashMap::from([
+            (
+                "active".to_string(),
+                MessageCacheEntry {
+                    messages: vec![json!({"msgId": "active"})],
+                    estimated_bytes: 256,
+                    last_update: 1_001,
+                    has_more: false,
+                },
+            ),
+            (
+                "expired".to_string(),
+                MessageCacheEntry {
+                    messages: vec![json!({"msgId": "expired"})],
+                    estimated_bytes: 256,
+                    last_update: 1,
+                    has_more: false,
+                },
+            ),
+        ]);
+
+        prune_expired_message_cache(&mut cache, 1_000 + CACHE_EXPIRE_TIME_MS + 1);
+
+        assert!(cache.contains_key("active"));
+        assert!(!cache.contains_key("expired"));
+    }
+
+    #[test]
+    fn cache_size_estimate_includes_nested_payloads() {
+        let small = estimated_json_size(&json!({"text": "hello"}));
+        let large = estimated_json_size(&json!({"text": "x".repeat(1024)}));
+        assert!(large > small);
+    }
+
+    #[test]
+    fn cache_budget_evicts_oldest_entries_without_truncating_payloads() {
+        let mut cache = HashMap::from([
+            (
+                "old".to_string(),
+                MessageCacheEntry {
+                    messages: vec![json!({"msgId": "old"})],
+                    estimated_bytes: MAX_MESSAGE_CACHE_BYTES / 2,
+                    last_update: 1,
+                    has_more: false,
+                },
+            ),
+            (
+                "new".to_string(),
+                MessageCacheEntry {
+                    messages: vec![json!({"msgId": "new"})],
+                    estimated_bytes: MAX_MESSAGE_CACHE_BYTES / 2,
+                    last_update: 2,
+                    has_more: false,
+                },
+            ),
+        ]);
+
+        make_message_cache_room(&mut cache, MAX_MESSAGE_CACHE_BYTES / 2);
+
+        assert!(!cache.contains_key("old"));
+        assert!(cache.contains_key("new"));
+        assert_eq!(cache["new"].messages[0]["msgId"], "new");
+    }
 }
 
 /// 10 位秒级时间戳转毫秒（TS 同款启发式）。
@@ -626,11 +763,7 @@ pub async fn fetch_messages(
     }
 
     let now = now_ms();
-    let cache_key = format!(
-        "{chat_type}_{peer_uid}_{}_{}",
-        start_time.unwrap_or(0),
-        end_time.unwrap_or(now)
-    );
+    let cache_key = message_cache_key(chat_type, &peer_uid, start_time, end_time);
 
     if force_refresh {
         state
@@ -640,11 +773,8 @@ pub async fn fetch_messages(
 
     let cached = {
         let mut cache = state.message_cache.lock().await;
+        prune_expired_message_cache(&mut cache, now);
         match cache.get(&cache_key) {
-            Some(entry) if now - entry.last_update > CACHE_EXPIRE_TIME_MS => {
-                cache.remove(&cache_key);
-                None
-            }
             Some(entry) => Some(entry.clone()),
             None => None,
         }
@@ -822,21 +952,21 @@ pub async fn fetch_messages(
 
     let has_next = all_messages.len() > end_index || has_more;
     let paginated = paginate_response(&all_messages, has_next, cache_hit);
-    if all_messages.len() <= MAX_CACHED_MESSAGES_PER_ENTRY {
+    let estimated_bytes = all_messages
+        .iter()
+        .map(estimated_json_size)
+        .fold(0usize, usize::saturating_add);
+    if all_messages.len() <= MAX_CACHED_MESSAGES_PER_ENTRY
+        && estimated_bytes <= MAX_MESSAGE_CACHE_BYTES
+    {
         let mut cache = state.message_cache.lock().await;
-        if cache.len() >= MAX_MESSAGE_CACHE_ENTRIES && !cache.contains_key(&cache_key) {
-            if let Some(oldest_key) = cache
-                .iter()
-                .min_by_key(|(_, entry)| entry.last_update)
-                .map(|(key, _)| key.clone())
-            {
-                cache.remove(&oldest_key);
-            }
-        }
+        cache.remove(&cache_key);
+        make_message_cache_room(&mut cache, estimated_bytes);
         cache.insert(
             cache_key,
             MessageCacheEntry {
                 messages: all_messages,
+                estimated_bytes,
                 last_update: now_ms(),
                 has_more,
             },
@@ -3428,8 +3558,8 @@ mod file_name_tests {
     #[test]
     fn sanitizes_windows_unsafe_and_reserved_components() {
         assert_eq!(
-            sanitize_chat_name(" AxT<>:\"/\\|?* 鸽子窝. ", 64),
-            "AxT_鸽子窝"
+            sanitize_chat_name(" Test<>:\"/\\|?* Synthetic Group. ", 64),
+            "Test_Synthetic_Group"
         );
         assert_eq!(sanitize_chat_name("CON.", 64), "_CON");
         assert_eq!(sanitize_chat_name("Lpt9", 64), "_Lpt9");
@@ -3441,28 +3571,28 @@ mod file_name_tests {
         assert_eq!(
             build_export_file_name(
                 "friend",
-                "1687657986",
-                "笨蛋Darf v2",
-                "20260712",
-                "163632123",
+                "100000001",
+                "测试联系人 v2",
+                "20240102",
+                "030405006",
                 "html",
                 false,
                 false,
             ),
-            "friend_笨蛋Darf_v2_1687657986_20260712_163632123.html"
+            "friend_测试联系人_v2_100000001_20240102_030405006.html"
         );
         assert_eq!(
             build_export_dir_name(
                 "group",
-                "960420904",
-                "AxT 鸽子窝",
-                "20260712",
-                "163632123",
+                "900000001",
+                "测试群组",
+                "20240102",
+                "030405006",
                 "_chunked_jsonl",
                 false,
                 false,
             ),
-            "group_AxT_鸽子窝_960420904_20260712_163632123_chunked_jsonl"
+            "group_测试群组_900000001_20240102_030405006_chunked_jsonl"
         );
     }
 
@@ -3484,27 +3614,27 @@ mod file_name_tests {
         let base =
             std::env::temp_dir().join(format!("qce-export-name-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("friend_name_1_20260712_163632123.html"), b"old").unwrap();
+        std::fs::write(base.join("friend_name_1_20240102_030405006.html"), b"old").unwrap();
         let file_collision =
-            reserve_export_file_name(&base, "friend_name_1_20260712_163632123.html");
-        assert_eq!(file_collision, "friend_name_1_20260712_163632123_2.html");
+            reserve_export_file_name(&base, "friend_name_1_20240102_030405006.html");
+        assert_eq!(file_collision, "friend_name_1_20240102_030405006_2.html");
         release_export_path(&base.join(file_collision));
 
-        std::fs::create_dir(base.join("group_name_2_20260712_163632123_chunked_jsonl")).unwrap();
+        std::fs::create_dir(base.join("group_name_2_20240102_030405006_chunked_jsonl")).unwrap();
         let dir_collision =
-            reserve_export_file_name(&base, "group_name_2_20260712_163632123_chunked_jsonl");
+            reserve_export_file_name(&base, "group_name_2_20240102_030405006_chunked_jsonl");
         assert_eq!(
             dir_collision,
-            "group_name_2_20260712_163632123_chunked_jsonl_2"
+            "group_name_2_20240102_030405006_chunked_jsonl_2"
         );
         release_export_path(&base.join(dir_collision));
         let concurrent =
-            reserve_export_file_name(&base, "friend_concurrent_1_20260712_163632123.html");
+            reserve_export_file_name(&base, "friend_concurrent_1_20240102_030405006.html");
         let concurrent_2 =
-            reserve_export_file_name(&base, "friend_concurrent_1_20260712_163632123.html");
+            reserve_export_file_name(&base, "friend_concurrent_1_20240102_030405006.html");
         assert_eq!(
             concurrent_2,
-            "friend_concurrent_1_20260712_163632123_2.html"
+            "friend_concurrent_1_20240102_030405006_2.html"
         );
         release_export_path(&base.join(concurrent));
         release_export_path(&base.join(concurrent_2));

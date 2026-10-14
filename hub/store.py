@@ -44,10 +44,32 @@ MESSAGE_TYPES = ("text", "image", "video", "voice", "file", "link", "system")
 #: Message types that are considered media.
 MEDIA_TYPES = ("image", "video", "voice", "file")
 
+
+def media_message_predicate(alias="m"):
+    """SQL predicate for message rows that carry media, including indexed attachments."""
+    return f"""(({alias}.type IN ('image','video','voice','file') AND NOT (
+        {alias}.platform='wechat' AND COALESCE({alias}.raw_type,'') IN ('47','11000')
+    )) OR (
+        {alias}.platform='wecom' AND CASE WHEN json_valid({alias}.extra) THEN CASE
+            WHEN json_type({alias}.extra,'$.attachments')='array'
+            THEN json_array_length({alias}.extra,'$.attachments') ELSE 0 END ELSE 0 END > 0
+    ) OR (
+        {alias}.platform='qq' AND CASE WHEN json_valid({alias}.extra) THEN CASE
+            WHEN json_type({alias}.extra,'$.roaming_resources')='array'
+            THEN json_array_length({alias}.extra,'$.roaming_resources')
+            WHEN json_type({alias}.extra,'$.media')='array'
+            THEN json_array_length({alias}.extra,'$.media') ELSE 0 END ELSE 0 END > 0
+    ))"""
+
 #: UTC+08:00, the timezone used for all human-facing date interpretation.
 CST = timezone(timedelta(hours=8))
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 9
+
+_MOMENT_POST_FIELDS = ("id", "username", "nickname", "createTime", "contentDesc",
+                       "type", "likes", "comments", "location")
+_MOMENT_MEDIA_FIELDS = ("type", "mime_type", "width", "height", "size", "file_size",
+                        "duration", "orientation", "local_available")
 
 _CONVERSATION_FIELDS = (
     "id",
@@ -97,6 +119,13 @@ _PREVIEW_LABELS = {
     "system": "[系统消息]",
     "text": "",
 }
+_PREVIEW_MARKUP_RE = re.compile(r"<[^>]{1,512}>")
+_PREVIEW_CREDENTIAL_RE = re.compile(
+    r"(?i)\b(?:access[_-]?token|refresh[_-]?token|authorization|password|passwd|"
+    r"client[_-]?secret|session[_-]?(?:key|token)|api[_-]?key|token|secret|cookie)\b\s*[:=]"
+)
+_PREVIEW_URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>]+")
+_PREVIEW_LIMIT = 240
 
 _ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _INT_RE = re.compile(r"^[+-]?\d+$")
@@ -141,7 +170,10 @@ def _preview(message) -> str:
     """Return the short preview string stored on the conversation row."""
     text = (message.get("text") or "").strip()
     if text:
-        return text
+        text = _PREVIEW_URL_RE.sub("[链接]", text)
+        if _PREVIEW_MARKUP_RE.search(text) or _PREVIEW_CREDENTIAL_RE.search(text):
+            return "[结构化消息]"
+        return text[:_PREVIEW_LIMIT] + ("…" if len(text) > _PREVIEW_LIMIT else "")
     mtype = (message.get("type") or "text").lower()
     return _PREVIEW_LABELS.get(mtype, "")
 
@@ -257,7 +289,7 @@ def _dump_extra(source: dict):
 
 
 _KNOWN_KEYS = set(_CONVERSATION_FIELDS) | set(_MESSAGE_FIELDS) | set(_CONTACT_FIELDS)
-_KNOWN_KEYS.update({"preview", "extra", "conversation_title"})
+_KNOWN_KEYS.update({"preview", "extra", "conversation_title", "server_id"})
 
 
 class ChatStore:
@@ -318,6 +350,7 @@ class ChatStore:
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_conv_ts ON messages(platform, account_id, conversation_id, timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_platform_ts ON messages(platform, timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_platform_type ON messages(platform, type)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_platform_ts ON conversations(platform, last_timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_contact_platform ON contacts(platform)")
@@ -381,6 +414,29 @@ class ChatStore:
                     )
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_operation_log_timestamp ON operation_log(timestamp DESC)")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS moments_catalog (
+                        account_id TEXT PRIMARY KEY, catalogued_at INTEGER NOT NULL,
+                        post_count INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS moments_posts (
+                        account_id TEXT NOT NULL, id TEXT NOT NULL, timestamp INTEGER NOT NULL,
+                        username TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL,
+                        PRIMARY KEY (account_id, id),
+                        FOREIGN KEY (account_id) REFERENCES moments_catalog(account_id) ON DELETE CASCADE
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_moments_posts_page ON moments_posts(account_id, timestamp DESC, id DESC)")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS moments_media (
+                        account_id TEXT NOT NULL, post_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                        payload TEXT NOT NULL, cache_locator TEXT,
+                        PRIMARY KEY (account_id, post_id, ordinal),
+                        FOREIGN KEY (account_id, post_id) REFERENCES moments_posts(account_id, id) ON DELETE CASCADE
+                    )
+                """)
                 conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
                 conn.execute("COMMIT")
             except Exception:
@@ -442,6 +498,9 @@ class ChatStore:
     @staticmethod
     def _row_to_conversation(row) -> dict:
         data = {f: row[f] for f in _CONVERSATION_FIELDS}
+        data["last_message"] = _preview({"text": data["last_message"]})
+        if "display_avatar_url" in row.keys():
+            data["avatar_url"] = row["display_avatar_url"] or data["avatar_url"]
         data["member_count"] = (
             None if row["member_count"] is None else int(row["member_count"])
         )
@@ -462,11 +521,17 @@ class ChatStore:
         data["timestamp"] = int(row["timestamp"] or 0)
         data["is_self"] = bool(row["is_self"])
         data["extra"] = _load_extra(row["extra"])
+        data["extra"].pop("_hub_wechat_server_id", None)
+        quote = data["extra"].get("wechat_quote")
+        if isinstance(quote, dict):
+            quote.pop("target_server_id", None)
         keys = row.keys()
         if "conversation_title" in keys:
             data["conversation_title"] = row["conversation_title"]
         if "conversation_kind" in keys:
             data["conversation_kind"] = row["conversation_kind"]
+        if "conversation_avatar_url" in keys:
+            data["conversation_avatar_url"] = row["conversation_avatar_url"]
         return data
 
     @staticmethod
@@ -489,9 +554,9 @@ class ChatStore:
         """
         platform = self._validate_platform(platform)
         account_id = _sid(account_id)
-        conversations = list(conversations or [])
-        messages = list(messages or [])
-        contacts = list(contacts or [])
+        conversations = conversations if conversations is not None else ()
+        messages = messages if messages is not None else ()
+        contacts = contacts if contacts is not None else ()
 
         with self._lock:
             conn = self._require_connection()
@@ -658,6 +723,10 @@ class ChatStore:
         )
 
     def _upsert_contact(self, conn, platform, account_id, contact) -> None:
+        extra = contact.get("extra") if isinstance(contact.get("extra"), dict) else {}
+        inferred_extra = _load_extra(_dump_extra(contact))
+        if inferred_extra:
+            extra = {**inferred_extra, **extra}
         conn.execute(
             """
             INSERT INTO contacts
@@ -676,7 +745,8 @@ class ChatStore:
                 contact.get("name"),
                 contact.get("avatar_url"),
                 contact.get("kind"),
-                _dump_extra(contact),
+                json.dumps(extra, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                if extra else None,
             ),
         )
 
@@ -742,14 +812,17 @@ class ChatStore:
                 f"""
                 SELECT c.*, COALESCE(cm.note, '') AS note,
                        COALESCE(cm.tags, '[]') AS tags,
-                       COALESCE(cm.archived, 0) AS archived
+                       COALESCE(cm.archived, 0) AS archived,
+                       (SELECT p.avatar_url FROM contacts p
+                        WHERE p.platform=c.platform AND p.account_id=c.account_id
+                          AND p.id=c.id LIMIT 1) AS display_avatar_url
                 FROM conversations c
                 LEFT JOIN conversation_metadata cm
                   ON cm.platform = c.platform AND cm.account_id = c.account_id
                  AND cm.conversation_id = c.id
                 WHERE 1=1{self._scope_clause(platform, 'c.platform')[0]}
                   {"AND c.title LIKE ? ESCAPE '\\'" if q else ""}
-                ORDER BY (c.last_timestamp IS NULL), c.last_timestamp DESC, c.id ASC
+                ORDER BY c.last_timestamp DESC, c.id ASC
                 LIMIT ? OFFSET ?
                 """,
                 self._scope_clause(platform, 'c.platform')[1] + ([ _like_pattern(q)] if q else []) + [limit, offset],
@@ -758,6 +831,15 @@ class ChatStore:
             "items": [self._row_to_conversation(r) for r in rows],
             "total": int(total),
         }
+
+    def get_conversation(self, platform, account_id, conversation_id):
+        platform = self._validate_platform(platform)
+        with self._lock:
+            row = self._require_connection().execute(
+                "SELECT * FROM conversations WHERE platform=? AND account_id=? AND id=?",
+                (platform, _sid(account_id), _sid(conversation_id)),
+            ).fetchone()
+        return self._row_to_conversation(row) if row else None
 
     def messages(
         self,
@@ -792,8 +874,8 @@ class ChatStore:
         cursor_sql = ""
         cursor_params = []
         if decoded_cursor:
-            cursor_sql = " AND (timestamp < ? OR (timestamp = ? AND rowid < ?))"
-            cursor_params = [decoded_cursor[0], decoded_cursor[0], decoded_cursor[1]]
+            cursor_sql = " AND (timestamp, rowid) < (?, ?)"
+            cursor_params = [decoded_cursor[0], decoded_cursor[1]]
         with self._lock:
             conn = self._require_connection()
             total = conn.execute(
@@ -811,7 +893,7 @@ class ChatStore:
         total = int(total)
         has_more = len(rows) > limit
         rows = rows[:limit]
-        items = [self._row_to_message(r) for r in rows]
+        items = self._attach_sender_avatars([self._row_to_message(r) for r in rows])
         next_cursor = _encode_cursor(rows[-1]["timestamp"], rows[-1]["_cursor_rowid"],
                                      _cursor_scope([platform, account_id, conversation_id, q, type, start, end])) if has_more and rows else None
         return {
@@ -829,15 +911,171 @@ class ChatStore:
                 'SELECT * FROM messages WHERE platform=? AND account_id=? AND id=?',
                 (_sid(platform), _sid(account_id), _sid(message_id)),
             ).fetchone()
-        return self._row_to_message(row) if row else None
+        return self._attach_sender_avatars([self._row_to_message(row)])[0] if row else None
 
-    def message_context(self, platform, account_id, message_id, before=5, after=5):
+    def quoted_message_target(self, platform, account_id, conversation_id,
+                              referencing_message_id, source_id):
+        source_id = str(source_id or '')
+        if platform != 'wechat' or not re.fullmatch(r'[1-9][0-9]{0,19}', source_id):
+            return None
+        with self._lock:
+            conn = self._require_connection()
+            reference = conn.execute("""
+                SELECT extra FROM messages
+                WHERE platform='wechat' AND account_id=? AND conversation_id=? AND id=?
+            """, (_sid(account_id), _sid(conversation_id),
+                  _sid(referencing_message_id))).fetchone()
+            if not reference:
+                return None
+            quote = _load_extra(reference['extra']).get('wechat_quote')
+            if not isinstance(quote, dict) or quote.get('target_server_id') != source_id:
+                return None
+            rows = conn.execute("""
+                SELECT id FROM messages
+                WHERE platform='wechat' AND account_id=? AND conversation_id=?
+                  AND json_valid(extra)
+                  AND json_extract(extra, '$._hub_wechat_server_id')=?
+                LIMIT 2
+            """, (_sid(account_id), _sid(conversation_id), source_id)).fetchall()
+        return rows[0]['id'] if len(rows) == 1 else None
+
+    def quoted_message_target_for_reference(self, platform, account_id, conversation_id,
+                                             referencing_message_id):
+        """Resolve a quote using only the canonical identity of its reference row."""
+        if platform != 'wechat':
+            return None
+        with self._lock:
+            conn = self._require_connection()
+            reference = conn.execute("""
+                SELECT extra FROM messages
+                WHERE platform='wechat' AND account_id=? AND conversation_id=? AND id=?
+            """, (_sid(account_id), _sid(conversation_id),
+                  _sid(referencing_message_id))).fetchone()
+            quote = _load_extra(reference['extra']).get('wechat_quote') if reference else None
+            source_id = quote.get('target_server_id') if isinstance(quote, dict) else None
+            if not isinstance(source_id, str) or not re.fullmatch(r'[1-9][0-9]{0,19}', source_id):
+                return None
+            rows = conn.execute("""
+                SELECT id FROM messages
+                WHERE platform='wechat' AND account_id=? AND conversation_id=?
+                  AND json_valid(extra)
+                  AND json_extract(extra, '$._hub_wechat_server_id')=?
+                LIMIT 2
+            """, (_sid(account_id), _sid(conversation_id), source_id)).fetchall()
+        return rows[0]['id'] if len(rows) == 1 else None
+
+    def attach_quoted_message_previews(self, items):
+        """Batch-enrich one already-paged message result; never query per quote."""
+        refs = [item for item in items if item.get('platform') == 'wechat'
+                and isinstance(item.get('extra', {}).get('wechat_quote'), dict)]
+        if not refs:
+            return items
+        scopes = {(item['account_id'], item['conversation_id']) for item in refs}
+        with self._lock:
+            conn = self._require_connection()
+            source_by_ref = {}
+            for account, conversation in scopes:
+                ids = [item['id'] for item in refs if item['account_id'] == account
+                       and item['conversation_id'] == conversation]
+                if not ids:
+                    continue
+                slots = ','.join('?' for _ in ids)
+                rows = conn.execute(f"""
+                    SELECT id, extra FROM messages WHERE platform='wechat'
+                      AND account_id=? AND conversation_id=? AND id IN ({slots})
+                """, [account, conversation, *ids]).fetchall()
+                for row in rows:
+                    quote = _load_extra(row['extra']).get('wechat_quote')
+                    source = quote.get('target_server_id') if isinstance(quote, dict) else None
+                    if isinstance(source, str) and re.fullmatch(r'[1-9][0-9]{0,19}', source):
+                        source_by_ref[(account, conversation, row['id'])] = source
+            candidates = {}
+            for account, conversation in scopes:
+                sources = list({source for (a, c, _), source in source_by_ref.items()
+                                if a == account and c == conversation})
+                if not sources:
+                    continue
+                slots = ','.join('?' for _ in sources)
+                rows = conn.execute(f"""
+                    SELECT id, account_id, conversation_id, extra
+                    FROM messages WHERE platform='wechat' AND account_id=? AND conversation_id=?
+                      AND json_valid(extra)
+                      AND json_extract(extra, '$._hub_wechat_server_id') IN ({slots})
+                """, [account, conversation, *sources]).fetchall()
+                for row in rows:
+                    key = (row['account_id'], row['conversation_id'],
+                           _load_extra(row['extra']).get('_hub_wechat_server_id'))
+                    candidates.setdefault(key, []).append(row['id'])
+        for item in refs:
+            quote = item['extra']['wechat_quote']
+            source = source_by_ref.get((item['account_id'], item['conversation_id'], item['id']))
+            matches = candidates.get((item['account_id'], item['conversation_id'], source), [])
+            if source and len(matches) == 1:
+                quote['target_message_id'] = matches[0]
+        return items
+
+    def message_rowid(self):
+        with self._lock:
+            row = self._require_connection().execute(
+                "SELECT COALESCE(MAX(rowid), 0) FROM messages").fetchone()
+            return int(row[0])
+
+    def incoming_message_events(self, after_rowid, limit=100):
+        """Return body-free metadata for newly indexed incoming messages."""
+        after_rowid = max(0, int(after_rowid))
+        limit = min(max(int(limit), 1), 100)
+        with self._lock:
+            rows = self._require_connection().execute("""
+                SELECT m.rowid AS event_id, m.platform, m.account_id,
+                       m.conversation_id, c.title AS conversation_title,
+                       c.kind AS conversation_kind, m.sender_name, m.timestamp,
+                       m.type, m.is_self
+                FROM messages AS m
+                LEFT JOIN conversations AS c
+                  ON c.platform=m.platform AND c.account_id=m.account_id
+                 AND c.id=m.conversation_id
+                WHERE m.rowid>? AND m.is_self=0
+                ORDER BY m.rowid LIMIT ?
+            """, (after_rowid, limit)).fetchall()
+            return [dict(row) for row in rows]
+
+    def _attach_sender_avatars(self, items):
+        """Attach locally indexed contact avatars to message senders in bounded queries."""
+        groups = {}
+        for item in items:
+            sender_id = item.get("sender_id")
+            if sender_id:
+                groups.setdefault((item["platform"], item["account_id"]), set()).add(sender_id)
+        if not groups:
+            return items
+        avatars = {}
+        with self._lock:
+            conn = self._require_connection()
+            for (platform, account_id), ids in groups.items():
+                values = list(ids)
+                for offset in range(0, len(values), 800):
+                    batch = values[offset:offset + 800]
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = conn.execute(
+                        f"SELECT id, avatar_url FROM contacts WHERE platform=? AND account_id=? AND id IN ({placeholders})",
+                        [platform, account_id, *batch],
+                    ).fetchall()
+                    avatars.update({(platform, account_id, row["id"]): row["avatar_url"] for row in rows})
+        for item in items:
+            item["sender_avatar_url"] = avatars.get((item["platform"], item["account_id"], item.get("sender_id")))
+        return items
+
+    def message_context(self, platform, account_id, message_id, before=5, after=5,
+                        conversation_id=None):
         before, after = min(50, max(0, int(before))), min(50, max(0, int(after)))
         with self._lock:
             conn = self._require_connection()
             target = conn.execute(
-                "SELECT rowid, * FROM messages WHERE platform=? AND account_id=? AND id=?",
-                (_sid(platform), _sid(account_id), _sid(message_id)),
+                "SELECT rowid, * FROM messages WHERE platform=? AND account_id=? AND id=? "
+                "AND (? IS NULL OR conversation_id=?)",
+                (_sid(platform), _sid(account_id), _sid(message_id),
+                 _sid(conversation_id) if conversation_id is not None else None,
+                 _sid(conversation_id) if conversation_id is not None else None),
             ).fetchone()
             if not target:
                 return None
@@ -846,36 +1084,34 @@ class ChatStore:
                 "SELECT COUNT(*) FROM messages WHERE platform=? AND account_id=? AND conversation_id=?",
                 scope,
             ).fetchone()[0]
-            before_total = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE platform=? AND account_id=? AND conversation_id=? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))",
-                (*scope, target["timestamp"], target["timestamp"], target["rowid"]),
-            ).fetchone()[0]
             base = """
-                SELECT m.*, c.title AS conversation_title, c.kind AS conversation_kind
+                SELECT m.*, c.title AS conversation_title, c.kind AS conversation_kind,
+                       c.avatar_url AS conversation_avatar_url
                 FROM messages m LEFT JOIN conversations c
                   ON c.platform=m.platform AND c.account_id=m.account_id AND c.id=m.conversation_id
                 WHERE m.platform=? AND m.account_id=? AND m.conversation_id=?
             """
             before_rows = conn.execute(
-                base + " AND (m.timestamp < ? OR (m.timestamp = ? AND m.rowid < ?)) ORDER BY m.timestamp DESC, m.rowid DESC LIMIT ?",
-                (*scope, target["timestamp"], target["timestamp"], target["rowid"], before),
+                base + " AND (m.timestamp, m.rowid) < (?, ?) ORDER BY m.timestamp DESC, m.rowid DESC LIMIT ?",
+                (*scope, target["timestamp"], target["rowid"], before + 1),
             ).fetchall()
             after_rows = conn.execute(
-                base + " AND (m.timestamp > ? OR (m.timestamp = ? AND m.rowid > ?)) ORDER BY m.timestamp ASC, m.rowid ASC LIMIT ?",
-                (*scope, target["timestamp"], target["timestamp"], target["rowid"], after),
+                base + " AND (m.timestamp, m.rowid) > (?, ?) ORDER BY m.timestamp ASC, m.rowid ASC LIMIT ?",
+                (*scope, target["timestamp"], target["rowid"], after + 1),
             ).fetchall()
             current = conn.execute(
                 base + " AND m.rowid=?", (*scope, target["rowid"])
             ).fetchone()
-        rows = list(reversed(before_rows)) + [current] + after_rows
+        rows = list(reversed(before_rows[:before])) + [current] + after_rows[:after]
         return {
-            "items": [self._row_to_message(row) for row in rows],
-            "total": int(total), "target_index": len(before_rows),
-            "has_more_before": before_total > len(before_rows),
-            "has_more_after": total - before_total - 1 > len(after_rows),
+            "items": self._attach_sender_avatars([self._row_to_message(row) for row in rows]),
+            "total": int(total), "target_index": min(before, len(before_rows)),
+            "has_more_before": len(before_rows) > before,
+            "has_more_after": len(after_rows) > after,
         }
 
-    def search(self, q, platform="all", type="", start="", end="", limit=100, offset=0, cursor=None):
+    def search(self, q, platform="all", type="", start="", end="", limit=100, offset=0,
+               cursor=None, preview_chars=None):
         limit = max(0, int(limit))
         offset = max(0, int(offset))
         where = []
@@ -899,16 +1135,31 @@ class ChatStore:
         cursor_sql = ""
         cursor_params = []
         if decoded_cursor:
-            cursor_sql = (" AND " if where_sql else " WHERE ") + "(m.timestamp < ? OR (m.timestamp = ? AND m.rowid < ?))"
-            cursor_params = [decoded_cursor[0], decoded_cursor[0], decoded_cursor[1]]
+            cursor_sql = (" AND " if where_sql else " WHERE ") + "(m.timestamp, m.rowid) < (?, ?)"
+            cursor_params = [decoded_cursor[0], decoded_cursor[1]]
         with self._lock:
             conn = self._require_connection()
             total = conn.execute(
                 f"SELECT COUNT(*) FROM messages m {where_sql}", params
             ).fetchone()[0]
+            if preview_chars is None:
+                message_projection = ", ".join(f"m.{field}" for field in _MESSAGE_FIELDS)
+            else:
+                preview_chars = min(max(int(preview_chars), 1), 4096)
+                message_projection = ", ".join(
+                    f"substr(m.text, 1, {preview_chars}) AS text" if field == "text"
+                    else f"m.{field}"
+                    for field in _MESSAGE_FIELDS
+                )
             rows = conn.execute(
                 f"""
-                SELECT m.rowid AS _cursor_rowid, m.*, c.title AS conversation_title, c.kind AS conversation_kind
+                SELECT m.rowid AS _cursor_rowid, {message_projection}, m.extra,
+                       c.title AS conversation_title, c.kind AS conversation_kind,
+                       COALESCE(NULLIF(c.avatar_url, ''), (
+                           SELECT p.avatar_url FROM contacts p
+                           WHERE p.platform=m.platform AND p.account_id=m.account_id
+                             AND p.id=m.conversation_id LIMIT 1
+                       )) AS conversation_avatar_url
                 FROM messages m
                 LEFT JOIN conversations c
                   ON c.platform = m.platform
@@ -924,7 +1175,7 @@ class ChatStore:
         total = int(total)
         has_more = len(rows) > limit
         rows = rows[:limit]
-        items = [self._row_to_message(r) for r in rows]
+        items = self._attach_sender_avatars([self._row_to_message(r) for r in rows])
         next_cursor = _encode_cursor(rows[-1]["timestamp"], rows[-1]["_cursor_rowid"],
                                      _cursor_scope([q, platform, type, start, end])) if has_more and rows else None
         return {
@@ -934,7 +1185,101 @@ class ChatStore:
             "next_cursor": next_cursor,
         }
 
-    def contacts(self, platform="all", q="", limit=200, offset=0):
+    def export_page(self, platform="all", after=None, limit=500):
+        """Read an ascending, keyset-paginated batch for snapshot exports."""
+        limit = min(max(int(limit), 1), 2000)
+        where = []
+        params = []
+        scope, scope_params = self._scope_clause(platform, "m.platform")
+        if scope:
+            where.append(scope[5:])
+            params.extend(scope_params)
+        if after is not None:
+            timestamp, message_id, rowid = after
+            where.append("(m.timestamp > ? OR (m.timestamp = ? AND m.id > ?) OR "
+                         "(m.timestamp = ? AND m.id = ? AND m.rowid < ?))")
+            params.extend((timestamp, timestamp, message_id, timestamp, message_id, rowid))
+        where_sql = "WHERE " + " AND ".join(where) if where else ""
+        with self._lock:
+            conn = self._require_connection()
+            if after is None:
+                scope_where = "WHERE " + scope[5:] if scope else ""
+                total = int(conn.execute(
+                    f"SELECT COUNT(*) FROM messages m {scope_where}", scope_params
+                ).fetchone()[0])
+            else:
+                total = None
+            rows = conn.execute(f"""
+                SELECT m.rowid AS _cursor_rowid, {", ".join(f"m.{field}" for field in _MESSAGE_FIELDS)},
+                       m.extra, c.title AS conversation_title, c.kind AS conversation_kind,
+                       COALESCE(NULLIF(c.avatar_url, ''), (
+                           SELECT p.avatar_url FROM contacts p
+                           WHERE p.platform=m.platform AND p.account_id=m.account_id
+                             AND p.id=m.conversation_id LIMIT 1
+                       )) AS conversation_avatar_url
+                FROM messages m LEFT JOIN conversations c
+                  ON c.platform=m.platform AND c.account_id=m.account_id AND c.id=m.conversation_id
+                {where_sql}
+                ORDER BY m.timestamp ASC, m.id ASC, m.rowid DESC
+                LIMIT ?
+            """, [*params, limit + 1]).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = self._attach_sender_avatars([self._row_to_message(row) for row in rows])
+        next_after = None
+        if has_more and rows:
+            last = rows[-1]
+            next_after = (int(last["timestamp"] or 0), str(last["id"] or ""),
+                          int(last["_cursor_rowid"]))
+        return {"items": items, "total": total, "next_after": next_after}
+
+    def export_platforms(self, platform="all"):
+        scope, params = self._scope_clause(platform)
+        with self._lock:
+            rows = self._require_connection().execute(
+                f"SELECT DISTINCT platform FROM messages WHERE 1=1{scope} ORDER BY platform", params
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def iter_export_members(self, platform="all", batch_size=500):
+        scope, params = self._scope_clause(platform, "m.platform")
+        where = "WHERE 1=1" + scope
+        query = f"""
+            SELECT platform, account_id, sender_id, sender_name FROM (
+                SELECT m.platform, m.account_id, m.sender_id,
+                       COALESCE(NULLIF(m.sender_name, ''), m.sender_id, '未知') AS sender_name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY m.platform, m.account_id, m.sender_id
+                           ORDER BY m.timestamp ASC, m.id ASC, m.rowid DESC
+                       ) AS member_rank,
+                       m.timestamp, m.id, m.rowid
+                FROM messages m {where} AND m.sender_id IS NOT NULL AND m.sender_id != ''
+            ) WHERE member_rank=1
+            ORDER BY timestamp ASC, id ASC, rowid DESC
+        """
+        with self._lock:
+            cursor = self._require_connection().execute(query, params)
+            while True:
+                rows = cursor.fetchmany(min(max(int(batch_size), 1), 2000))
+                if not rows:
+                    break
+                batch = [dict(row) for row in rows]
+                for row in batch:
+                    yield {"platformId": row["sender_id"], "accountName": row["sender_name"],
+                           "platform": row["platform"], "accountId": row["account_id"]}
+
+    def account_scopes(self):
+        with self._lock:
+            rows = self._require_connection().execute("""
+                SELECT platform, account_id FROM conversations
+                UNION SELECT platform, account_id FROM contacts
+                UNION SELECT platform, account_id FROM messages
+                UNION SELECT 'wechat' AS platform, account_id FROM moments_posts
+                ORDER BY platform, account_id
+            """).fetchall()
+        return [{"platform": row["platform"], "account_id": row["account_id"]} for row in rows]
+
+    def contacts(self, platform="all", q="", limit=200, offset=0, account_id="", kind=""):
         limit = max(0, int(limit))
         offset = max(0, int(offset))
         where, params = ["1=1"], []
@@ -942,12 +1287,28 @@ class ChatStore:
         if scope:
             where.append(scope[5:])
             params += scope_params
+        if account_id:
+            where.append("c.account_id = ?")
+            params.append(str(account_id))
+        if kind:
+            where.append("c.kind = ?")
+            params.append(str(kind))
         if q:
-            where.append("c.name LIKE ? ESCAPE '\\'")
-            params.append(_like_pattern(q))
+            pattern = _like_pattern(q)
+            where.append("(c.name LIKE ? ESCAPE '\\' OR c.id LIKE ? ESCAPE '\\' OR "
+                         "(json_valid(c.extra) AND ("
+                         "json_extract(c.extra, '$.nickname') LIKE ? ESCAPE '\\' OR "
+                         "json_extract(c.extra, '$.nick_name') LIKE ? ESCAPE '\\' OR "
+                         "json_extract(c.extra, '$.alias') LIKE ? ESCAPE '\\' OR "
+                         "json_extract(c.extra, '$.remark') LIKE ? ESCAPE '\\')))" )
+            params.extend([pattern] * 6)
         where_sql = "WHERE " + " AND ".join(where)
         with self._lock:
             conn = self._require_connection()
+            accounts = conn.execute(
+                "SELECT DISTINCT platform, account_id FROM contacts "
+                + "ORDER BY platform, account_id",
+            ).fetchall()
             total = conn.execute(
                 f"SELECT COUNT(*) FROM contacts c {where_sql}", params
             ).fetchone()[0]
@@ -959,7 +1320,8 @@ class ChatStore:
                   ON ci.platform = c.platform AND ci.account_id = c.account_id
                  AND ci.contact_id = c.id
                 {where_sql}
-                ORDER BY c.name COLLATE NOCASE ASC, c.id ASC
+                ORDER BY c.name COLLATE NOCASE ASC, c.id ASC,
+                         c.platform ASC, c.account_id ASC
                 LIMIT ? OFFSET ?
                 """,
                 params + [limit, offset],
@@ -967,24 +1329,252 @@ class ChatStore:
         return {
             "items": [self._row_to_contact(r) for r in rows],
             "total": int(total),
+            "accounts": [{"platform": r["platform"], "account_id": r["account_id"]}
+                         for r in accounts],
         }
 
-    def media(self, platform="all", type="", q="", limit=100, offset=0):
+    def contact_avatar(self, platform, account_id, contact_id):
+        """Return one avatar URL only for the exact indexed platform/account/contact."""
+        with self._lock:
+            conn = self._require_connection()
+            row = conn.execute(
+                "SELECT avatar_url FROM contacts WHERE platform=? AND account_id=? AND id=?",
+                (str(platform), str(account_id), str(contact_id)),
+            ).fetchone()
+        return row["avatar_url"] if row else None
+
+    def contact_avatars(self, platform, account_id, contact_ids):
+        """Return indexed avatar references for exact identities in one account."""
+        ids = list(dict.fromkeys(str(value) for value in contact_ids if value))[:1000]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._lock:
+            rows = self._require_connection().execute(
+                f"SELECT id, avatar_url FROM contacts WHERE platform=? AND account_id=? "
+                f"AND id IN ({placeholders})",
+                [str(platform), str(account_id), *ids],
+            ).fetchall()
+        return {row["id"]: row["avatar_url"] for row in rows if row["avatar_url"]}
+
+    @staticmethod
+    def _safe_moment_text(value, max_length=200_000):
+        if value is None or isinstance(value, (dict, list, tuple, set)):
+            return ""
+        return str(value)[:max_length]
+
+    @classmethod
+    def _safe_moment_post(cls, post):
+        safe = {key: post.get(key) for key in _MOMENT_POST_FIELDS if key in post}
+        safe["id"] = cls._safe_moment_text(post.get("id") or post.get("tid"), 512)
+        safe["username"] = cls._safe_moment_text(post.get("username"), 512)
+        safe["nickname"] = cls._safe_moment_text(post.get("nickname"), 2048)
+        safe["contentDesc"] = cls._safe_moment_text(post.get("contentDesc"))
+        safe["createTime"] = _as_int(post.get("createTime"), 0) or 0
+        safe["type"] = _as_int(post.get("type"), 0) or 0
+        safe["likes"] = [cls._safe_moment_text(x, 2048) for x in post.get("likes", [])
+                         if not isinstance(x, (dict, list))][:10_000]
+        safe["comments"] = []
+        for item in post.get("comments", [])[:10_000] if isinstance(post.get("comments"), list) else []:
+            if isinstance(item, dict):
+                safe["comments"].append({key: cls._safe_moment_text(item.get(key), 20_000)
+                                         for key in ("id", "nickname", "username", "content", "refCommentId")})
+        location = post.get("location")
+        if isinstance(location, dict):
+            safe["location"] = {key: cls._safe_moment_text(location.get(key), 2048)
+                                for key in ("city", "country", "poiName", "poiAddress") if key in location}
+        else:
+            safe["location"] = None
+        return safe
+
+    @staticmethod
+    def _moment_cache_locator(value, cache_root):
+        if not cache_root or not isinstance(value, (str, os.PathLike)) or not value:
+            return None
+        root = Path(cache_root).resolve(strict=True)
+        if not root.is_dir():
+            return None
+        supplied = Path(value)
+        candidate = supplied if supplied.is_absolute() else root / supplied
+        try:
+            lexical_relative = candidate.relative_to(root) if candidate.is_absolute() else None
+            if lexical_relative is None:
+                lexical_relative = Path(os.path.normpath(str(candidate))).relative_to(root)
+            if any(part in ("", ".", "..") for part in lexical_relative.parts):
+                return None
+            cursor = root
+            for part in lexical_relative.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    return None
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+            if not resolved.is_file():
+                return None
+            return resolved.relative_to(root).as_posix()
+        except (OSError, ValueError, RuntimeError):
+            return None
+
+    def replace_moments(self, account_id, posts, cache_root):
+        """Atomically replace one account's sanitized, locally cached Moments catalog."""
+        account_id = str(account_id)
+        try:
+            root = Path(cache_root).resolve(strict=True) if cache_root else None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            root = None
+        if root is not None and not root.is_dir():
+            root = None
+        prepared = []
+        for original in posts:
+            if not isinstance(original, dict):
+                continue
+            post = self._safe_moment_post(original)
+            if not post["id"]:
+                continue
+            media_rows = []
+            for media in original.get("media", []) if isinstance(original.get("media"), list) else []:
+                if not isinstance(media, dict):
+                    continue
+                safe_media = {key: media[key] for key in _MOMENT_MEDIA_FIELDS if key in media}
+                safe_media["type"] = self._safe_moment_text(media.get("type") or "image", 64)
+                locator = self._moment_cache_locator(media.get("_local_path") or media.get("_cache_relpath"), root)
+                safe_media["local_available"] = bool(locator)
+                live_photo = media.get("livePhoto")
+                live_locator = None
+                if isinstance(live_photo, dict):
+                    safe_live = {key: live_photo[key] for key in _MOMENT_MEDIA_FIELDS if key in live_photo}
+                    safe_live["type"] = self._safe_moment_text(live_photo.get("type") or "video", 64)
+                    live_locator = self._moment_cache_locator(
+                        live_photo.get("_local_path") or live_photo.get("_cache_relpath"), root)
+                    safe_live["local_available"] = bool(live_locator)
+                    safe_media["livePhoto"] = safe_live
+                    safe_media["_live_cache_locator"] = live_locator
+                media_rows.append((safe_media, locator))
+            prepared.append((post, media_rows))
+        with self._lock:
+            conn = self._require_connection()
+            conn.execute("BEGIN")
+            try:
+                conn.execute("""INSERT INTO moments_catalog(account_id,catalogued_at,post_count)
+                    VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET
+                    catalogued_at=excluded.catalogued_at,post_count=excluded.post_count""",
+                    (account_id, int(datetime.now(timezone.utc).timestamp()), len(prepared)))
+                conn.execute("DELETE FROM moments_posts WHERE account_id=?", (account_id,))
+                for post, media_rows in prepared:
+                    conn.execute("INSERT INTO moments_posts(account_id,id,timestamp,username,payload) VALUES(?,?,?,?,?)",
+                                 (account_id, post["id"], post["createTime"], post["username"],
+                                  json.dumps(post, ensure_ascii=False, separators=(",", ":"))))
+                    for ordinal, (safe_media, locator) in enumerate(media_rows):
+                        conn.execute("INSERT INTO moments_media(account_id,post_id,ordinal,payload,cache_locator) VALUES(?,?,?,?,?)",
+                                     (account_id, post["id"], ordinal,
+                                      json.dumps(safe_media, ensure_ascii=False, separators=(",", ":")), locator))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return {"available": True, "catalogued": True, "total": len(prepared)}
+
+    def moments(self, account_id, *, username="", keyword="", start="", end="", limit=50, offset=0):
+        """Page the persisted account catalog in stable timestamp/id order."""
+        limit, offset = int(limit), int(offset)
+        if limit < 1 or limit > 500 or offset < 0 or offset > 10_000_000:
+            raise ValueError("invalid Moments page bounds")
+        start_ts, end_ts = parse_bound(start), parse_bound(end, end=True)
+        where = ["p.account_id=?"]
+        params = [str(account_id)]
+        if username:
+            where.append("p.username=?")
+            params.append(str(username))
+        if start_ts is not None:
+            where.append("p.timestamp>=?")
+            params.append(start_ts)
+        if end_ts is not None:
+            where.append("p.timestamp<=?")
+            params.append(end_ts)
+        if keyword:
+            pattern = _like_pattern(str(keyword))
+            where.append("(json_extract(p.payload,'$.contentDesc') LIKE ? ESCAPE '\\' OR "
+                         "EXISTS (SELECT 1 FROM json_each(p.payload,'$.comments') AS c "
+                         "WHERE json_extract(c.value,'$.content') LIKE ? ESCAPE '\\'))")
+            params.extend((pattern, pattern))
+        clause = " AND ".join(where)
+        with self._lock:
+            conn = self._require_connection()
+            catalog = conn.execute("SELECT 1 FROM moments_catalog WHERE account_id=?", (str(account_id),)).fetchone()
+            total = conn.execute(f"SELECT COUNT(*) FROM moments_posts p WHERE {clause}", params).fetchone()[0]
+            rows = conn.execute(f"SELECT p.id,p.payload FROM moments_posts p WHERE {clause} ORDER BY p.timestamp DESC,p.id DESC LIMIT ? OFFSET ?",
+                                params + [limit, offset]).fetchall()
+            items = []
+            media_by_post = {}
+            if rows:
+                post_ids = [row["id"] for row in rows]
+                placeholders = ",".join("?" for _ in post_ids)
+                media_rows = conn.execute(
+                    f"SELECT post_id,payload,cache_locator FROM moments_media "
+                    f"WHERE account_id=? AND post_id IN ({placeholders}) ORDER BY post_id,ordinal",
+                    [str(account_id), *post_ids],
+                ).fetchall()
+                for media_row in media_rows:
+                    media_by_post.setdefault(media_row["post_id"], []).append(media_row)
+            for row in rows:
+                post = json.loads(row["payload"])
+                post["media"] = []
+                for media_row in media_by_post.get(row["id"], []):
+                    media = json.loads(media_row["payload"])
+                    if media_row["cache_locator"]:
+                        media["_cache_relpath"] = media_row["cache_locator"]
+                    live_locator = media.pop("_live_cache_locator", None)
+                    if live_locator and isinstance(media.get("livePhoto"), dict):
+                        media["livePhoto"]["_cache_relpath"] = live_locator
+                    post["media"].append(media)
+                items.append(post)
+        return {"available": bool(catalog), "catalogued": bool(catalog), "items": items,
+                "total": int(total), "limit": limit, "offset": offset}
+
+    def moment_accounts(self):
+        """Return account identities with a persisted Moments catalog, including empty catalogs."""
+        with self._lock:
+            rows = self._require_connection().execute(
+                "SELECT account_id FROM moments_catalog ORDER BY account_id").fetchall()
+        return [str(row["account_id"]) for row in rows]
+
+    def moment_media_locator(self, account_id, post_id, ordinal, variant="original"):
+        """Resolve an indexed Moments cache locator by stable catalog identity."""
+        column = "cache_locator" if variant == "original" else "json_extract(payload,'$._live_cache_locator')"
+        if variant not in ("original", "live"):
+            return None
+        with self._lock:
+            row = self._require_connection().execute(
+                f"SELECT {column} AS locator FROM moments_media WHERE account_id=? AND post_id=? AND ordinal=?",
+                (str(account_id), str(post_id), int(ordinal))).fetchone()
+        return row["locator"] if row else None
+
+    def media(self, platform="all", type="", q="", limit=100, offset=0, start="", end="",
+              expand_attachments=False, source="all", account_id="", conversation_id=""):
         limit = max(0, int(limit))
         offset = max(0, int(offset))
+        if expand_attachments:
+            return self._media_attachment_page(platform, type, q, limit, offset, start, end, source, account_id, conversation_id)
         placeholders = ",".join("?" for _ in MEDIA_TYPES)
-        where = [f"m.type IN ({placeholders})"]
+        where = [f"(m.type IN ({placeholders}) AND NOT (m.platform='wechat' AND COALESCE(m.raw_type,'') IN ('47','11000')))" ]
         params = list(MEDIA_TYPES)
         scope, scope_params = self._scope_clause(platform, column="m.platform")
         if scope:
             where.append(scope[5:])
             params += scope_params
+        if account_id:
+            where.append("m.account_id = ?")
+            params.append(str(account_id))
+        if conversation_id:
+            where.append("m.conversation_id = ?")
+            params.append(str(conversation_id))
         if type:
             where.append("m.type = ?")
             params.append(type)
         if q:
             where.append("c.title LIKE ? ESCAPE '\\'")
             params.append(_like_pattern(q))
+        self._append_time_bounds(where, params, start, end, alias="m")
         where_sql = "WHERE " + " AND ".join(where)
         with self._lock:
             conn = self._require_connection()
@@ -1001,7 +1591,8 @@ class ChatStore:
             ).fetchone()[0]
             rows = conn.execute(
                 f"""
-                SELECT m.*, c.title AS conversation_title, c.kind AS conversation_kind
+                SELECT m.*, c.title AS conversation_title, c.kind AS conversation_kind,
+                       c.avatar_url AS conversation_avatar_url
                 FROM messages m
                 LEFT JOIN conversations c
                   ON c.platform = m.platform
@@ -1014,16 +1605,269 @@ class ChatStore:
                 params + [limit, offset],
             ).fetchall()
         return {
-            "items": [self._row_to_message(r) for r in rows],
+            "items": self._attach_sender_avatars([self._row_to_message(r) for r in rows]),
             "total": int(total),
         }
+
+    def _media_attachment_page(self, platform, media_type, query, limit, offset, start, end, source="all", account_id="", conversation_id=""):
+        """Page media at attachment granularity while retaining each parent message."""
+        if source not in ("all", "chat", "moments"):
+            raise ValueError("invalid media source")
+        if source != "chat":
+            return self._unified_media_attachment_page(platform, media_type, query, limit, offset,
+                                                       start, end, source, account_id, conversation_id)
+        placeholders = ",".join("?" for _ in MEDIA_TYPES)
+        where = [f"((m.type IN ({placeholders}) OR (m.platform='wechat' AND m.raw_type IN ('47','11000'))) OR (m.platform IN ('wecom', 'qq') AND "
+                 "CASE WHEN json_valid(m.extra) THEN CASE "
+                 "WHEN m.platform='wecom' AND json_type(m.extra, '$.attachments')='array' "
+                 "THEN json_array_length(m.extra, '$.attachments') "
+                 "WHEN m.platform='qq' AND json_type(m.extra, '$.roaming_resources')='array' "
+                 "THEN json_array_length(m.extra, '$.roaming_resources') "
+                 "WHEN m.platform='qq' AND json_type(m.extra, '$.media')='array' "
+                 "THEN json_array_length(m.extra, '$.media') ELSE 0 END "
+                 "ELSE 0 END > 0))"]
+        params = list(MEDIA_TYPES)
+        scope, scope_params = self._scope_clause(platform, column="m.platform")
+        if scope:
+            where.append(scope[5:])
+            params += scope_params
+        if account_id:
+            where.append("m.account_id = ?")
+            params.append(str(account_id))
+        if conversation_id:
+            where.append("m.conversation_id = ?")
+            params.append(str(conversation_id))
+        self._append_time_bounds(where, params, start, end, alias="m")
+        where_sql = " AND ".join(where)
+        attachment_array = """CASE WHEN json_valid(c.extra) THEN CASE
+            WHEN c.platform='wecom' AND json_type(c.extra, '$.attachments')='array'
+                THEN json_extract(c.extra, '$.attachments')
+            WHEN c.platform='qq' AND json_type(c.extra, '$.roaming_resources')='array'
+                THEN json_extract(c.extra, '$.roaming_resources')
+            WHEN c.platform='qq' AND json_type(c.extra, '$.media')='array'
+                THEN json_extract(c.extra, '$.media')
+            ELSE '[]' END ELSE '[]' END"""
+        resource_type = "lower(COALESCE(json_extract(j.value, '$.type'), 'file'))"
+        normalized_type = f"""CASE {resource_type}
+            WHEN 'audio' THEN 'voice' WHEN 'photo' THEN 'image'
+            WHEN 'picture' THEN 'image' WHEN 'images' THEN 'image'
+            WHEN 'videos' THEN 'video' WHEN 'files' THEN 'file'
+            WHEN '图片' THEN 'image' WHEN '语音' THEN 'voice'
+            WHEN '视频' THEN 'video' WHEN '文件' THEN 'file'
+            ELSE {resource_type} END"""
+        ctes = f"""WITH candidates AS (
+                SELECT m.*, c.title AS conversation_title, c.kind AS conversation_kind,
+                       c.avatar_url AS conversation_avatar_url, m.rowid AS _media_rowid
+                FROM messages m
+                LEFT JOIN conversations c
+                  ON c.platform=m.platform AND c.account_id=m.account_id
+                 AND c.id=m.conversation_id
+                WHERE {where_sql}
+            ), media_entries AS (
+                SELECT c.*, NULL AS _media_resource_index, NULL AS _media_resource,
+                       CASE WHEN c.platform='wechat' AND c.raw_type IN ('47','11000') THEN 'sticker' ELSE c.type END AS _media_type
+                FROM candidates c
+                WHERE (c.type IN ({placeholders}) OR (c.platform='wechat' AND c.raw_type IN ('47','11000')))
+                  AND json_array_length({attachment_array})=0
+                UNION ALL
+                SELECT c.*, CAST(j.key AS INTEGER) AS _media_resource_index,
+                       j.value AS _media_resource, {normalized_type} AS _media_type
+                FROM candidates c JOIN json_each({attachment_array}) j
+            )"""
+        query_filter = " WHERE (?='' OR _media_type=?) AND (?='' OR " \
+                       "conversation_title LIKE ? ESCAPE '\\' OR " \
+                       "file_name LIKE ? ESCAPE '\\' OR " \
+                       "COALESCE(text,'') LIKE ? ESCAPE '\\' OR " \
+                       "COALESCE(sender_name,'') LIKE ? ESCAPE '\\' OR " \
+                       "COALESCE(sender_id,'') LIKE ? ESCAPE '\\' OR " \
+                       "COALESCE(json_extract(_media_resource, '$.name'), " \
+                       "json_extract(_media_resource, '$.n'), '') LIKE ? ESCAPE '\\')"
+        filter_params = [media_type, media_type, query, _like_pattern(query),
+                         _like_pattern(query), _like_pattern(query), _like_pattern(query),
+                         _like_pattern(query), _like_pattern(query)]
+        with self._lock:
+            conn = self._require_connection()
+            total = conn.execute(
+                f"{ctes} SELECT COUNT(*) FROM media_entries{query_filter}",
+                params + list(MEDIA_TYPES) + filter_params,
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"""{ctes} SELECT * FROM media_entries{query_filter}
+                    ORDER BY timestamp DESC, _media_rowid DESC,
+                             COALESCE(_media_resource_index, -1) ASC
+                    LIMIT ? OFFSET ?""",
+                params + list(MEDIA_TYPES) + filter_params + [limit, offset],
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = self._row_to_message(row)
+            resource_index = row["_media_resource_index"]
+            raw_resource = row["_media_resource"]
+            resource = json.loads(raw_resource) if raw_resource is not None else None
+            if isinstance(resource, dict):
+                resource = {key: resource[key] for key in
+                            ("name", "n", "type", "size", "media_url", "available")
+                            if key in resource}
+            else:
+                resource = None
+            item["media_entry"] = {
+                "resource_index": int(resource_index) if resource_index is not None else None,
+                "resource": resource,
+                "type": row["_media_type"],
+            }
+            items.append(item)
+        return {"items": self._attach_sender_avatars(items), "total": int(total)}
+
+    def _unified_media_attachment_page(self, platform, media_type, query, limit, offset, start, end, source, account_id="", conversation_id=""):
+        """Filter, count and page chat and Moments media in one SQLite query."""
+        include_chat = source == "all" or source == "chat"
+        include_moments = source == "all" or source == "moments"
+        if conversation_id:
+            include_moments = False
+        if platform not in ("all", "wechat"):
+            include_moments = False
+        branches, params = [], []
+        if include_chat:
+            placeholders = ",".join("?" for _ in MEDIA_TYPES)
+            where = [f"((m.type IN ({placeholders}) OR (m.platform='wechat' AND m.raw_type IN ('47','11000'))) OR (m.platform IN ('wecom','qq') AND CASE WHEN json_valid(m.extra) THEN CASE WHEN m.platform='wecom' AND json_type(m.extra,'$.attachments')='array' THEN json_array_length(m.extra,'$.attachments') WHEN m.platform='qq' AND json_type(m.extra,'$.roaming_resources')='array' THEN json_array_length(m.extra,'$.roaming_resources') WHEN m.platform='qq' AND json_type(m.extra,'$.media')='array' THEN json_array_length(m.extra,'$.media') ELSE 0 END ELSE 0 END > 0))"]
+            params.extend(MEDIA_TYPES)
+            scope, scope_params = self._scope_clause(platform, column="m.platform")
+            if scope:
+                where.append(scope[5:])
+                params.extend(scope_params)
+            if account_id:
+                where.append("m.account_id = ?")
+                params.append(str(account_id))
+            if conversation_id:
+                where.append("m.conversation_id = ?")
+                params.append(str(conversation_id))
+            self._append_time_bounds(where, params, start, end, alias="m")
+            where_sql = " AND ".join(where)
+            attachment_array = """CASE WHEN json_valid(m.extra) THEN CASE
+                WHEN m.platform='wecom' AND json_type(m.extra,'$.attachments')='array' THEN json_extract(m.extra,'$.attachments')
+                WHEN m.platform='qq' AND json_type(m.extra,'$.roaming_resources')='array' THEN json_extract(m.extra,'$.roaming_resources')
+                WHEN m.platform='qq' AND json_type(m.extra,'$.media')='array' THEN json_extract(m.extra,'$.media') ELSE '[]' END ELSE '[]' END"""
+            raw = "lower(COALESCE(json_extract(j.value,'$.type'),'file'))"
+            normalized = f"CASE {raw} WHEN 'audio' THEN 'voice' WHEN 'photo' THEN 'image' WHEN 'picture' THEN 'image' WHEN 'images' THEN 'image' WHEN 'videos' THEN 'video' WHEN 'files' THEN 'file' WHEN '图片' THEN 'image' WHEN '语音' THEN 'voice' WHEN '视频' THEN 'video' WHEN '文件' THEN 'file' ELSE {raw} END"
+            branches.append(f"""SELECT 'message' AS resource_kind,m.platform,m.account_id,m.id,m.conversation_id,
+                c.title AS conversation_title,c.kind AS conversation_kind,c.avatar_url AS conversation_avatar_url,
+                m.timestamp,m.sender_name,m.sender_id,m.is_self,m.type AS message_type,m.file_name,
+                m.text,m.extra,m.rowid AS sort_id,NULL AS post_id,NULL AS media_index,NULL AS variant,
+                NULL AS cache_locator,NULL AS post_payload,NULL AS resource_index,NULL AS resource_json,
+                CASE WHEN m.platform='wechat' AND m.raw_type IN ('47','11000') THEN 'sticker' ELSE m.type END AS media_type
+                FROM messages m LEFT JOIN conversations c ON c.platform=m.platform AND c.account_id=m.account_id AND c.id=m.conversation_id
+                WHERE {where_sql} AND m.type IN ({placeholders}) AND json_array_length({attachment_array})=0
+                UNION ALL
+                SELECT 'message',m.platform,m.account_id,m.id,m.conversation_id,c.title,c.kind,c.avatar_url,
+                m.timestamp,m.sender_name,m.sender_id,m.is_self,m.type,m.file_name,m.text,m.extra,m.rowid,
+                NULL,NULL,NULL,NULL,NULL,CAST(j.key AS INTEGER),j.value,{normalized}
+                FROM messages m LEFT JOIN conversations c ON c.platform=m.platform AND c.account_id=m.account_id AND c.id=m.conversation_id
+                JOIN json_each({attachment_array}) j WHERE {where_sql}""")
+            base_params = list(params)
+            params.extend(MEDIA_TYPES)
+            params.extend(base_params)
+        if include_moments:
+            moment_conditions = ["1=1"]
+            moment_params = []
+            if account_id:
+                moment_conditions.append("p.account_id = ?")
+                moment_params.append(str(account_id))
+            self._append_time_bounds(moment_conditions, moment_params, start, end, alias="p")
+            branches.append("""SELECT 'moment' AS resource_kind, 'wechat' AS platform,
+                p.account_id AS account_id, p.id AS id, '' AS conversation_id,
+                COALESCE(json_extract(p.payload,'$.nickname'),p.username) AS conversation_title,
+                'moment' AS conversation_kind, NULL AS conversation_avatar_url,
+                p.timestamp AS timestamp, p.username AS sender_name, p.username AS sender_id,
+                0 AS is_self, 'image' AS message_type, NULL AS file_name, p.payload AS text,
+                '{}' AS extra, 0 AS sort_id, p.id AS post_id, mm.ordinal AS media_index,
+                'original' AS variant, mm.cache_locator AS cache_locator, p.payload AS post_payload,
+                mm.ordinal AS resource_index, mm.payload AS resource_json,
+                CASE lower(COALESCE(json_extract(mm.payload,'$.type'),'image'))
+                  WHEN 'video' THEN 'video' WHEN 'voice' THEN 'voice' WHEN 'file' THEN 'file' ELSE 'image' END AS media_type
+                FROM moments_posts p JOIN moments_media mm ON mm.account_id=p.account_id AND mm.post_id=p.id
+                WHERE """ + " AND ".join(moment_conditions))
+            params.extend(moment_params)
+            # Include already-catalogued Live Photo video files as distinct resources.
+            branches.append("""SELECT 'moment' AS resource_kind, 'wechat' AS platform,
+                p.account_id AS account_id, p.id AS id, '' AS conversation_id,
+                COALESCE(json_extract(p.payload,'$.nickname'),p.username) AS conversation_title,
+                'moment' AS conversation_kind, NULL AS conversation_avatar_url,
+                p.timestamp AS timestamp, p.username AS sender_name, p.username AS sender_id,
+                0 AS is_self, 'video' AS message_type, NULL AS file_name, p.payload AS text,
+                '{}' AS extra, 0 AS sort_id, p.id AS post_id, mm.ordinal AS media_index,
+                'live' AS variant, json_extract(mm.payload,'$._live_cache_locator') AS cache_locator,
+                p.payload AS post_payload, mm.ordinal AS resource_index,
+                json_extract(mm.payload,'$.livePhoto') AS resource_json, 'video' AS media_type
+                FROM moments_posts p JOIN moments_media mm ON mm.account_id=p.account_id AND mm.post_id=p.id
+                WHERE json_extract(mm.payload,'$._live_cache_locator') IS NOT NULL AND """ + " AND ".join(moment_conditions))
+            params.extend(moment_params)
+        if not branches:
+            return {"items": [], "total": 0}
+        union = " UNION ALL ".join(branches)
+        where = ["(?='' OR media_type=?)", "(?='' OR COALESCE(conversation_title,'') LIKE ? ESCAPE '\\' OR COALESCE(file_name,'') LIKE ? ESCAPE '\\' OR COALESCE(text,'') LIKE ? ESCAPE '\\' OR COALESCE(sender_name,'') LIKE ? ESCAPE '\\' OR COALESCE(sender_id,'') LIKE ? ESCAPE '\\' OR COALESCE(json_extract(resource_json,'$.name'),json_extract(resource_json,'$.n'),'') LIKE ? ESCAPE '\\' OR COALESCE(post_payload,'') LIKE ? ESCAPE '\\')"]
+        filter_params = [media_type, media_type, query, _like_pattern(query), _like_pattern(query),
+                         _like_pattern(query), _like_pattern(query), _like_pattern(query),
+                         _like_pattern(query), _like_pattern(query)]
+        sql = f"WITH unified AS ({union}) SELECT * FROM unified WHERE {' AND '.join(where)}"
+        with self._lock:
+            conn = self._require_connection()
+            total = conn.execute(f"WITH unified AS ({union}) SELECT COUNT(*) FROM unified WHERE {' AND '.join(where)}",
+                                 params + filter_params).fetchone()[0]
+            rows = conn.execute(sql + " ORDER BY timestamp DESC, sort_id DESC, resource_kind, account_id, id, media_index, variant LIMIT ? OFFSET ?",
+                                params + filter_params + [limit, offset]).fetchall()
+        items = []
+        for row in rows:
+            if row["resource_kind"] == "moment":
+                resource = json.loads(row["resource_json"]) if row["resource_json"] else {}
+                item = {"resource_kind": "moment", "platform": "wechat", "account_id": row["account_id"],
+                        "id": row["id"], "post_id": row["post_id"], "media_index": row["media_index"],
+                        "variant": row["variant"], "conversation_id": "", "conversation_title": row["conversation_title"],
+                        "timestamp": row["timestamp"], "sender_name": row["sender_name"], "type": row["media_type"],
+                        "text": json.loads(row["post_payload"] or "{}").get("contentDesc", ""),
+                        "media_entry": {"resource_kind": "moment", "post_id": row["post_id"],
+                                        "media_index": row["media_index"], "variant": row["variant"],
+                                        "resource": {key: resource[key] for key in ("name", "type", "mime_type", "local_available") if key in resource},
+                                        "type": row["media_type"]}}
+                if row["cache_locator"]:
+                    item["media_entry"]["cache_available"] = True
+                    item["_cache_relpath"] = row["cache_locator"]
+            else:
+                message = {key: row[key] for key in row.keys() if key in
+                           ("platform", "account_id", "id", "conversation_id", "conversation_title", "conversation_kind",
+                            "conversation_avatar_url", "timestamp", "sender_name", "sender_id", "is_self", "file_name", "text", "extra")}
+                message["type"] = row["media_type"]
+                resource = json.loads(row["resource_json"]) if row["resource_json"] else None
+                if isinstance(resource, dict):
+                    resource = {key: resource[key] for key in ("name", "n", "type", "size", "media_url", "available") if key in resource}
+                message["media_entry"] = {"resource_index": row["resource_index"], "resource": resource,
+                                           "type": row["media_type"]}
+                item = message
+            items.append(item)
+        return {"items": items, "total": int(total)}
+
+    def source_counts(self):
+        """Live per-platform counters without report/date/media aggregation."""
+        with self._lock:
+            conn = self._require_connection()
+            rows = conn.execute("""
+                SELECT platform, SUM(messages) AS messages,
+                       SUM(conversations) AS conversations
+                FROM (
+                    SELECT platform, COUNT(*) AS messages, 0 AS conversations
+                    FROM messages GROUP BY platform
+                    UNION ALL
+                    SELECT platform, 0, COUNT(*)
+                    FROM conversations GROUP BY platform
+                ) GROUP BY platform
+            """).fetchall()
+        return {row["platform"]: {"messages": int(row["messages"]),
+                                  "conversations": int(row["conversations"])}
+                for row in rows}
 
     def stats(self, platform="all"):
         with self._lock:
             conn = self._require_connection()
             scope, scope_params = self._scope_clause(platform)
-            media_placeholders = ",".join("?" for _ in MEDIA_TYPES)
-
             message_count = conn.execute(
                 f"SELECT COUNT(*) FROM messages WHERE 1=1{scope}", scope_params
             ).fetchone()[0]
@@ -1033,15 +1877,16 @@ class ChatStore:
             contact_count = conn.execute(
                 f"SELECT COUNT(*) FROM contacts WHERE 1=1{scope}", scope_params
             ).fetchone()[0]
+            media_scope = self._scope_clause(platform, column="m.platform")[0]
             media_count = conn.execute(
-                f"SELECT COUNT(*) FROM messages WHERE type IN ({media_placeholders}){scope}",
-                list(MEDIA_TYPES) + scope_params,
+                f"SELECT COUNT(*) FROM messages m WHERE {media_message_predicate('m')}{media_scope}",
+                scope_params,
             ).fetchone()[0]
 
             per_type = {
                 row["type"] or "unknown": int(row["c"])
                 for row in conn.execute(
-                    f"SELECT type, COUNT(*) AS c FROM messages WHERE 1=1{scope} GROUP BY type",
+                    f"SELECT CASE WHEN platform='wechat' AND raw_type IN ('47','11000') THEN 'sticker' ELSE type END AS type, COUNT(*) AS c FROM messages WHERE 1=1{scope} GROUP BY CASE WHEN platform='wechat' AND raw_type IN ('47','11000') THEN 'sticker' ELSE type END",
                     scope_params,
                 ).fetchall()
             }
@@ -1146,6 +1991,18 @@ class ChatStore:
                 "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 100),)
             ).fetchall()
             return [self._import_job(row) for row in rows]
+
+    def import_jobs_page(self, limit=50, offset=0):
+        limit = min(max(int(limit), 1), 100)
+        offset = max(int(offset), 0)
+        with self._lock:
+            conn = self._require_connection()
+            total = int(conn.execute("SELECT COUNT(*) FROM import_jobs").fetchone()[0])
+            rows = conn.execute(
+                "SELECT * FROM import_jobs ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return {"items": [self._import_job(row) for row in rows], "total": total}
 
     def record_mcp_operation(self, tool, status):
         tool = str(tool)[:64]

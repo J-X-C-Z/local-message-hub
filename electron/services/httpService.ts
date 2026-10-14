@@ -17,6 +17,7 @@ import { snsService } from './snsService'
 import * as os from 'os'
 import { ApiMessageMapperPool } from './apiMessageMapperPool'
 import { mapRowsToMessagesLite } from './apiMessageMapping'
+import { denySourceMutationRoute } from './sourceMutationGate'
 
 // ChatLab 格式定义
 interface ChatLabHeader {
@@ -1508,21 +1509,17 @@ class HttpService {
   }
 
   private async handleSnsBlockDeleteInstall(res: http.ServerResponse): Promise<void> {
-    const result = await snsService.installSnsBlockDeleteTrigger()
-    if (!result.success) {
-      this.sendError(res, 500, result.error || 'Failed to install sns block-delete trigger')
-      return
-    }
-    this.sendJson(res, result)
+    denySourceMutationRoute(
+      () => snsService.installSnsBlockDeleteTrigger(),
+      (status, message) => this.sendError(res, status, message)
+    )
   }
 
   private async handleSnsBlockDeleteUninstall(res: http.ServerResponse): Promise<void> {
-    const result = await snsService.uninstallSnsBlockDeleteTrigger()
-    if (!result.success) {
-      this.sendError(res, 500, result.error || 'Failed to uninstall sns block-delete trigger')
-      return
-    }
-    this.sendJson(res, result)
+    denySourceMutationRoute(
+      () => snsService.uninstallSnsBlockDeleteTrigger(),
+      (status, message) => this.sendError(res, status, message)
+    )
   }
 
   private async handleSnsDeletePost(pathname: string, res: http.ServerResponse): Promise<void> {
@@ -1531,13 +1528,10 @@ class HttpService {
       this.sendError(res, 400, 'Missing required path parameter: postId')
       return
     }
-
-    const result = await snsService.deleteSnsPost(postId)
-    if (!result.success) {
-      this.sendError(res, 500, result.error || 'Failed to delete sns post')
-      return
-    }
-    this.sendJson(res, result)
+    denySourceMutationRoute(
+      () => snsService.deleteSnsPost(postId),
+      (status, message) => this.sendError(res, status, message)
+    )
   }
 
   private toSnsMediaKey(value: unknown): string | number | undefined {

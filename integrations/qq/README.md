@@ -1,5 +1,29 @@
 # QQ integration source
 
+## Current History Mode
+
+The Hub reads local QQNT databases through `local_provider.py`; it does not
+launch NapCat, scan a QR code or request online roaming history. Encrypted data
+requires a locally verified database key. See [local-reader details](../../docs/qq-local.md).
+The QCE/NapCat material below describes the retained optional online adapter,
+not the default history reader.
+
+## Sending
+
+The local reader never writes to QQ; sending still uses the retained NapCat
+OneBot 11 adapter (`sender.py`), which requires an online NapCat channel and
+per-request local approval. Because the reader keys private conversations by
+QQNT uid while OneBot accepts only numeric uin/group code, `send_target.py`
+resolves the target at prepare time from the reader's own snapshot:
+
+- a 5-20 digit id is used as-is;
+- a private uid is mapped through `nt_uid_mapping_table` / `profile_info_v6`;
+- a group that is not already a group code, and any unknown uid, is refused.
+
+The resolved number is what is stored, reviewed and delivered, and
+`hub.QQAccountBoundSender` re-checks that the online NapCat account matches
+the request account. See [local-reader details](../../docs/qq-local.md).
+
 Vendored source: [shuakami/qq-chat-exporter](https://github.com/shuakami/qq-chat-exporter), release `v6.3.2`, commit `7d154b847a0cb3f9cffbdb126598c4d1434995ba` (annotated tag object `a1c0fcc5bb48af7844bbc1538963b4d0a05c927f`, unsigned). The tag's upstream `LICENSE` is GPL-3.0; keep it with any redistributed upstream source or derived work.
 
 The source archive is `upstream/source-v6.3.2.zip`; extracted upstream tree is `upstream/expanded/qq-chat-exporter-6.3.2/`. Source archive SHA-256: `1CA3141920769B8ADA0AA43629A95465AA2718C694234685C9A3DA85971B647B`.
@@ -12,18 +36,9 @@ The hub launches the bundled `NapCatWinBootMain.exe` directly with injection met
 
 ### Rebuilding the loopback QCE server
 
-Build from the pinned v6.3.2 source and lockfile. The source requires Rust 1.82 or newer; the local verified build used rustc 1.98.1 and winlibs GCC 16.2.0 (x86_64-w64-mingw32, MSVCRT). Stage the source and Cargo target directory under an ASCII-only path such as `%LOCALAPPDATA%\LocalChatHub\qq-build` because the Windows GNU toolchain's `dlltool` failed with the workspace's non-ASCII path. In `qq-chat-export-server/src/main.rs`, bind the listener to `[127, 0, 0, 1]` (not unspecified `0.0.0.0`), then build with the GNU target and `Cargo.lock`:
+The Windows portable builder compiles the server from the vendored v6.3.2 source using `Cargo.lock`; it never packages the release's prebuilt server. Build prerequisites are Rust 1.98.1 GNU, MinGW-w64 GCC 16.2.0, and access to the locked Cargo crates on first build. Run `scripts/build-qce-windows.ps1 -OutputPath <path>` directly to build just the server. The script verifies the source still binds to `127.0.0.1`, includes the date-filter capability, checks and prints the GCC version, stages under an ASCII path, and writes a SHA-256 sidecar. The package builder embeds that digest into its staged provider allowlist, so a replaced binary is rejected at runtime. The full package inventory is recorded in its unsigned manifest; that manifest detects accidental changes but is not a signature.
 
-```powershell
-$env:PATH = '<ASCII staging>\winlibs\mingw64\bin;' + $env:PATH
-$env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = '<ASCII staging>\winlibs\mingw64\bin\gcc.exe'
-$env:CARGO_TARGET_DIR = '<ASCII staging>\target'
-cargo build --release --locked --target x86_64-pc-windows-gnu --manifest-path '<ASCII staging>\source\qq-chat-export-server\Cargo.toml'
-```
-
-The locally rebuilt `qce-server.exe` is 30,992,534 bytes, SHA-256 `B928A9E556DB6D1F8BA93B4213B70238190CD580743C4CE5DD7FCC0309ED1FCC`. The official release shell's server binary is also accepted only at SHA-256 `066D9FF15C3E6CB7EFE23ACC564B5B7B34D6DA2849FEC77A7DCC890290BB7745`; its containing archive is independently pinned above. The pinned v6.3.2 server source binds to `127.0.0.1`. The provider refuses to launch NapCat when the bundled binary is absent or has a different hash.
-
-The provider authenticates to the local NapCat WebUI API without placing its credential in a URL or returning it to the hub. `POST /api/QQLogin/CheckLoginStatus` supplies the current phase, and `POST /api/QQLogin/GetQQLoginQrcode` supplies the QR payload. The hub should render the `launch()` result's `qr_url` as a QR image and show `login_phase`; the user must scan it with QQ to connect. This machine currently reports `waiting_qrcode`; QCE is not yet listening, and live history remains unavailable until login and bridge initialization complete.
+The provider authenticates to the local NapCat WebUI API without placing its credential in a URL or returning it to the hub. `POST /api/QQLogin/CheckLoginStatus` supplies the current phase, and `POST /api/QQLogin/GetQQLoginQrcode` supplies a QR payload only while login is needed. The hub renders `launch()`'s QR locally and never exposes NapCat credentials. Live history requires both an authenticated QQ session and a healthy local QCE bridge; these are checked at runtime and are not inferred from a cached index.
 
 ## Hub adapter contract
 

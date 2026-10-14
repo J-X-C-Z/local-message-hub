@@ -914,16 +914,16 @@ mod member_list_tests {
         assert_eq!(
             group_export_file_name(
                 "avatars",
-                "AxT 鸽子窝: Ultra/Pro",
-                "960420904",
-                "20260712_163632123",
+                "测试群组: Ultra/Pro",
+                "900000001",
+                "20240102_030405006",
                 "zip",
             ),
-            "group_avatars_AxT_鸽子窝_Ultra_Pro_960420904_20260712_163632123.zip"
+            "group_avatars_测试群组_Ultra_Pro_900000001_20240102_030405006.zip"
         );
         assert_eq!(
-            group_export_file_name("essence", "群名", "960420904", "20260712_163632123", "html",),
-            "group_essence_群名_960420904_20260712_163632123.html"
+            group_export_file_name("essence", "测试群组", "900000001", "20240102_030405006", "html",),
+            "group_essence_测试群组_900000001_20240102_030405006.html"
         );
     }
 
@@ -934,15 +934,15 @@ mod member_list_tests {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&base).unwrap();
-        let name = "group_avatars_name_1_20260712_163632123.zip";
+        let name = "group_avatars_name_1_20240102_030405006.zip";
         std::fs::write(base.join(name), b"old").unwrap();
         let collision = reserve_unique_file_name(&base, name);
-        assert_eq!(collision, "group_avatars_name_1_20260712_163632123_2.zip");
+        assert_eq!(collision, "group_avatars_name_1_20240102_030405006_2.zip");
         release_group_export_path(&base.join(collision));
-        let first = reserve_unique_file_name(&base, "group_essence_name_1_20260712_163632123.html");
+        let first = reserve_unique_file_name(&base, "group_essence_name_1_20240102_030405006.html");
         let second =
-            reserve_unique_file_name(&base, "group_essence_name_1_20260712_163632123.html");
-        assert_eq!(second, "group_essence_name_1_20260712_163632123_2.html");
+            reserve_unique_file_name(&base, "group_essence_name_1_20240102_030405006.html");
+        assert_eq!(second, "group_essence_name_1_20240102_030405006_2.html");
         release_group_export_path(&base.join(first));
         release_group_export_path(&base.join(second));
         std::fs::remove_dir_all(base).unwrap();

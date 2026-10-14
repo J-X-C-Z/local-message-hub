@@ -19,12 +19,24 @@ media = provider.media(messages[0]["session_id"], messages[0]["local_id"],
 
 - `status()` returns platform, state (`connected`/`partial`), database_count,
   unlocked_count, unavailable_databases (database names only), sessions count,
-  and message_count (all message tables).
+  message_count (all message tables), and a content-free `avatar_database`
+  state (`missing`, `locked`, or `available`). It checks only discovered
+  filenames and the reader's validated-key map; it does not open the avatar
+  database or read rows. `available` means a cached key exists, not that a
+  particular database schema has been accepted.
 - `sessions(limit=100000, include_counts=True)` returns id, platform, title,
   kind (`group`/`direct`), unread, last_message, last_timestamp, message_count.
   Counts use aggregate SQL per table, across every message shard. They do not
   enumerate message bodies. `include_counts=False` avoids aggregate work.
-- `contacts()` returns id, platform, name, nickname, alias.
+- `contacts()` returns id, platform, name, nickname, and alias. During Hub
+  sync, the reader first checks `head_image.db` using exact contact usernames;
+  only the verified `head_image(username, md5, image_buffer, update_time)`
+  schema and JPEG-signature blobs are accepted. Current-device inspection
+  confirmed this schema; other variants fail closed. Reads use already-loaded
+  database keys and bounded batches. JPEGs are size-limited and copied into the
+  Hub-owned avatar cache; a local hit takes precedence over a contact avatar
+  URL. Misses preserve allowlisted QQ/WeChat URLs as metadata only: the Hub
+  never fetches them.
 - `messages(session_id, limit=200, offset=0)` returns newest first, with id,
   platform, session_id, sender_id, is_self, timestamp (seconds), sort_seq, type
   (human-readable label), content, shard, local_id, and local_type (original
@@ -40,11 +52,21 @@ media = provider.media(messages[0]["session_id"], messages[0]["local_id"],
   decoded to mono 24kHz WAV for browser playback (`playable=True`,
   `mime_type=audio/wav`); `original_path` preserves the SILK. Decoder failure
   retains the original path with `playable=False` and a `voice_decode_failed`
-  or `voice_decoder_unavailable` reason. It never drives the GUI.
+  or `voice_decoder_unavailable` reason. The Hub may serve that original file
+  only through the exact indexed message's local media token after validating
+  SILK signature and cache-root containment. It never drives the GUI.
 
 Local keys and discovered account settings stay in ignored `.local/wechat.json`;
 decrypted databases, media and the private development venv stay under ignored
 `integrations/wechat/runtime/`. Do not log returned chat records or key files.
+
+Moments media resolution is read-only and offline. The provider checks the
+WeFlow-compatible `Documents/WeFlow/sns_cache` directory by default; set
+`sns_cache_dir` in ignored `.local/wechat.json` or `WECHAT_SNS_CACHE_DIR` to use
+another existing cache. It never downloads missing media. The WebUI serves a
+verified cache hit through a same-origin 15-minute token. MCP returns a cached
+image or MP4/WebM video only after an explicit `get_moment_media` call; media is
+signature-checked, limited to 8 MiB, and never fetched from a remote URL.
 
 For a non-sensitive diagnostic run: `python -m integrations.wechat.verify`.
 For local JSON RPC style CLI calls: `python -m integrations.wechat.provider status`.

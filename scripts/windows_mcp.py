@@ -12,6 +12,9 @@ def main() -> None:
         storage = local_app_data / "LocalMessageHub"
         storage.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("LMH_STORAGE_DIR", str(storage))
+        ffmpeg = Path(sys._MEIPASS) / "media" / "ffmpeg.exe"
+        if ffmpeg.is_file():
+            os.environ.setdefault("LMH_FFMPEG_PATH", str(ffmpeg))
     from hub.mcp_server import main as mcp_main
 
     mcp_main()

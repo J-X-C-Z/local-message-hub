@@ -12,8 +12,8 @@ const MOCK_MESSAGES = [
     msgId: "1",
     msgTime: 1751788800,
     sendType: 0,
-    senderUid: "12519212",
-    senderName: "速冻饺子",
+    senderUid: "100000002",
+    senderName: "测试发送者",
     elements: [
       { textElement: { content: "大家好，今天更新了新版本" } }
     ]
@@ -22,8 +22,8 @@ const MOCK_MESSAGES = [
     msgId: "2",
     msgTime: 1751788860,
     sendType: 0,
-    senderUid: "12519212",
-    senderName: "速冻饺子",
+    senderUid: "100000002",
+    senderName: "测试发送者",
     elements: [
       { marketFaceElement: { faceName: "[肘击]", emojiId: "123" } }
     ]
@@ -93,8 +93,8 @@ const MOCK_MESSAGES = [
     msgId: "9",
     msgTime: 1751789280,
     sendType: 0,
-    senderUid: "12519212",
-    senderName: "速冻饺子",
+    senderUid: "100000002",
+    senderName: "测试发送者",
     elements: [
       { marketFaceElement: { faceName: "[龇牙]" } }
     ]
@@ -103,8 +103,8 @@ const MOCK_MESSAGES = [
     msgId: "10",
     msgTime: 1751789340,
     sendType: 0,
-    senderUid: "12519212",
-    senderName: "速冻饺子",
+    senderUid: "100000002",
+    senderName: "测试发送者",
     elements: [
       { arkElement: { bytesData: "{}" } }
     ]
@@ -113,8 +113,8 @@ const MOCK_MESSAGES = [
     msgId: "11",
     msgTime: 1751789400,
     sendType: 0,
-    senderUid: "12519212",
-    senderName: "速冻饺子",
+    senderUid: "100000002",
+    senderName: "测试发送者",
     elements: [
       { multiForwardMsgElement: { xmlContent: "" } }
     ]
@@ -416,7 +416,7 @@ export default function DemoPage() {
             <div className="px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Avatar className="w-10 h-10 rounded-full">
-                  <AvatarImage src="https://q1.qlogo.cn/g?b=qq&nk=12519212&s=40" />
+                  <AvatarImage src="https://q1.qlogo.cn/g?b=qq&nk=100000002&s=40" />
                   <AvatarFallback className="bg-muted text-muted-foreground rounded-full">速</AvatarFallback>
                 </Avatar>
                 <div>

@@ -511,8 +511,8 @@ export const SnsPostItem: React.FC<SnsPostItemProps> = ({ post, onPreview, onDeb
                         <button
                             className="icon-btn-ghost debug-btn delete-btn"
                             onClick={handleDeleteClick}
-                            disabled={deleting || dbDeleted}
-                            title="从数据库删除此条记录"
+                            disabled
+                            title="源客户端修改尚未开放"
                         >
                             <Trash2 size={14} />
                         </button>

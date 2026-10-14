@@ -191,6 +191,43 @@ test('the log export is looked up once and remains optional', async () => {
   assert.equal(fixture.state.calls.has('wcdb_get_logs'), false)
 })
 
+test('missing mutation-trigger exports stay unavailable without native calls', async () => {
+  const fixture = await ready(makeCore())
+  for (const [method, args] of [
+    ['checkMessageAntiRevokeTrigger', ['session']],
+    ['installMessageAntiRevokeTrigger', ['session']],
+    ['uninstallMessageAntiRevokeTrigger', ['session']],
+    ['checkSnsBlockDeleteTrigger', []],
+    ['installSnsBlockDeleteTrigger', []],
+    ['uninstallSnsBlockDeleteTrigger', []]
+  ]) {
+    const result = await fixture.core[method](...args)
+    assert.equal(result.success, false, method)
+    assert.match(result.error, /当前数据服务版本不支持/)
+  }
+  assert.equal([...fixture.state.calls.keys()].some((name) => /trigger/i.test(name)), false)
+})
+
+test('blank message session IDs are rejected before native trigger calls', async () => {
+  const fixture = makeCore({ complete: true })
+  for (const name of [
+    'wcdb_check_message_anti_revoke_trigger',
+    'wcdb_install_message_anti_revoke_trigger',
+    'wcdb_uninstall_message_anti_revoke_trigger'
+  ]) fixture.native[name] = () => { throw new Error('Native trigger must not be called') }
+  await ready(fixture)
+  for (const method of [
+    'checkMessageAntiRevokeTrigger',
+    'installMessageAntiRevokeTrigger',
+    'uninstallMessageAntiRevokeTrigger'
+  ]) {
+    const result = await fixture.core[method]('  ')
+    assert.equal(result.success, false, method)
+    assert.equal(result.error, 'sessionId 不能为空')
+  }
+  assert.equal([...fixture.state.calls.keys()].some((name) => /message_anti_revoke_trigger/.test(name)), false)
+})
+
 for (const missing of ['wcdb_open_message_cursor', 'wcdb_fetch_message_batch', 'wcdb_close_message_cursor']) {
   test(`an incomplete cursor group (${missing}) cannot allocate a cursor`, async () => {
     const fixture = makeCore({ complete: true, omit: [missing] })

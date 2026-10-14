@@ -364,12 +364,17 @@ def render(row, names, convs, media_by_mid=None) -> dict:
 
 
 def read_messages(msgdb):
+    return list(iter_read_messages(msgdb))
+
+
+def iter_read_messages(msgdb):
     c = sqlite3.connect('file:' + msgdb + '?mode=ro', uri=True)
-    rows = list(c.execute(
-        'select message_id,server_id,sender_id,conversation_id,content_type,'
-        'send_time,content from message_table order by send_time'))
-    c.close()
-    return rows
+    try:
+        yield from c.execute(
+            'select message_id,server_id,sender_id,conversation_id,content_type,'
+            'send_time,content from message_table order by send_time')
+    finally:
+        c.close()
 
 
 # --------------------------------------------------------------------------
@@ -393,8 +398,60 @@ def rel_to_media_path(p: str) -> str:
     return candidate
 
 
-def build_media_context(full_root: str):
-    """返回 (media_list, media_by_mid)。"""
+def _iter_readonly_rows(path: str, table: str, columns: tuple[str, ...]):
+    """Stream one known WeCom table only when its schema matches the reader."""
+    connection = None
+    try:
+        connection = sqlite3.connect('file:' + path + '?mode=ro', uri=True)
+        available = {row[1] for row in connection.execute(f'pragma table_info({table})')}
+        if not set(columns).issubset(available):
+            return
+        projection = ','.join('"' + column + '"' for column in columns)
+        yield from connection.execute(f'SELECT {projection} FROM "{table}"')
+    except (OSError, sqlite3.Error, ValueError):
+        return
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _cache_file(root: str, filename: str, media_type: str = '') -> tuple[str, str] | None:
+    """Resolve known CacheMapping names without leaving this account's cache."""
+    from pathlib import Path
+
+    cache_root = Path(root).resolve()
+    raw = str(filename or '').strip().replace('\\', '/')
+    if not raw:
+        return None
+    supplied = Path(raw)
+    kind = str(media_type or '').strip().casefold()
+    folder = {'image': ('Image',), 'photo': ('Image',), 'picture': ('Image',),
+              'video': ('Video',), 'voice': ('Voice', 'Audio'), 'audio': ('Audio', 'Voice'),
+              'file': ('File',), '图片': ('Image',), '视频': ('Video',),
+              '语音': ('Voice', 'Audio'), '文件': ('File',)}.get(kind, ())
+    candidates = [supplied] if supplied.is_absolute() else [
+        cache_root / raw,
+        *(cache_root / 'Cache' / directory / raw for directory in folder),
+        cache_root / 'Cache' / 'Image' / raw,
+        cache_root / 'Cache' / 'File' / raw,
+        cache_root / 'Cache' / raw,
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink():
+                continue
+            resolved = candidate.resolve(strict=True)
+            if resolved.is_file():
+                relative = resolved.relative_to(cache_root).as_posix()
+                return relative, str(resolved)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return None
+
+
+def build_media_context(full_root: str, snapshot_root: str | None = None,
+                        decrypted_files: dict | None = None):
+    """Return bounded media metadata and paths linked via local WeCom indexes."""
     media = []
     if os.path.exists(MEDIA_INDEX):
         try:
@@ -402,41 +459,91 @@ def build_media_context(full_root: str):
                 media = json.load(f)
         except Exception:
             media = []
+    if not isinstance(media, list):
+        media = []
+    media = [row for row in media if isinstance(row, dict)]
 
     by_md5 = {}
     for r in media:
-        if r.get('MD5'):
-            by_md5.setdefault(r['MD5'].lower(), []).append(r)
+        md5 = r.get('MD5')
+        if isinstance(md5, str) and md5:
+            by_md5.setdefault(md5.lower(), []).append(r)
     for r in media:
         r['rel'] = rel_to_media_path(r.get('保存路径', ''))
 
-    mid_by_md5 = {}
-    for p in glob.glob(os.path.join(full_root, '**', 'file.db'), recursive=True):
-        try:
-            c = sqlite3.connect('file:' + p + '?mode=ro', uri=True)
-            if not [r[1] for r in c.execute('pragma table_info(file_table4)')]:
-                c.close()
+    mids_by_md5 = {}
+    file_db_paths = [path for rel, path in (decrypted_files or {}).items()
+                     if os.path.basename(rel).casefold() == 'file.db']
+    raw_db_root = snapshot_root or full_root
+    file_db_paths.extend(path for path in glob.glob(
+        os.path.join(raw_db_root, '**', 'file.db'), recursive=True) if path not in file_db_paths)
+    for path in file_db_paths:
+        for mid, md5 in _iter_readonly_rows(path, 'file_table4', ('message_id', 'md5')):
+            normalized = str(md5 or '').lower()
+            if normalized:
+                mids = mids_by_md5.setdefault(normalized, [])
+                if mid not in mids:
+                    mids.append(mid)
+
+    # CacheMapping databases are copied into the per-run snapshot and inspected
+    # read-only. This replaces the external media-index generation step.
+    mapping_paths = []
+    if snapshot_root:
+        mapping_paths.extend(glob.glob(os.path.join(snapshot_root, 'CacheMapping', '**', '*.db'),
+                                       recursive=True))
+    mapping_paths.extend(path for rel, path in (decrypted_files or {}).items()
+                         if 'cachemapping' in rel.casefold() and path not in mapping_paths)
+    cache_mapping = {}
+    for path in mapping_paths:
+        for _kind, _key, filename, _modified, md5 in _iter_readonly_rows(
+                path, 'mapping', ('type', 'key', 'file_name', 'last_modify_time', 'file_md5')):
+            normalized = str(md5 or '').lower()
+            if normalized and normalized in mids_by_md5:
+                cache_mapping.setdefault(normalized, []).append((str(filename or ''), str(_kind or '')))
+
+    resolved_by_md5 = {}
+    for md5, filenames in cache_mapping.items():
+        for filename, media_type in filenames:
+            resolved = _cache_file(full_root, filename, media_type)
+            if not resolved:
                 continue
-            for mid, md5 in c.execute('select message_id,md5 from file_table4'):
-                m = str(md5 or '').lower()
-                if m:
-                    mid_by_md5.setdefault(m, mid)
-            c.close()
-        except Exception:
-            pass
+            relative, absolute = resolved
+            if not any(item[0] == relative for item in resolved_by_md5.setdefault(md5, [])):
+                resolved_by_md5[md5].append((relative, absolute, filename, media_type))
 
     by_mid = {}
     for md5, rows in by_md5.items():
-        mid = mid_by_md5.get(md5)
-        if mid is None:
+        if md5 in resolved_by_md5:
             continue
-        for r in rows:
-            if not r.get('rel'):
-                continue
-            by_mid.setdefault(mid, []).append({
-                'p': r['rel'], 'n': r.get('文件名', ''), 'k': r.get('类型', ''),
-                'sz': r.get('大小', 0),
-            })
+        message_ids = mids_by_md5.get(md5, ())
+        if not message_ids:
+            continue
+        for mid in message_ids:
+            for r in rows:
+                if not r.get('rel'):
+                    continue
+                by_mid.setdefault(mid, []).append({
+                    'p': r['rel'], 'n': r.get('文件名', ''), 'k': r.get('类型', ''),
+                    'sz': r.get('大小', 0),
+                })
+    indexed_media = {(str(row.get('MD5') or '').lower(), str(row.get('rel') or ''))
+                     for row in media}
+    for md5, resolved_files in resolved_by_md5.items():
+        message_ids = mids_by_md5.get(md5, ())
+        if not message_ids:
+            continue
+        for relative, absolute, filename, media_type in resolved_files:
+            attachment = {'_local_cache_path': relative,
+                          'n': os.path.basename(filename.replace('\\', '/')),
+                          'k': media_type or os.path.splitext(filename)[1].lower(),
+                          'sz': os.path.getsize(absolute)}
+            for message_id in message_ids:
+                by_mid.setdefault(message_id, []).append(dict(attachment))
+            media_key = (md5, relative)
+            if media_key not in indexed_media:
+                media.append({'MD5': md5, '文件名': attachment['n'], '大小': attachment['sz'],
+                              'rel': relative})
+                indexed_media.add(media_key)
     return media, by_mid
 
 
@@ -755,6 +862,8 @@ class SyncEngine:
         # 非聊天内容（较慢，按轮缓存，不每轮重算）
         self.content_cache = None
         self.content_stamp = None
+        self._released_notices = None
+        self._released_summary = None
 
     # ---- 订阅 ----
     def subscribe(self, cb):
@@ -769,6 +878,10 @@ class SyncEngine:
     def _emit(self, ev: dict):
         with self.lock:
             subs = list(self.subscribers)
+        if not subs:
+            return
+        if callable(ev):
+            ev = ev()
         for cb in subs:
             try:
                 cb(ev)
@@ -799,15 +912,13 @@ class SyncEngine:
             return []
 
         names, convs = load_names_convs(decs)
-        rows = read_messages(msgdb)
-        media, by_mid = build_media_context(os.path.join(self.full_root, MYVID))
+        media, by_mid = build_media_context(os.path.join(self.full_root, MYVID), snap, decs)
 
         state = load_state()
         seen = set(state.get('seen', []))
         new = []
         allmsgs = []
-        for r in rows:
-            k = msg_key(r[0], r[3], r[5], r[4], r[6])
+        for r in iter_read_messages(msgdb):
             m = render(r, names, convs, by_mid)
             kk = msg_key(r[0], r[3], r[5], r[4], r[6])
             m['_k'] = kk
@@ -827,6 +938,8 @@ class SyncEngine:
             self.media_by_mid = by_mid
             self.msg_db_name = os.path.relpath(msgdb, snap)
             self.stats_cache = None
+            self._released_notices = None
+            self._released_summary = None
             self.last_run = _now()
             self.run_count += 1
             self.error = None
@@ -836,7 +949,7 @@ class SyncEngine:
             self._append_new(new)
             self.new_count_total += len(new)
             self.log(f"★ 新增 {len(new)} 条消息")
-            self._emit({
+            self._emit(lambda: {
                 'type': 'new', 'ts': _now(), 'count': len(new),
                 'messages': [strip_internal(m) for m in new],
             })
@@ -847,12 +960,12 @@ class SyncEngine:
         st['seen'] = list(seen)
         st['runs'] = st.get('runs', 0) + 1
         st['last'] = _now()
-        st['msg_total'] = len(rows)
+        st['msg_total'] = len(allmsgs)
         save_state(st)
 
         self._emit({
             'type': 'status', 'ts': _now(), 'error': None,
-            'files': n, 'dbs': len(decs), 'messages': len(rows),
+            'files': n, 'dbs': len(decs), 'messages': len(allmsgs),
             'conversations': len(set(m['conversation'] for m in allmsgs)),
             'people': len(names), 'media': len(media),
             'elapsed': round(time.time() - t0, 1),
@@ -933,8 +1046,11 @@ class SyncEngine:
                 return self.content_cache
 
         t0 = time.time()
-        msgs = self.snapshot_messages()
-        notices = extract_notices(msgs)
+        with self.lock:
+            notices = self._released_notices
+            messages = self.messages
+        if notices is None:
+            notices = extract_notices(messages)
         apps = extract_apps(self.full_root)
         directory = extract_directory(self.full_root)
         gmembers = extract_members_of_groups(self.full_root)
@@ -995,9 +1111,34 @@ class SyncEngine:
         with self.lock:
             return list(self.messages)
 
+    def iter_messages(self):
+        # Sync publishes a replacement list; retaining this reference gives a
+        # stable read view without another full-size array of message pointers.
+        with self.lock:
+            snapshot = self.messages
+        return iter(snapshot)
+
+    def release_messages(self):
+        """Drop Hub-ingested text while retaining non-chat notices and metadata."""
+        with self.lock:
+            if self._released_summary is not None:
+                return dict(self._released_summary)
+            self._released_notices = extract_notices(self.messages)
+            self._released_summary = {
+                'messages': len(self.messages),
+                'conversations': len(set(m['conversation'] for m in self.messages)),
+            }
+            self.messages = []
+            self.stats_cache = None
+            return dict(self._released_summary)
+
     def snapshot_media(self):
         with self.lock:
             return list(self.media)
+
+    @property
+    def cache_root(self):
+        return os.path.join(self.full_root, MYVID)
 
     def info(self):
         with self.lock:
@@ -1006,9 +1147,9 @@ class SyncEngine:
                 'interval': self.interval,
                 'run_count': self.run_count,
                 'last_run': self.last_run,
-                'messages': len(self.messages),
-                'conversations': len(set(m['conversation']
-                                         for m in self.messages)),
+                'messages': (self._released_summary or {}).get('messages', len(self.messages)),
+                'conversations': (self._released_summary or {}).get(
+                    'conversations', len(set(m['conversation'] for m in self.messages))),
                 'people': len(self.names),
                 'media': len(self.media),
                 'new_total': self.new_count_total,
@@ -1019,7 +1160,11 @@ class SyncEngine:
 
 
 def strip_internal(m: dict) -> dict:
-    return {k: v for k, v in m.items() if not k.startswith('_')}
+    if isinstance(m, dict):
+        return {k: strip_internal(v) for k, v in m.items() if not k.startswith('_')}
+    if isinstance(m, list):
+        return [strip_internal(value) for value in m]
+    return m
 
 
 # --------------------------------------------------------------------------

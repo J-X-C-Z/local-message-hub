@@ -86,7 +86,7 @@ mod gray_tip_tests {
     #[tokio::test]
     async fn parses_recall_nick_and_json_gray_tip_items() {
         let mut parser = SimpleMessageParser::new(SimpleParserOptions::standard());
-        let mut recall = raw_message("recall", "u_self", "12519212", "速冻饺子");
+        let mut recall = raw_message("recall", "u_self", "100000002", "测试发送者");
         recall["msgType"] = json!(5);
         recall["recallTime"] = json!("1");
         recall["elements"] = json!([{
@@ -95,9 +95,9 @@ mod gray_tip_tests {
                 "subElementType": 1,
                 "revokeElement": {
                     "operatorUid": "u_self",
-                    "operatorNick": "速冻饺子",
+                    "operatorNick": "测试发送者",
                     "origMsgSenderUid": "u_self",
-                    "origMsgSenderNick": "速冻饺子",
+                    "origMsgSenderNick": "测试发送者",
                     "isSelfOperate": true,
                     "wording": "因为有错别字。\t"
                 }
@@ -121,14 +121,14 @@ mod gray_tip_tests {
             "grayTipElement": {
                 "subElementType": 0,
                 "xmlElement": {
-                    "xmlStr": "<gtip align=\"center\"><qq uin=\"u_self\" col=\"3\" jp=\"12519212\" /><nor txt=\"邀请\"/><qq uin=\"u_peer\" col=\"3\" jp=\"1687657986\" /> <nor txt=\"加入了群聊，并附带了30条聊天记录。\"/> </gtip>"
+                    "xmlStr": "<gtip align=\"center\"><qq uin=\"u_self\" col=\"3\" jp=\"100000002\" /><nor txt=\"邀请\"/><qq uin=\"u_peer\" col=\"3\" jp=\"100000001\" /> <nor txt=\"加入了群聊，并附带了30条聊天记录。\"/> </gtip>"
                 }
             }
         }]);
 
         let messages = vec![
-            raw_message("self", "u_self", "12519212", "速冻饺子"),
-            raw_message("peer", "u_peer", "1687657986", "笨蛋Darf v2"),
+            raw_message("self", "u_self", "100000002", "测试发送者"),
+            raw_message("peer", "u_peer", "100000001", "测试联系人"),
             recall,
             tip,
             xml_tip,
@@ -137,13 +137,13 @@ mod gray_tip_tests {
 
         assert_eq!(
             parsed[2].content.text,
-            "速冻饺子 撤回了一条消息（因为有错别字）"
+            "测试发送者 撤回了一条消息（因为有错别字）"
         );
         assert!(parsed[2].recalled);
-        assert_eq!(parsed[3].content.text, "速冻饺子戳了戳笨蛋Darf v2");
+        assert_eq!(parsed[3].content.text, "测试发送者戳了戳测试联系人");
         assert_eq!(
             parsed[4].content.text,
-            "速冻饺子邀请笨蛋Darf v2加入了群聊，并附带了30条聊天记录。"
+            "测试发送者邀请测试联系人加入了群聊，并附带了30条聊天记录。"
         );
     }
 
@@ -160,7 +160,7 @@ mod gray_tip_tests {
                 "groupElement": {
                     "type": 1,
                     "memberUid": "u_self",
-                    "memberNick": "速冻饺子",
+                    "memberNick": "测试发送者",
                     "adminUid": "u_admin",
                     "adminNick": "小wu君",
                     "memberAdd": {
@@ -328,7 +328,7 @@ mod reply_target_tests {
             "peerUid": "u_peer",
             "senderUid": format!("u_{sender_uin}"),
             "senderUin": sender_uin,
-            "sendNickName": if sender_uin == "1687657986" { "笨蛋Darf v2" } else { "速冻饺子" },
+            "sendNickName": if sender_uin == "100000001" { "测试联系人" } else { "测试发送者" },
             "elements": elements
         })
     }
@@ -338,7 +338,7 @@ mod reply_target_tests {
             id,
             "900",
             1_758_028_200,
-            "12519212",
+            "100000002",
             json!([
                 { "elementType": 7, "replyElement": reply },
                 { "elementType": 1, "textElement": { "content": "回复正文" } }
@@ -362,7 +362,7 @@ mod reply_target_tests {
             "7550661840517106706",
             "508",
             1_758_025_456,
-            "1687657986",
+            "100000001",
             json!([{
                 "elementType": 2,
                 "picElement": {
@@ -376,10 +376,10 @@ mod reply_target_tests {
             "7550661067109350011",
             "506",
             1_758_025_276,
-            "1687657986",
+            "100000001",
             json!([{
                 "elementType": 1,
-                "textElement": { "content": "终于不用每次切后台关vpn了" }
+                "textElement": { "content": "这是一条示例消息" }
             }]),
         );
         let image_reply = reply_message(
@@ -387,7 +387,7 @@ mod reply_target_tests {
             json!({
                 "replayMsgId": "7550673423851295947",
                 "replyMsgTime": 1_758_025_456,
-                "senderUin": "1687657986",
+                "senderUin": "100000001",
                 "sourceMsgText": "[图片]"
             }),
         );
@@ -396,8 +396,8 @@ mod reply_target_tests {
             json!({
                 "referencedMessageId": "7550673536078933492",
                 "replayMsgTime": "1758025276",
-                "senderUin": "1687657986",
-                "sourceMsgText": "终于不用每次切后台关vpn了"
+                "senderUin": "100000001",
+                "sourceMsgText": "这是一条示例消息"
             }),
         );
 
@@ -422,7 +422,7 @@ mod reply_target_tests {
         assert_eq!(reply_data(&parsed[3])["messageId"], "7550661067109350011");
         assert_eq!(
             reply_data(&parsed[3])["content"],
-            "终于不用每次切后台关vpn了"
+            "这是一条示例消息"
         );
     }
 
@@ -432,14 +432,14 @@ mod reply_target_tests {
             "first",
             "1",
             1_758_025_276,
-            "1687657986",
+            "100000001",
             json!([{ "elementType": 1, "textElement": { "content": "first" } }]),
         );
         let second = raw_message(
             "second",
             "2",
             1_758_025_276,
-            "1687657986",
+            "100000001",
             json!([{ "elementType": 1, "textElement": { "content": "second" } }]),
         );
         let reply = reply_message(
@@ -447,7 +447,7 @@ mod reply_target_tests {
             json!({
                 "replayMsgId": "missing",
                 "sourceMsgTime": 1_758_025_276_000_i64,
-                "senderUin": "1687657986",
+                "senderUin": "100000001",
                 "sourceMsgText": "preview"
             }),
         );
@@ -467,7 +467,7 @@ mod reply_target_tests {
             "first",
             "101",
             1_758_025_100,
-            "1687657986",
+            "100000001",
             json!([{ "elementType": 1, "textElement": { "content": "first" } }]),
         );
         first["clientSeq"] = json!("201");
@@ -475,7 +475,7 @@ mod reply_target_tests {
             "second",
             "102",
             1_758_025_200,
-            "1687657986",
+            "100000001",
             json!([{ "elementType": 1, "textElement": { "content": "second" } }]),
         );
         second["clientSeq"] = json!("202");
@@ -567,7 +567,7 @@ mod reply_target_tests {
             "text-1",
             "11",
             1_758_025_200,
-            "1687657986",
+            "100000001",
             json!([{ "elementType": 1, "textElement": { "content": "hi" } }]),
         );
 
@@ -578,8 +578,8 @@ mod reply_target_tests {
         assert_eq!(parsed[0].sender.uid, "未知");
         assert_eq!(parsed[0].sender.uin, None);
         assert_eq!(parsed[0].sender.name, "系统消息");
-        assert_eq!(parsed[1].sender.uin.as_deref(), Some("1687657986"));
-        assert_eq!(parsed[1].sender.name, "笨蛋Darf v2");
+        assert_eq!(parsed[1].sender.uin.as_deref(), Some("100000001"));
+        assert_eq!(parsed[1].sender.name, "测试联系人");
     }
 }
 

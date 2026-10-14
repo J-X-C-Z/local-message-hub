@@ -1,2 +1,5 @@
 qrcode==8.2
 pypng==0.20220715.0
+ijson==3.4.0.post0
+cryptography==45.0.7
+pilk-nogil==0.4.3

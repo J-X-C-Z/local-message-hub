@@ -1,0 +1,24 @@
+:root { color-scheme: light; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #202623; background: #f4f5f2; }
+* { box-sizing: border-box; }
+body { min-width: 320px; min-height: 100vh; margin: 0; }
+.lock-shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; justify-items: center; padding: 28px 20px 22px; }
+.lock-brand { display: inline-flex; align-items: center; gap: 10px; color: inherit; font-size: 15px; font-weight: 650; text-decoration: none; }
+.lock-brand img { width: 28px; height: 28px; }
+.lock-panel { width: min(100%, 400px); align-self: center; padding: 30px; border: 1px solid #dce2dc; border-radius: 8px; background: #fff; box-shadow: 0 16px 48px #20372d12; }
+.lock-mark { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 20px; border-radius: 8px; background: #e6f2eb; font-size: 20px; }
+h1 { margin: 0 0 24px; font-size: 22px; line-height: 1.3; font-weight: 650; }
+label { display: block; margin-bottom: 8px; color: #546159; font-size: 13px; }
+input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #cbd5ce; border-radius: 6px; background: #fff; color: inherit; font: inherit; }
+input:focus { border-color: #347d5a; outline: 3px solid #347d5a24; }
+button { width: 100%; height: 42px; margin-top: 16px; border: 0; border-radius: 6px; background: #286a49; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+button:hover { background: #205a3d; }
+button:disabled { opacity: .6; cursor: wait; }
+#lock-error { min-height: 20px; margin: 12px 0 0; color: #a12c32; font-size: 13px; }
+.lock-scope { max-width: 520px; margin: 18px 0 0; color: #69766f; font-size: 12px; line-height: 1.5; text-align: center; }
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark; color: #e7ece8; background: #151a17; }
+  .lock-panel { border-color: #333c36; background: #202722; box-shadow: 0 16px 48px #0004; }
+  .lock-mark { background: #293d31; }
+  label, .lock-scope { color: #a5b1a9; }
+  input { border-color: #46534a; background: #171d19; }
+}

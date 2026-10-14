@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
     $rootPath = [System.IO.Path]::GetFullPath($PackageRoot)
     if (-not (Test-Path -LiteralPath (Join-Path $rootPath 'hub/server.py') -PathType Leaf)) {
@@ -17,13 +18,37 @@ function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
     $stdout = Join-Path $temp 'server.stdout.log'
     $stderr = Join-Path $temp 'server.stderr.log'
     New-Item -ItemType Directory -Path $storage -Force | Out-Null
-    $port = Get-Random -Minimum 20000 -Maximum 50000
-    $arguments = '-m hub.server --port {0} --storage "{1}" --no-autosync' -f $port, $storage
+    if (@(Get-ChildItem -LiteralPath $storage -Force).Count -ne 0) { throw 'Package smoke storage was not empty before startup.' }
+    $arguments = '-m hub.server --port 0 --storage "{0}" --no-autosync' -f $storage
+    $smokeEnvironment = @{
+        LOCALAPPDATA = $temp
+        APPDATA = Join-Path $temp 'appdata'
+        USERPROFILE = Join-Path $temp 'userprofile'
+        LMH_STORAGE_DIR = $storage
+        WECOM_LOCAL_DIR = Join-Path $storage 'integrations/wecom'
+        WECHATAUTO_KEYS_DIR = Join-Path $storage 'integrations/wechat/keys'
+        QCE_SECURITY_FILE = Join-Path $storage 'qq/security.json'
+        QCE_BUNDLE_DIR = Join-Path $temp 'LocalMessageHub/runtime/qq/v6.3.2/shell/NapCat-QCE-Windows-x64'
+        QCE_BASE_URL = 'http://127.0.0.1:0'
+        PYTHONPATH = $null
+        PYTHONHOME = $null
+        PYTHONUSERBASE = $null
+        VIRTUAL_ENV = $null
+        PYTHONNOUSERSITE = '1'
+    }
+    $originalSmokeEnvironment = @{}
+    foreach ($name in $smokeEnvironment.Keys) {
+        $originalSmokeEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
+    }
     $process = $null
     try {
+        foreach ($name in $smokeEnvironment.Keys) {
+            [System.Environment]::SetEnvironmentVariable($name, $smokeEnvironment[$name], 'Process')
+        }
         $process = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $rootPath `
             -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         $statePath = Join-Path $storage 'server.json'
+        $loopbackUrlPattern = '^http://127\.0\.0\.1:(\d+)$'
         $url = $null
         for ($attempt = 0; $attempt -lt 80; $attempt++) {
             if ($process.HasExited) {
@@ -34,13 +59,23 @@ function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
             if (Test-Path -LiteralPath $statePath -PathType Leaf) {
                 try {
                     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-                    if ($state.url -match '^http://127\.0\.0\.1:\d+$') { $url = $state.url; break }
+                    if ([long]$state.pid -gt 0 -and
+                        $state.url -match $loopbackUrlPattern -and [int]$Matches[1] -gt 0) {
+                        $url = $state.url
+                        break
+                    }
                 } catch {
                 }
             }
             Start-Sleep -Milliseconds 250
         }
-        if (-not $url) { throw 'Hub did not publish a loopback server URL within 20 seconds.' }
+        if (-not $url) {
+            $outText = if (Test-Path $stdout) { Get-Content -Raw $stdout } else { '' }
+            $errText = if (Test-Path $stderr) { Get-Content -Raw $stderr } else { '' }
+            if ($outText.Length -gt 2000) { $outText = $outText.Substring($outText.Length - 2000) }
+            if ($errText.Length -gt 2000) { $errText = $errText.Substring($errText.Length - 2000) }
+            throw "Hub did not publish a loopback server URL within 20 seconds. stdout=$outText stderr=$errText"
+        }
         $page = Invoke-WebRequest -Uri "$url/" -UseBasicParsing -TimeoutSec 5
         if ($page.StatusCode -ne 200 -or $page.Content -notmatch '<html lang="zh-CN">') {
             throw 'Packaged WebUI root did not return the expected page.'
@@ -50,6 +85,10 @@ function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
         $settings = Invoke-RestMethod -Uri "$url/api/settings" -TimeoutSec 5
         if ([System.IO.Path]::GetFullPath($settings.storage_dir) -ne [System.IO.Path]::GetFullPath($storage)) {
             throw 'Hub did not use the isolated temporary storage directory.'
+        }
+        $conversations = Invoke-RestMethod -Uri "$url/api/conversations?platform=all&limit=1" -TimeoutSec 5
+        if ([int]$conversations.total -ne 0 -or @($conversations.items).Count -ne 0) {
+            throw 'Package smoke storage unexpectedly contained conversations.'
         }
         $mcp = Invoke-RestMethod -Uri "$url/api/mcp" -TimeoutSec 5
         if (-not $mcp.available -or $mcp.mode -ne 'read-only') {
@@ -61,6 +100,9 @@ function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
         if ($process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             $process.WaitForExit(5000) | Out-Null
+        }
+        foreach ($name in $smokeEnvironment.Keys) {
+            [System.Environment]::SetEnvironmentVariable($name, $originalSmokeEnvironment[$name], 'Process')
         }
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
     }
@@ -78,13 +120,25 @@ $OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
 $requiredFiles = @(
     'START.cmd', 'start_hub.py', 'LICENSE', 'UPSTREAM.md',
     'scripts/package-windows-source.ps1',
+    'scripts/build-qce-windows.ps1',
+    'scripts/assert-package-privacy.ps1',
+    'scripts/test-package-privacy.ps1',
+    'scripts/benchmark-memory.py',
     'hub/server.py', 'hub/store.py', 'hub/mcp_server.py',
+    'integrations/wecom/bot_credentials.py', 'integrations/wecom/bot_media.py',
+    'integrations/wecom/bot_sender.py',
+    'integrations/qq/upstream/expanded/qq-chat-exporter-6.3.2/qq-chat-export-server/Cargo.lock',
+    'integrations/qq/upstream/expanded/qq-chat-exporter-6.3.2/LICENSE',
     'webui/index.html', 'webui/app.js', 'webui/style.css',
     'webui/package.json', 'webui/package-lock.json',
     'integrations/wechat/requirements.txt', 'integrations/wechat/provider.py',
-    'integrations/wecom/adapter.py', 'integrations/qq/provider.py',
+    'integrations/wecom/adapter.py', 'integrations/qq/provider.py', 'integrations/qq/sender.py',
+    'integrations/qq/local_provider.py', 'integrations/qq/local_wal.py', 'integrations/qq/key_reader.py',
+    'integrations/qq/key_store.py', 'integrations/qq/send_target.py',
     'integrations/telegram/adapter.py',
-    'docs/LOCAL_HUB.md', 'docs/mcp-contract.md', 'docs/windows-package.md'
+    'docs/LOCAL_HUB.md', 'docs/mcp-contract.md', 'docs/windows-package.md',
+    'docs/avatar-and-attachments.md', 'docs/roadmap.md', 'docs/weflow-gap-matrix.md',
+    'docs/performance.md', 'docs/qq-local.md'
 )
 foreach ($relativePath in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $repo $relativePath) -PathType Leaf)) {
@@ -93,19 +147,30 @@ foreach ($relativePath in $requiredFiles) {
 }
 
 $forbiddenDirectoryNames = @(
-    '.git', '.local', '.runtime', 'runtime', 'venv', '.venv', 'node_modules',
-    '__pycache__', 'output', '.playwright', '.playwright-cli', 'target'
+    '.git', '.local', '.runtime', 'runtime', '.cache', 'cache', 'caches', 'venv', '.venv', 'node_modules',
+    '__pycache__', 'output', '.playwright', '.playwright-cli', 'target', 'wecom-bot-outbox'
 )
-$forbiddenFileNames = @('server.json', 'settings.json')
-$forbiddenExtensions = @('.db', '.sqlite', '.sqlite3', '.pyc', '.log', '.pem', '.key')
+$forbiddenFileNames = @('server.json', 'settings.json', 'wechat.json', 'wecom.json',
+                        'security.json', 'onebot11.json', 'napcat.json', 'wecom-bot.credentials')
+$forbiddenExtensions = @('.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm', '.sqlite-wal',
+                         '.sqlite-shm', '.sqlite3-wal', '.sqlite3-shm', '.pyc', '.log', '.pem', '.key', '.blob',
+                         '.csv', '.tsv')
 $includePaths = @(
     'START.cmd', 'start_hub.py', 'LICENSE', 'UPSTREAM.md',
     'hub', 'webui',
     'integrations/wechat', 'integrations/wecom',
-    'integrations/qq/provider.py', 'integrations/qq/README.md',
+    'integrations/qq/provider.py', 'integrations/qq/sender.py',
+    'integrations/qq/local_provider.py', 'integrations/qq/local_wal.py', 'integrations/qq/key_reader.py',
+    'integrations/qq/key_store.py', 'integrations/qq/send_target.py',
+    'integrations/qq/README.md',
+    'integrations/qq/upstream/expanded/qq-chat-exporter-6.3.2',
     'integrations/telegram',
-    'scripts/package-windows-source.ps1',
-    'docs/LOCAL_HUB.md', 'docs/mcp-contract.md', 'docs/windows-package.md'
+    'scripts/package-windows-source.ps1', 'scripts/build-qce-windows.ps1', 'scripts/assert-package-privacy.ps1',
+    'scripts/test-package-privacy.ps1',
+    'scripts/benchmark-memory.py',
+    'docs/LOCAL_HUB.md', 'docs/mcp-contract.md', 'docs/windows-package.md',
+    'docs/avatar-and-attachments.md', 'docs/roadmap.md', 'docs/weflow-gap-matrix.md',
+    'docs/performance.md', 'docs/qq-local.md'
 )
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('lmh-package-stage-' + [guid]::NewGuid().ToString('N'))
@@ -131,6 +196,7 @@ function Copy-SourceFile([string]$SourcePath) {
 }
 
 function Copy-SourceTree([string]$SourcePath) {
+    Assert-PackageSourceTreeRoot -SourcePath $SourcePath
     $pending = [System.Collections.Generic.Stack[string]]::new()
     $pending.Push($SourcePath)
     while ($pending.Count -gt 0) {
@@ -144,6 +210,14 @@ function Copy-SourceTree([string]$SourcePath) {
     }
 }
 
+function Assert-PackageSourceTreeRoot([string]$SourcePath) {
+    $item = Get-Item -LiteralPath $SourcePath -Force
+    if (-not $item.PSIsContainer -or
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Packaging source tree root must be a real directory: $SourcePath"
+    }
+}
+
 try {
     foreach ($relativePath in $includePaths) {
         $sourcePath = Join-Path $repo $relativePath
@@ -154,6 +228,9 @@ try {
 
     $missing = @($requiredFiles | Where-Object { -not $copied.Contains($_) })
     if ($missing.Count -gt 0) { throw "Portable bundle omitted required files: $($missing -join ', ')" }
+
+    & (Join-Path $payloadRoot 'scripts/assert-package-privacy.ps1') -Root $payloadRoot
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Source bundle privacy scan failed.' }
 
     $packageReadme = @'
 Local Message Hub - Windows portable source bundle
@@ -176,9 +253,31 @@ to check the bundle using temporary empty storage with automatic synchronization
     New-Item -ItemType Directory -Path $outputParent -Force | Out-Null
     if (Test-Path -LiteralPath $OutputPath) { throw "Output already exists; choose a new path: $OutputPath" }
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($payloadRoot, $OutputPath)
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($OutputPath)
+    Add-Type -AssemblyName System.IO.Compression
+    $stagedArchive = Join-Path $tempRoot 'LocalMessageHub-source.zip'
+    $archiveStream = [System.IO.File]::Open($stagedArchive, [System.IO.FileMode]::CreateNew)
+    $archive = [System.IO.Compression.ZipArchive]::new($archiveStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $paths = [string[]]@(Get-ChildItem -LiteralPath $payloadRoot -Recurse -File | ForEach-Object FullName)
+        [Array]::Sort($paths, [System.StringComparer]::Ordinal)
+        foreach ($path in $paths) {
+            $relativePath = $path.Substring($payloadRoot.TrimEnd('\', '/').Length + 1).Replace('\', '/')
+            $entry = $archive.CreateEntry($relativePath, [System.IO.Compression.CompressionLevel]::Optimal)
+            $entry.LastWriteTime = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+            $entryStream = $entry.Open()
+            try {
+                $inputStream = [System.IO.File]::OpenRead($path)
+                try { $inputStream.CopyTo($entryStream) }
+                finally { $inputStream.Dispose() }
+            } finally {
+                $entryStream.Dispose()
+            }
+        }
+    } finally {
+        $archive.Dispose()
+        $archiveStream.Dispose()
+    }
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($stagedArchive)
     try {
         foreach ($entry in $archive.Entries) {
             $segments = $entry.FullName -split '/'
@@ -187,6 +286,9 @@ to check the bundle using temporary empty storage with automatic synchronization
             }
             if ($forbiddenFileNames -contains (Split-Path -Leaf $entry.FullName)) {
                 throw "Forbidden local state file found in archive: $($entry.FullName)"
+            }
+            if (@($segments | Where-Object { $forbiddenDirectoryNames -contains $_ }).Count -gt 0) {
+                throw "Forbidden private-data directory found in archive: $($entry.FullName)"
             }
             $extension = [System.IO.Path]::GetExtension($entry.FullName).ToLowerInvariant()
             if ($forbiddenExtensions -contains $extension) {
@@ -199,11 +301,14 @@ to check the bundle using temporary empty storage with automatic synchronization
 
     if (-not $SkipSmokeTest) {
         $extractedRoot = Join-Path $tempRoot 'extracted'
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($OutputPath, $extractedRoot)
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($stagedArchive, $extractedRoot)
         & (Join-Path $extractedRoot 'scripts/package-windows-source.ps1') `
             -SmokePackageRoot $extractedRoot -Python $Python
         if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Smoke test failed with exit code $LASTEXITCODE" }
     }
+
+    if (Test-Path -LiteralPath $OutputPath) { throw "Output appeared during the build; refusing to overwrite it: $OutputPath" }
+    Move-Item -LiteralPath $stagedArchive -Destination $OutputPath
 
     Write-Output "Portable source bundle: $OutputPath"
     Write-Output "Included files: $($copied.Count + 1)"

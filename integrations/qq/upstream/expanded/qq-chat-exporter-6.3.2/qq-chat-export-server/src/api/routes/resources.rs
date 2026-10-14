@@ -1641,6 +1641,8 @@ pub async fn global_resource_files(
         .unwrap_or(50)
         .clamp(1, 200);
     let name_search = normalize_name_search(params.get("nameSearch").map(String::as_str));
+    let start_time = params.get("startTime").and_then(|value| value.parse::<u128>().ok());
+    let end_time = params.get("endTime").and_then(|value| value.parse::<u128>().ok());
 
     let resources_dir = state.path_manager.resources_dir();
     let mut dirs_to_scan: Vec<(&str, &str)> = Vec::new();
@@ -1674,8 +1676,17 @@ pub async fn global_resource_files(
                 }
             }
             let Ok(meta) = entry.metadata() else { continue };
+            let modified = meta.modified().ok();
+            let modified_ms = modified
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis());
+            if start_time.is_some_and(|bound| modified_ms.is_none_or(|time| time < bound))
+                || end_time.is_some_and(|bound| modified_ms.is_none_or(|time| time > bound))
+            {
+                continue;
+            }
             let ext = ext_of(&entry_name);
-            let modify_time = meta.modified().map(iso).unwrap_or_default();
+            let modify_time = modified.map(iso).unwrap_or_default();
             files.push(json!({
                 "type": resource_type,
                 "fileName": entry_name,
@@ -1704,6 +1715,7 @@ pub async fn global_resource_files(
             "page": page,
             "limit": limit,
             "hasMore": start_index.saturating_add(limit) < total,
+            "dateFilterSupported": true,
         }),
         &request_id,
     )
@@ -3314,7 +3326,7 @@ mod metadata_tests {
     fn private_avatar_rejects_uid_and_zero_values() {
         assert!(avatar_url("friend", "u_peer").is_none());
         assert!(avatar_url("friend", "0").is_none());
-        assert!(avatar_url("friend", "1687657986").is_some());
+        assert!(avatar_url("friend", "1234567890").is_some());
     }
 
     #[test]
@@ -3401,7 +3413,7 @@ mod metadata_tests {
 
     #[test]
     fn export_file_name_rejects_traversal_and_absolute_paths() {
-        assert!(valid_export_file_name("friend_123_20260713_002703.html"));
+        assert!(valid_export_file_name("friend_123_20250102_030405.html"));
         for invalid in [
             "../etc/passwd",
             "..\\Windows\\win.ini",
@@ -3459,21 +3471,21 @@ mod metadata_tests {
     fn modern_chunked_manifest_supplies_peer_avatar_metadata() {
         let manifest = json!({
             "chat": {
-                "name": "笨蛋Darf v2",
+                "name": "Example Contact",
                 "peerUid": "u_peer",
-                "peerUin": "1687657986"
+                "peerUin": "1234567890"
             },
-            "stats": { "totalMessages": 3538 }
+            "stats": { "totalMessages": 42 }
         });
         let mut file = json!({});
         apply_file_metadata(&mut file, parse_manifest_metadata(&manifest));
-        assert_eq!(file["displayName"], "笨蛋Darf v2");
-        assert_eq!(file["messageCount"], 3538);
+        assert_eq!(file["displayName"], "Example Contact");
+        assert_eq!(file["messageCount"], 42);
         assert_eq!(file["peerUid"], "u_peer");
-        assert_eq!(file["peerUin"], "1687657986");
+        assert_eq!(file["peerUin"], "1234567890");
         assert_eq!(
             file["avatarUrl"],
-            "https://q1.qlogo.cn/g?b=qq&nk=1687657986&s=100"
+            "https://q1.qlogo.cn/g?b=qq&nk=1234567890&s=100"
         );
     }
 
@@ -3496,19 +3508,19 @@ mod metadata_tests {
     #[test]
     fn explorer_receives_select_switch_separately_from_unicode_path() {
         let target = std::path::Path::new(
-            "C:/Users/QCE/Documents/avatar_test.zip",
+            "C:/Users/Example/Documents/avatar_test.zip",
         );
         let args = windows_explorer_args(target, true);
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "/select,");
         assert_eq!(
             args[1],
-            r"C:\Users\QCE\Documents\avatar_test.zip"
+            r"C:\Users\Example\Documents\avatar_test.zip"
         );
 
         let directory_args = windows_explorer_args(target.parent().unwrap(), false);
         assert_eq!(directory_args.len(), 1);
-        assert_eq!(directory_args[0], r"C:\Users\QCE\Documents");
+        assert_eq!(directory_args[0], r"C:\Users\Example\Documents");
     }
 
     #[test]
@@ -3533,28 +3545,28 @@ mod metadata_tests {
     #[test]
     fn filename_parsers_accept_legacy_and_millisecond_names() {
         let legacy =
-            parse_export_file_name("friend_u_UPWhwEIrK6nqDmJUmoYq3Q_20260713_002703.html").unwrap();
-        assert_eq!(legacy["chatId"], "u_UPWhwEIrK6nqDmJUmoYq3Q");
+            parse_export_file_name("friend_u_example_contact_20250102_030405.html").unwrap();
+        assert_eq!(legacy["chatId"], "u_example_contact");
 
         let modern =
-            parse_export_file_name("friend_笨蛋Darf_v2_1687657986_20260713_002703456.html")
+            parse_export_file_name("friend_Example_Contact_1234567890_20250102_030405678.html")
                 .unwrap();
-        assert_eq!(modern["chatId"], "1687657986");
-        assert_eq!(modern["displayName"], "笨蛋Darf v2");
-        assert_eq!(modern["exportDate"], "2026-07-13 00:27:03");
+        assert_eq!(modern["chatId"], "1234567890");
+        assert_eq!(modern["displayName"], "Example Contact");
+        assert_eq!(modern["exportDate"], "2025-01-02 03:04:05");
 
         let duplicate =
-            parse_manual_export_file_name("group_AxT_鸽子窝_960420904_20260713_002703456_2.json")
+            parse_manual_export_file_name("group_Example_Team_123456_20250102_030405678_2.json")
                 .unwrap();
         assert_eq!(duplicate.chat_type, "group");
-        assert_eq!(duplicate.peer_uid, "960420904");
-        assert_eq!(duplicate.session_name.as_deref(), Some("AxT 鸽子窝"));
+        assert_eq!(duplicate.peer_uid, "123456");
+        assert_eq!(duplicate.session_name.as_deref(), Some("Example Team"));
 
         let uid_fallback = parse_manual_export_file_name(
-            "friend_联系人_u_UPWhwEIrK6nqDmJUmoYq3Q_20260713_002703456.html",
+            "friend_联系人_u_example_contact_20250102_030405678.html",
         )
         .unwrap();
-        assert_eq!(uid_fallback.peer_uid, "u_UPWhwEIrK6nqDmJUmoYq3Q");
+        assert_eq!(uid_fallback.peer_uid, "u_example_contact");
         assert_eq!(uid_fallback.session_name.as_deref(), Some("联系人"));
     }
 
@@ -3562,32 +3574,32 @@ mod metadata_tests {
     fn merged_file_names_parse_per_chat_and_legacy_formats() {
         // 新格式(按聊天合并):group / 多词聊天名 / 碰撞后缀。
         let group =
-            parse_merged_export_file_name("merged_group_胡椒玉米汤_2026-08-30T14-07-16.json")
+            parse_merged_export_file_name("merged_group_示例群聊_2025-01-02T03-04-05.json")
                 .unwrap();
         assert_eq!(group.format, "json");
-        assert_eq!(group.timestamp, "2026-08-30T14-07-16");
+        assert_eq!(group.timestamp, "2025-01-02T03-04-05");
         assert_eq!(group.chat_type, "group");
-        assert_eq!(group.display_name, "胡椒玉米汤");
+        assert_eq!(group.display_name, "示例群聊");
 
         let friend =
-            parse_merged_export_file_name("merged_friend_笨蛋_Darf_v2_2026-08-30T14-07-16_2.html")
+            parse_merged_export_file_name("merged_friend_Example_Contact_2025-01-02T03-04-05_2.html")
                 .unwrap();
         assert_eq!(friend.format, "html");
-        assert_eq!(friend.timestamp, "2026-08-30T14-07-16");
+        assert_eq!(friend.timestamp, "2025-01-02T03-04-05");
         assert_eq!(friend.chat_type, "friend");
-        assert_eq!(friend.display_name, "笨蛋 Darf v2");
+        assert_eq!(friend.display_name, "Example Contact");
 
         // 旧格式(历史产物)仍可解析,显示名保持「合并的聊天记录」。
-        let legacy = parse_merged_export_file_name("merged_2026-08-30T14-07-16.json").unwrap();
+        let legacy = parse_merged_export_file_name("merged_2025-01-02T03-04-05.json").unwrap();
         assert_eq!(legacy.format, "json");
-        assert_eq!(legacy.timestamp, "2026-08-30T14-07-16");
+        assert_eq!(legacy.timestamp, "2025-01-02T03-04-05");
         assert_eq!(legacy.chat_type, "group");
         assert_eq!(legacy.display_name, "合并的聊天记录");
 
         for rejected in [
-            "merged_2026-08-30T14-07-16.zip",
-            "merged_20260830.json",
-            "group_x_123_20260830_020047608.json",
+            "merged_2025-01-02T03-04-05.zip",
+            "merged_20250102.json",
+            "group_x_123_20250102_030405678.json",
             "merged_.json",
         ] {
             assert!(
@@ -3599,8 +3611,8 @@ mod metadata_tests {
         // 命名空间隔离:merged 文件名不进入普通/手动/定时解析器,
         // 不会出现在合并源候选(available-tasks)或作为再合并源。
         for merged_name in [
-            "merged_group_胡椒玉米汤_2026-08-30T14-07-16.json",
-            "merged_2026-08-30T14-07-16.json",
+            "merged_group_示例群聊_2025-01-02T03-04-05.json",
+            "merged_2025-01-02T03-04-05.json",
         ] {
             assert!(
                 parse_export_file_name(merged_name).is_none(),
@@ -3618,8 +3630,8 @@ mod metadata_tests {
 
         // 展示时间:T 换空格,时间部分连字符换冒号。
         assert_eq!(
-            merged_export_display_time("2026-08-30T14-07-16"),
-            "2026-08-30 14:07:16"
+            merged_export_display_time("2025-01-02T03-04-05"),
+            "2025-01-02 03:04:05"
         );
     }
 
@@ -3633,7 +3645,7 @@ mod metadata_tests {
 
         // 聊天名消毒:空格/斜杠转下划线并折叠。
         let (json_name, html_name) =
-            merged_output_names(&base, "group", "胡椒 玉米汤/老群", "2026-08-30T14-07-16");
+            merged_output_names(&base, "group", "示例 群聊/旧群", "2025-01-02T03-04-05");
         assert_eq!(
             json_name,
             "merged_group_胡椒_玉米汤_老群_2026-08-30T14-07-16.json"
@@ -3667,28 +3679,28 @@ mod metadata_tests {
             resource_dir: PathBuf::from(format!("/tmp/resources_{name}")),
         };
         let file_names: Vec<String> = vec![
-            "group_胡椒玉米汤_647668860_20260830_020047608.json".to_string(),
-            "group_胡椒玉米汤_647668860_20260829_020047608.json".to_string(),
-            "group_黑猫燦炎上指挥部_814219720_20260830_020055645.html".to_string(),
-            "friend_笨蛋_Darf_v2_1687657986_20260713_002703456.html".to_string(),
+            "group_示例群聊_123456_20250102_030405678.json".to_string(),
+            "group_示例群聊_123456_20250101_030405678.json".to_string(),
+            "group_示例群聊二_654321_20250102_030455678.html".to_string(),
+            "friend_Example_Contact_1234567890_20250102_030405678.html".to_string(),
         ];
         let sources = vec![mk("a"), mk("b"), mk("c"), mk("d")];
         let (groups, skipped) = group_merge_sources(&file_names, sources);
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].chat_type, "group");
-        assert_eq!(groups[0].chat_id.as_deref(), Some("647668860"));
-        assert_eq!(groups[0].display_name, "胡椒玉米汤");
+        assert_eq!(groups[0].chat_id.as_deref(), Some("123456"));
+        assert_eq!(groups[0].display_name, "示例群聊");
         assert_eq!(groups[0].sources.len(), 2);
 
         assert_eq!(skipped.len(), 2);
         assert_eq!(
             skipped[0].file_name,
-            "group_黑猫燦炎上指挥部_814219720_20260830_020055645.html"
+            "group_示例群聊二_654321_20250102_030455678.html"
         );
         assert_eq!(
             skipped[1].file_name,
-            "friend_笨蛋_Darf_v2_1687657986_20260713_002703456.html"
+            "friend_Example_Contact_1234567890_20250102_030405678.html"
         );
 
         // 无法识别的文件名归入兜底组(保持旧行为)。
@@ -3703,18 +3715,18 @@ mod metadata_tests {
 
         // 手动导出名:chat_id 取 peer_uid。
         let manual_names: Vec<String> = vec![
-            "group_AxT_鸽子窝_960420904_20260713_002703456.json".to_string(),
-            "group_AxT_鸽子窝_960420904_20260713_002703456_2.json".to_string(),
+            "group_Example_Team_123456_20250102_030405678.json".to_string(),
+            "group_Example_Team_123456_20250102_030405678_2.json".to_string(),
         ];
         let (groups, skipped) = group_merge_sources(&manual_names, vec![mk("g"), mk("h")]);
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].chat_id.as_deref(), Some("960420904"));
+        assert_eq!(groups[0].chat_id.as_deref(), Some("123456"));
         assert!(skipped.is_empty());
 
         // 遗留定时名(任务名_时间):无 chat_id。
         let legacy_names: Vec<String> = vec![
-            "我的每日备份_2025-11-28T06-24-13.html".to_string(),
-            "我的每日备份_2025-11-29T06-24-13.html".to_string(),
+            "Example_Backup_2025-01-02T03-04-05.html".to_string(),
+            "Example_Backup_2025-01-03T03-04-05.html".to_string(),
         ];
         let (groups, skipped) = group_merge_sources(&legacy_names, vec![mk("i"), mk("j")]);
         assert_eq!(groups.len(), 1);
@@ -3942,40 +3954,40 @@ mod metadata_tests {
 
     #[test]
     fn scheduled_file_names_parse_current_and_legacy_formats() {
-        // 现行格式（真实线上样例）：{chatType}_{会话名}_{peer}_{YYYYMMDD}_{HHMMSSmmm}.json
+        // Current format: {chatType}_{session}_{peer}_{YYYYMMDD}_{HHMMSSmmm}.json
         let current =
-            parse_scheduled_export_file_name("group_胡椒玉米汤_647668860_20260830_020047608.json")
+            parse_scheduled_export_file_name("group_示例群聊_123456_20250102_030405678.json")
                 .unwrap();
-        assert_eq!(current.group_key, "group_647668860");
-        assert_eq!(current.task_name, "胡椒玉米汤");
-        assert_eq!(current.timestamp, "2026-08-30 02:00:47");
+        assert_eq!(current.group_key, "group_123456");
+        assert_eq!(current.task_name, "示例群聊");
+        assert_eq!(current.timestamp, "2025-01-02 03:04:05");
 
         // 好友会话 + 碰撞后缀 _2；下划线会话名尽力还原为空格。
         let friend = parse_scheduled_export_file_name(
-            "friend_笨蛋_Darf_v2_1687657986_20260713_002703456_2.html",
+            "friend_Example_Contact_1234567890_20250102_030405678_2.html",
         )
         .unwrap();
-        assert_eq!(friend.group_key, "friend_1687657986");
-        assert_eq!(friend.task_name, "笨蛋 Darf v2");
-        assert_eq!(friend.timestamp, "2026-07-13 00:27:03");
+        assert_eq!(friend.group_key, "friend_1234567890");
+        assert_eq!(friend.task_name, "Example Contact");
+        assert_eq!(friend.timestamp, "2025-01-02 03:04:05");
 
         // HTML 与 JSON 扩展名均可解析。
         assert!(parse_scheduled_export_file_name(
-            "group_黑猫燦炎上指挥部_814219720_20260830_020055645.html"
+            "group_示例群聊二_654321_20250102_030455678.html"
         )
         .is_some());
 
         // 遗留格式：任务名_YYYY-MM-DDTHH-MM-SS。
         let legacy =
-            parse_scheduled_export_file_name("我的每日备份_2025-11-28T06-24-13.html").unwrap();
-        assert_eq!(legacy.group_key, "我的每日备份");
-        assert_eq!(legacy.task_name, "我的每日备份");
-        assert_eq!(legacy.timestamp, "2025-11-28T06-24-13");
+            parse_scheduled_export_file_name("Example_Backup_2025-01-02T03-04-05.html").unwrap();
+        assert_eq!(legacy.group_key, "Example Backup");
+        assert_eq!(legacy.task_name, "Example Backup");
+        assert_eq!(legacy.timestamp, "2025-01-02T03-04-05");
 
         // 无法解析的文件名：ZIP/JSONL、非导出文件、缺时间戳。
         for rejected in [
-            "group_胡椒玉米汤_647668860_20260830_020047608_streaming.zip",
-            "group_胡椒玉米汤_647668860_20260830_020047608_chunked_jsonl",
+            "group_示例群聊_123456_20250102_030405678_streaming.zip",
+            "group_示例群聊_123456_20250102_030405678_chunked_jsonl",
             "随便.txt",
             "not-a-parseable-name.html",
         ] {

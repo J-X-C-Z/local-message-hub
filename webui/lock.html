@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f4f5f2">
+  <title>已锁定 / 消息中枢</title>
+  <link rel="icon" href="/assets/hub.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/lock.css">
+  <script src="/vendor/lucide.js" defer></script>
+  <script src="/lock.js" defer></script>
+</head>
+<body>
+  <main class="lock-shell">
+    <a class="lock-brand" href="/" aria-label="消息中枢"><img src="/assets/hub.svg" alt=""><span>消息中枢</span></a>
+    <section class="lock-panel" aria-labelledby="lock-title">
+      <div class="lock-mark" aria-hidden="true"><i data-lucide="lock-keyhole"></i></div>
+      <h1 id="lock-title">本机档案已锁定</h1>
+      <form id="unlock-form">
+        <label for="passphrase">解锁口令</label>
+        <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required autofocus>
+        <button type="submit">解锁</button>
+      </form>
+      <p id="lock-error" role="status" aria-live="polite"></p>
+    </section>
+    <p class="lock-scope">此锁仅保护本机 WebUI 与 HTTP API；独立 MCP stdio 客户端仍按其自身权限运行。</p>
+  </main>
+</body>
+</html>

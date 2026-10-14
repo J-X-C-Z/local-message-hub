@@ -41,9 +41,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import struct
+import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import List, Optional, Tuple
 from .diagnostics import diagnostic_print as print, private_logger
 
@@ -54,12 +57,18 @@ V2_MAGIC = b"\x07\x08\x56\x32\x08\x07"
 V1_HEADER_SZ = 22  # 6B sig + 16B xor key
 AES16_RE = re.compile(rb"[0-9a-zA-Z]{16,32}")
 DEFAULT_SAVE_PATH = os.path.join(os.path.expanduser("~"), "Documents", "wechatauto_media")
+MEDIA_COPY_CHUNK_SIZE = 1024 * 1024
+MAX_CACHED_ATTACHMENT_BYTES = 50 * 1024 * 1024
+MAX_ENCRYPTED_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_DECODED_IMAGE_BYTES = 64 * 1024 * 1024
 
 
 def _jpeg_like(pt: bytes) -> bool:
     return (
         (pt[:3] == b"\xff\xd8\xff")
-        or pt[:4] in (b"\x89PNG", b"GIF8", b"RIFF")
+        or pt[:4] in (b"\x89PNG", b"GIF8")
+        or pt[:2] == b"BM"
+        or (pt[:4] == b"RIFF" and pt[8:12] == b"WEBP")
         or pt[:4] == b"wxgf"  # 微信动画表情容器
     )
 
@@ -405,8 +414,12 @@ class MediaDownloader:
     def decrypt_image(self, dat_path: str, aes_key: Optional[str] = None,
                       xor_key: Optional[int] = None) -> bytes:
         """解密单个 .dat 为图片字节（自动识别 v1/v2 格式）"""
+        if os.path.getsize(dat_path) > MAX_ENCRYPTED_IMAGE_BYTES:
+            raise ValueError("图片缓存超过配置的解密上限")
         with open(dat_path, "rb") as f:
-            data = f.read()
+            data = f.read(MAX_ENCRYPTED_IMAGE_BYTES + 1)
+        if len(data) > MAX_ENCRYPTED_IMAGE_BYTES:
+            raise ValueError("图片缓存超过配置的解密上限")
         if not data:
             raise ValueError("空文件: %s" % dat_path)
         magic = data[:6]
@@ -417,11 +430,22 @@ class MediaDownloader:
                 xor_key = self._derive_xor_key(dat_path)
             key = data[6:22]
             body = data[22:]
-            return bytes(b ^ (xor_key & 0xFF) for b in body)
-        # 早期纯异或格式：逐字节 ^ 0xFF（无签名），按 JPEG/PNG 魔数回退判断
-        for cand in (0x88, 0x30, 0xFF, 0xE9):
+            out = bytes(b ^ (xor_key & 0xFF) for b in body)
+            if not _jpeg_like(out):
+                raise ValueError("V1 图片解密结果不是受支持的图片格式")
+            return out
+        # Legacy/V3 DAT uses the account XOR key, not a fixed key byte.
+        xor_candidates = []
+        if xor_key is not None:
+            xor_candidates.append(xor_key & 0xFF)
+        else:
+            cfg_dword = getattr(self.db, "cfg_dword", None)
+            if isinstance(cfg_dword, int):
+                xor_candidates.append(cfg_dword & 0xFF)
+        xor_candidates.extend((0x88, 0x30, 0xFF, 0xE9))
+        for cand in dict.fromkeys(xor_candidates):
             out = bytes(b ^ cand for b in data)
-            if out[:3] == b"\xff\xd8\xff" or out[:4] == b"\x89PNG":
+            if _jpeg_like(out):
                 return out
         raise ValueError("无法识别的图片加密格式: %s" % dat_path)
 
@@ -445,7 +469,15 @@ class MediaDownloader:
                     aes_key: Optional[str], xor_key: Optional[int]) -> bytes:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+        if len(data) < 15:
+            raise ValueError("V2 图片容器头部不完整")
         aes_size, xor_size = struct.unpack_from("<LL", data, 6)
+        if aes_size == 0 or aes_size > MAX_ENCRYPTED_IMAGE_BYTES:
+            raise ValueError("V2 图片容器 AES 长度无效")
+        aes_blk = aligned_aes_block_size(aes_size)
+        aes_end = 15 + aes_blk
+        if aes_end > len(data) or xor_size > len(data) - aes_end:
+            raise ValueError("V2 图片容器长度超出文件边界")
         if xor_key is None:
             xor_key = self._install_xor_key()
         if aes_key is None:
@@ -456,7 +488,6 @@ class MediaDownloader:
                     "打开（点击查看大图）任意一张图片，再重试 detect_image_key()；"
                     "或通过 MediaDownloader(image_key='...') 手动传入密钥。"
                 )
-        aes_blk = aligned_aes_block_size(aes_size)
         off = 15
         aes_data = data[off: off + aes_blk]
         off += aes_blk
@@ -469,6 +500,8 @@ class MediaDownloader:
             pt = pt[:-pad]
         out = pt + raw_data + bytes(b ^ (xor_key & 0xFF) for b in xor_data)
         out, footer = strip_container_footer(out)
+        if not _jpeg_like(out):
+            raise ValueError("V2 图片解密结果不是受支持的图片格式")
         if footer:
             wxlog.debug("V2 尾部 %d 字节页脚已按结束标记裁剪: %s"
                         % (footer, dat_path))
@@ -513,7 +546,18 @@ class MediaDownloader:
         """
         want = {md5 + "_h.dat": "original", md5 + ".dat": "mid",
                 md5 + "_t.dat": "thumb"}
-        base = os.path.join(self.db.account_dir, "msg", "attach", self._chat_md5(user))
+        account_root = os.path.realpath(self.db.account_dir)
+        attach_root = os.path.realpath(os.path.join(account_root, "msg", "attach"))
+        chat_root = os.path.join(attach_root, self._chat_md5(user))
+        if os.path.islink(chat_root):
+            return {}
+        base = os.path.realpath(chat_root)
+        try:
+            if (os.path.commonpath((account_root, attach_root)) != account_root or
+                    os.path.commonpath((attach_root, base)) != attach_root):
+                return {}
+        except ValueError:
+            return {}
         out = {}
         for root, _, files in os.walk(base):
             for f in files:
@@ -521,8 +565,16 @@ class MediaDownloader:
                 if tier and tier not in out:
                     p = os.path.join(root, f)
                     try:
-                        out[tier] = (p, os.path.getsize(p))
+                        if os.path.islink(p):
+                            continue
+                        resolved = os.path.realpath(p)
+                        if (os.path.commonpath((base, resolved)) != base or
+                                not os.path.isfile(resolved)):
+                            continue
+                        out[tier] = (resolved, os.path.getsize(resolved))
                     except OSError:
+                        continue
+                    except ValueError:
                         continue
         return out
 
@@ -557,11 +609,18 @@ class MediaDownloader:
             return False
         head = data[:8]
         if head[:3] == b"\xff\xd8\xff":          # JPEG
-            return b"\xff\xd9" in data[-64:]
+            return strip_container_footer(data)[0].endswith(b"\xff\xd9")
         if head[:4] == b"\x89PNG":               # PNG
-            return b"IEND" in data[-16:]
+            return strip_container_footer(data)[0].endswith(
+                b"\x49\x45\x4e\x44\xae\x42\x60\x82")
         if head[:6] in (b"GIF87a", b"GIF89a"):   # GIF 结束符 0x3B，可能补零
-            return b"\x3b" in data[-16:]
+            return data.rstrip(b"\x00").endswith(b"\x3b")
+        if head[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            declared_size = struct.unpack_from("<I", data, 4)[0]
+            return declared_size >= 12 and declared_size + 8 <= len(data)
+        if head[:2] == b"BM":                    # BMP 文件头声明的总长度
+            declared_size = struct.unpack_from("<I", data, 2)[0]
+            return declared_size >= 14 and declared_size <= len(data)
         return True
 
     def _wait_tier(self, user: str, md5: str, min_bytes: int = 1024,
@@ -862,12 +921,23 @@ class MediaDownloader:
 
     def _write_decrypted(self, data: bytes, stem: str, save_dir: Optional[str]) -> str:
         """按文件头判格式落盘（wxgf 先试转码），返回路径。"""
+        if data[:4] == b"wxgf" and len(data) >= 20:
+            for i in range(4, min(len(data) - 12, 4096)):
+                if (data[i:i + 3] == b"\xff\xd8\xff" or data[i:i + 4] == b"\x89PNG"
+                        or data[i:i + 4] == b"GIF8" or data[i:i + 2] == b"BM"
+                        or (data[i:i + 4] == b"RIFF" and data[i + 8:i + 12] == b"WEBP")):
+                    data = data[i:]
+                    break
         if data[:3] == b"\xff\xd8\xff":
             ext = "jpg"
         elif data[:4] == b"\x89PNG":
             ext = "png"
-        elif data[:3] == b"GIF":
+        elif data[:4] == b"GIF8":
             ext = "gif"
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            ext = "webp"
+        elif data[:2] == b"BM":
+            ext = "bmp"
         elif data[:4] == b"wxgf":
             # WXAM 格式：微信 4.x 普通图片也用 HEVC 编码存储（含动画表情）。
             # 优先用 ffmpeg 转码为 jpg；不可用时把原始解密数据落盘为 .wxgf 兜底。
@@ -990,19 +1060,132 @@ class MediaDownloader:
     def _out(self, save_dir: Optional[str], name: str) -> str:
         d = save_dir or self.save_dir
         os.makedirs(d, exist_ok=True)
-        return os.path.join(d, name)
+        safe_name = os.path.basename(str(name).replace("\\", os.sep).replace("/", os.sep))
+        if not safe_name or safe_name in (".", ".."):
+            raise ValueError("Invalid media output name")
+        return os.path.join(d, safe_name)
+
+    def _copy_cached_attachment(self, source_path: str, cache_root: str,
+                                 output_name: str,
+                                 save_dir: Optional[str] = None) -> Optional[str]:
+        """Copy one account-local attachment to Hub storage without unbounded reads."""
+        temporary = None
+        try:
+            account_root = os.path.realpath(self.db.account_dir)
+            root_path = os.path.abspath(cache_root)
+            if os.path.islink(root_path):
+                return None
+            resolved_root = os.path.realpath(root_path)
+            if (not os.path.isdir(resolved_root) or
+                    os.path.commonpath((account_root, resolved_root)) != account_root):
+                return None
+
+            if os.path.islink(source_path):
+                return None
+            resolved_source = os.path.realpath(source_path)
+            if (os.path.commonpath((resolved_root, resolved_source)) != resolved_root or
+                    not os.path.isfile(resolved_source)):
+                return None
+            source_size = os.path.getsize(resolved_source)
+            if source_size > MAX_CACHED_ATTACHMENT_BYTES:
+                return None
+
+            output_path = self._out(save_dir, output_name)
+            output_dir = os.path.realpath(os.path.dirname(output_path))
+            if os.path.commonpath((account_root, output_dir)) == account_root:
+                return None
+            if os.path.islink(output_path):
+                return None
+
+            copied = 0
+            with open(resolved_source, "rb") as source, tempfile.NamedTemporaryFile(
+                    mode="wb", dir=output_dir, prefix=".lmh-media-", suffix=".part",
+                    delete=False) as target:
+                temporary = target.name
+                while True:
+                    block = source.read(MEDIA_COPY_CHUNK_SIZE)
+                    if not block:
+                        break
+                    copied += len(block)
+                    if copied > MAX_CACHED_ATTACHMENT_BYTES:
+                        raise ValueError("cached attachment exceeds the size limit")
+                    target.write(block)
+                if copied != source_size:
+                    raise ValueError("cached attachment changed while being copied")
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, output_path)
+            temporary = None
+            return output_path
+        except (OSError, ValueError):
+            return None
+        finally:
+            if temporary:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------
     # WXAM (wxgf) 解码：微信 4.x 普通图片的新存储格式，内部为 HEVC 裸流
     # ------------------------------------------------------------------
     def _extract_hevc(self, data: bytes) -> Optional[bytes]:
         """从 wxgf 容器提取 HEVC Annex-B 裸流（自首个 NALU 起始码起）。"""
-        start = data.find(b"\x00\x00\x00\x01")
+        starts = (data.find(b"\x00\x00\x00\x01", 4),
+                  data.find(b"\x00\x00\x01", 4))
+        starts = [start for start in starts if start >= 0]
+        start = min(starts) if starts else -1
         return data[start:] if start >= 0 else None
 
     @staticmethod
+    def _wxgf_hevc_candidates(data: bytes) -> List[bytes]:
+        starts = []
+        i = 4
+        while i < len(data) - 3:
+            prefix = 4 if data[i:i + 4] == b"\x00\x00\x00\x01" else 3 if data[i:i + 3] == b"\x00\x00\x01" else 0
+            if prefix:
+                starts.append((i, prefix))
+                i += prefix
+            else:
+                i += 1
+
+        units = []
+        for index, (start, prefix) in enumerate(starts):
+            end = starts[index + 1][0] if index + 1 < len(starts) else len(data)
+            unit = data[start + prefix:end]
+            if len(unit) >= 2 and not unit[0] & 0x80:
+                units.append(unit)
+
+        candidates = []
+        vps = [index for index, unit in enumerate(units) if unit[0] >> 1 & 0x3f == 32]
+        groups = []
+        for index, start in enumerate(vps):
+            end = vps[index + 1] if index + 1 < len(vps) else len(units)
+            group = units[start:end]
+            if any((unit[0] >> 1 & 0x3f) in (1, 19, 20) for unit in group):
+                groups.append(b"".join(b"\x00\x00\x00\x01" + unit for unit in group))
+        for candidate in sorted(groups, key=len, reverse=True) + [
+                b"".join(b"\x00\x00\x00\x01" + unit for unit in units), data[4:]]:
+            if len(candidate) >= 100 and candidate not in candidates:
+                candidates.append(candidate)
+        if not candidates:
+            starts = (data.find(b"\x00\x00\x00\x01", 4),
+                      data.find(b"\x00\x00\x01", 4))
+            starts = [start for start in starts if start >= 0]
+            raw = data[min(starts):] if starts else None
+            if raw:
+                candidates.append(raw)
+        return candidates
+
+    @staticmethod
     def _ffmpeg_exe() -> Optional[str]:
-        import shutil
+        bundled = os.environ.get("LMH_FFMPEG_PATH")
+        if bundled and os.path.isfile(bundled):
+            return bundled
+        if getattr(sys, "frozen", False):
+            bundled = str(Path(sys._MEIPASS) / "media" / "ffmpeg.exe")
+            if os.path.isfile(bundled):
+                return bundled
         exe = shutil.which("ffmpeg")
         if exe:
             return exe
@@ -1017,30 +1200,34 @@ class MediaDownloader:
         exe = self._ffmpeg_exe()
         if exe is None:
             return None
-        hevc = self._extract_hevc(data)
-        if not hevc:
+        candidates = self._wxgf_hevc_candidates(data)
+        if not candidates:
             return None
         import subprocess
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, "in.hevc")
             dst = os.path.join(td, "out.jpg")
-            with open(src, "wb") as f:
-                f.write(hevc)
-            try:
-                r = subprocess.run(
-                    [exe, "-y", "-v", "error", "-i", src, "-frames:v", "1", dst],
-                    capture_output=True, timeout=30,
-                )
-            except Exception:
-                return None
-            if r.returncode == 0:
+            for hevc in candidates:
+                with open(src, "wb") as f:
+                    f.write(hevc)
+                try:
+                    r = subprocess.run(
+                        [exe, "-y", "-v", "error", "-i", src, "-frames:v", "1",
+                         "-fs", str(MAX_DECODED_IMAGE_BYTES + 1), dst],
+                        capture_output=True, timeout=30,
+                    )
+                except Exception:
+                    continue
+                if r.returncode != 0:
+                    continue
                 try:
                     with open(dst, "rb") as f:
-                        out = f.read()
-                    return out if out[:3] == b"\xff\xd8\xff" else None
+                        out = f.read(MAX_DECODED_IMAGE_BYTES + 1)
+                    if len(out) <= MAX_DECODED_IMAGE_BYTES and out[:3] == b"\xff\xd8\xff":
+                        return out
                 except OSError:
-                    return None
+                    continue
         return None
 
     def _img_md5(self, row: dict) -> Optional[str]:
@@ -1752,17 +1939,38 @@ class MediaDownloader:
                 if chat_id is None:
                     continue
                 v = conn.execute(
-                    "SELECT voice_data FROM VoiceInfo WHERE chat_name_id=? AND svr_id=? "
+                    "SELECT rowid, length(voice_data) AS size FROM VoiceInfo "
+                    "WHERE chat_name_id=? AND svr_id=? "
                     "ORDER BY create_time DESC LIMIT 1",
                     (chat_id, row["server_id"]),
                 ).fetchone()
+                if v and v["size"]:
+                    out_path = self._out(save_dir, "%s_%s.silk" % (user, local_id))
+                    temporary = None
+                    try:
+                        with tempfile.NamedTemporaryFile(
+                                mode="wb", dir=os.path.dirname(out_path),
+                                prefix=".lmh-media-", suffix=".part", delete=False) as f:
+                            temporary = f.name
+                            with conn.blobopen("VoiceInfo", "voice_data", v["rowid"],
+                                               readonly=True) as voice:
+                                while chunk := voice.read(MEDIA_COPY_CHUNK_SIZE):
+                                    f.write(chunk)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(temporary, out_path)
+                        temporary = None
+                    except OSError:
+                        return None
+                    finally:
+                        if temporary:
+                            try:
+                                os.unlink(temporary)
+                            except OSError:
+                                pass
+                    return out_path
             finally:
                 conn.close()
-            if v and v["voice_data"]:
-                out_path = self._out(save_dir, "%s_%s.silk" % (user, local_id))
-                with open(out_path, "wb") as f:
-                    f.write(v["voice_data"])
-                return out_path
         st = self.voice_status(user, local_id)
         wxlog.debug("语音 %s/%s 取不到音频，原因=%s（download_status=%s）"
                     % (user, local_id, st.get("reason"), st.get("download_status")))
@@ -1784,15 +1992,40 @@ class MediaDownloader:
         m = re.search(rb"([0-9a-fA-F]{32})", pi)
         vid = m.group(1).decode().lower() if m else None
         base = os.path.join(self.db.account_dir, "msg", "video")
-        for root, _, files in os.walk(base):
-            for f in files:
-                if vid and f == vid + ".mp4":
-                    out = self._out(save_dir, "%s_%s.mp4" % (user, local_id))
-                    with open(out, "wb") as w:
-                        with open(os.path.join(root, f), "rb") as r:
-                            w.write(r.read())
-                    return out
-        return None
+        create_time = row.get("create_time")
+        if not vid or not isinstance(create_time, int) or create_time <= 0:
+            return None
+        source = os.path.join(base, self._month_of(create_time), vid + ".mp4")
+        return self._copy_cached_attachment(
+            source, base, "%s_%s.mp4" % (user, local_id), save_dir)
+
+    def download_video_thumbnail(self, user: str, local_id: int,
+                                 save_dir: Optional[str] = None, *,
+                                 thumbnail: bool = True,
+                                 shard: Optional[str] = None) -> Optional[str]:
+        """Copy an already-cached WeFlow video poster or thumbnail without fetching it."""
+        row = self.db.get_message_row(user, local_id, local_type=43, shard=shard)
+        if not row or row["local_type"] != 43:
+            return None
+        packed_info = row.get("packed_info")
+        create_time = row.get("create_time")
+        if not isinstance(packed_info, bytes) or not isinstance(create_time, int) or create_time <= 0:
+            return None
+        match = re.search(rb"([0-9a-fA-F]{32})", packed_info)
+        if not match:
+            return None
+        video_id = match.group(1).decode("ascii").lower()
+        base = os.path.join(self.db.account_dir, "msg", "video")
+        suffix = "_thumb" if thumbnail else ""
+        source = os.path.join(base, self._month_of(create_time), video_id + suffix + ".jpg")
+        try:
+            with open(source, "rb") as image:
+                if image.read(3) != b"\xff\xd8\xff":
+                    return None
+        except OSError:
+            return None
+        return self._copy_cached_attachment(
+            source, base, "%s_%s%s.jpg" % (user, local_id, suffix), save_dir)
 
     def _file_name(self, row: dict) -> Optional[str]:
         if not row["server_id"]:
@@ -1823,25 +2056,23 @@ class MediaDownloader:
                       shard: Optional[str] = None) -> Optional[str]:
         """文件：msg/file/<YYYY-MM>/<原文件名>，原文件名来自 message_resource
 
+        WeFlow also classifies these app-message local types as files:
+        34359738417, 103079215153, and 25769803825.
+
         ``shard``：把消息行里的 ``shard``（分片库文件名）原样传回，用于跨分片
             同号时锁定那一条；不传则按 ``sort_seq`` 取最新并告警。
         """
-        row = self.db.get_message_row(user, local_id, local_type=49, shard=shard)
-        if not row or row["local_type"] != 49:
+        row = self.db.get_message_row(user, local_id, shard=shard)
+        if not row or row["local_type"] not in {49, 34359738417, 103079215153, 25769803825}:
             return None
         name = self._file_name(row)
-        if not name:
+        create_time = row.get("create_time")
+        if not name or not isinstance(create_time, int) or create_time <= 0:
             return None
         base = os.path.join(self.db.account_dir, "msg", "file")
-        for root, _, files in os.walk(base):
-            for f in files:
-                if f == name:
-                    out = self._out(save_dir, "%s_%s_%s" % (user, local_id, name))
-                    with open(out, "wb") as w:
-                        with open(os.path.join(root, f), "rb") as r:
-                            w.write(r.read())
-                    return out
-        return None
+        source = os.path.join(base, self._month_of(create_time), name)
+        return self._copy_cached_attachment(
+            source, base, "%s_%s_%s" % (user, local_id, name), save_dir)
 
     @staticmethod
     def _find_preview_button(ctrl, name, max_depth=8):

@@ -120,7 +120,7 @@ async fn text_json_and_html_exporters_cover_the_shared_fixture() {
     ];
     let mut chat = chat_info();
     chat.peer_uid = Some("u_peer".to_owned());
-    chat.peer_uin = Some("1687657986".to_owned());
+    chat.peer_uin = Some("100000001".to_owned());
 
     let text_path = temp.join("chat.txt");
     let text_exporter = TextExporter::new(
@@ -152,7 +152,7 @@ async fn text_json_and_html_exporters_cover_the_shared_fixture() {
     assert_eq!(json_result.message_count, 2);
     assert_eq!(json["chatInfo"]["name"], "测试群聊");
     assert_eq!(json["chatInfo"]["peerUid"], "u_peer");
-    assert_eq!(json["chatInfo"]["peerUin"], "1687657986");
+    assert_eq!(json["chatInfo"]["peerUin"], "100000001");
     assert_eq!(json["messages"].as_array().expect("messages").len(), 2);
     assert_eq!(json["messages"][0]["id"], "m1");
 
@@ -181,16 +181,16 @@ async fn modern_html_renders_structured_system_rows_and_flat_json_cards() {
         vec![MessageElement {
             element_type: "system".to_owned(),
             data: json!({
-                "text": "速冻饺子戳了戳笨蛋Darf v2",
+                "text": "测试发送者戳了戳测试联系人",
                 "items": [
-                    { "type": "qq", "text": "速冻饺子" },
+                    { "type": "qq", "text": "测试发送者" },
                     {
                         "type": "img",
                         "src": "https://example.com/nudge.png",
                         "url": "https://example.com/nudge"
                     },
                     { "type": "text", "text": "戳了戳" },
-                    { "type": "qq", "text": "笨蛋Darf v2" }
+                    { "type": "qq", "text": "测试联系人" }
                 ]
             }),
         }],
@@ -200,8 +200,8 @@ async fn modern_html_renders_structured_system_rows_and_flat_json_cards() {
     let (system_html, _) = render_modern_html(&temp, "system", system_message, |_| {}).await;
     assert!(system_html.contains("system-message-container recalled-message"));
     assert!(system_html.contains("class=\"system-message-image\""));
-    assert!(system_html.contains("速冻饺子"));
-    assert!(system_html.contains("笨蛋Darf v2"));
+    assert!(system_html.contains("测试发送者"));
+    assert!(system_html.contains("测试联系人"));
     assert!(!system_html.contains(".system-message-container.recalled-message"));
 
     let json_message = message(
@@ -229,7 +229,7 @@ async fn modern_html_renders_structured_system_rows_and_flat_json_cards() {
             element_type: "reply".to_owned(),
             data: json!({
                 "referencedMessageId": "msg-original",
-                "senderName": "速冻饺子",
+                "senderName": "测试发送者",
                 "content": "原消息"
             }),
         }],
@@ -268,7 +268,7 @@ async fn modern_html_handles_group_updates_faces_mentions_and_video_files() {
                 "originalData": {
                     "groupElement": {
                         "type": 1,
-                        "memberNick": "速冻饺子",
+                        "memberNick": "测试发送者",
                         "memberAdd": { "showType": 1 }
                     }
                 }
@@ -379,7 +379,7 @@ async fn modern_html_repairs_historical_reply_ids_for_single_and_chunked_exports
         1_758_025_276_000,
         vec![MessageElement {
             element_type: "text".to_owned(),
-            data: json!({ "text": "终于不用每次切后台关vpn了" }),
+            data: json!({ "text": "这是一条示例消息" }),
         }],
     );
     let image_reply = message(
@@ -391,7 +391,7 @@ async fn modern_html_repairs_historical_reply_ids_for_single_and_chunked_exports
                 "messageId": "7550673423851295947",
                 "referencedMessageId": "7550673423851295947",
                 "senderUin": "10001",
-                "senderName": "笨蛋Darf v2",
+                "senderName": "测试联系人",
                 "content": "[图片]",
                 "timestamp": 1_758_025_456
             }),
@@ -406,8 +406,8 @@ async fn modern_html_repairs_historical_reply_ids_for_single_and_chunked_exports
                 "messageId": "7550673536078933492",
                 "referencedMessageId": "7550673536078933492",
                 "senderUin": "10001",
-                "senderName": "笨蛋Darf v2",
-                "content": "终于不用每次切后台关vpn了",
+                "senderName": "测试联系人",
+                "content": "这是一条示例消息",
                 "timestamp": 1_758_025_276
             }),
         }],

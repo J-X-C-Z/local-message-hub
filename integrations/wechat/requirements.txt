@@ -4,3 +4,4 @@ pycryptodome>=3.24.0,<4
 pilk-nogil==0.4.3
 qrcode==8.2
 pypng==0.20220715.0
+ijson==3.4.0.post0

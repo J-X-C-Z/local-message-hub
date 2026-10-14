@@ -4,16 +4,22 @@ on:
   pull_request:
     paths:
       - 'electron/services/wcdbCore.ts'
+      - 'electron/services/sourceMutationGate.ts'
+      - 'electron/main.ts'
       - 'electron/utils/pathUtils.ts'
       - 'scripts/check-wcdb-optional-exports.cjs'
+      - 'scripts/test-source-mutation-gate.cjs'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/wcdb-compatibility.yml'
   push:
     paths:
       - 'electron/services/wcdbCore.ts'
+      - 'electron/services/sourceMutationGate.ts'
+      - 'electron/main.ts'
       - 'electron/utils/pathUtils.ts'
       - 'scripts/check-wcdb-optional-exports.cjs'
+      - 'scripts/test-source-mutation-gate.cjs'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/wcdb-compatibility.yml'

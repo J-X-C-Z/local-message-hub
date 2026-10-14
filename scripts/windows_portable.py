@@ -1,15 +1,16 @@
 """PyInstaller entrypoint for the Local Message Hub portable Windows build."""
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import shutil
 import sys
-import json
 import threading
 import time
-from urllib.request import urlopen
 import webbrowser
+
+from start_hub import _running_hub_url
 
 
 def _configure_runtime() -> None:
@@ -21,6 +22,9 @@ def _configure_runtime() -> None:
     os.environ.setdefault("LMH_STORAGE_DIR", str(storage))
     os.environ.setdefault("WECOM_LOCAL_DIR", str(storage / "integrations" / "wecom"))
     os.environ.setdefault("QCE_SECURITY_FILE", str(storage / "qq" / "security.json"))
+    ffmpeg = Path(sys._MEIPASS) / "media" / "ffmpeg.exe"
+    if ffmpeg.is_file():
+        os.environ.setdefault("LMH_FFMPEG_PATH", str(ffmpeg))
 
     packaged_qce = Path(sys._MEIPASS) / ".runtime/qq/v6.3.2/shell/NapCat-QCE-Windows-x64"
     installed_qce = storage / "runtime/qq/v6.3.2/shell/NapCat-QCE-Windows-x64"
@@ -35,21 +39,24 @@ def main() -> None:
     open_browser = "--no-browser" not in sys.argv
     if not open_browser:
         sys.argv.remove("--no-browser")
-    storage = Path(os.environ.get("LMH_STORAGE_DIR", Path(__file__).resolve().parents[1] / ".local"))
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--storage", default=os.environ.get(
+        "LMH_STORAGE_DIR", str(Path(__file__).resolve().parents[1] / ".local")))
+    storage = Path(parser.parse_known_args()[0].storage)
+    running_url = _running_hub_url(storage / "server.json")
+    if running_url:
+        if open_browser:
+            webbrowser.open(running_url)
+        return
 
     if open_browser:
         def open_when_ready() -> None:
             state_path = storage / "server.json"
             for _ in range(120):
-                try:
-                    state = json.loads(state_path.read_text(encoding="utf-8"))
-                    url = state.get("url")
-                    if isinstance(url, str) and url.startswith("http://127.0.0.1:"):
-                        with urlopen(url + "/api/sources", timeout=1):
-                            webbrowser.open(url)
-                            return
-                except (OSError, ValueError):
-                    pass
+                url = _running_hub_url(state_path)
+                if url:
+                    webbrowser.open(url)
+                    return
                 time.sleep(0.25)
 
         threading.Thread(target=open_when_ready, daemon=True).start()

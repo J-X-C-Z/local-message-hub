@@ -1917,8 +1917,9 @@ class WeChatDB:
             ``download_status`` / ``shard``。
         """
         want = max(1, int(limit))
-        sql_ext = "WHERE local_type=34" + (" AND local_id=?" if local_id else "")
-        params = (local_id,) if local_id else ()
+        has_local_id = local_id is not None
+        sql_ext = "WHERE local_type=34" + (" AND local_id=?" if has_local_id else "")
+        params = (local_id,) if has_local_id else ()
         cols = ("local_id, server_id, real_sender_id, create_time, sort_seq")
 
         def _run(tables):
@@ -2175,6 +2176,7 @@ class WeChatDB:
             "sender_username": sender_username,
             "create_time": r["create_time"],
             "content": content,
+            "server_id": str(r["server_id"] or ""),
             "sort_seq": r["sort_seq"],
             "shard": _row_get(r, "shard", ""),
         }

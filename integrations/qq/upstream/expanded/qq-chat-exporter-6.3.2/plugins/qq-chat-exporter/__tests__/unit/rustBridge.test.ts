@@ -11,6 +11,7 @@ import {
     buildBrowserOpenCommand,
     createNapCatBridge,
     parseWindowsListeningPids,
+    qceRestartDelayMs,
     readAccessTokenWithRetry,
     readAutoOpenBrowserSetting,
     resolveBridgePort,
@@ -21,6 +22,13 @@ import {
 } from '../../runtime/rustBridge.mjs';
 
 import { createTempDir } from '../helpers/tempDir.js';
+
+test('QCE restart backoff is bounded and eventually requires a manual plugin restart', () => {
+    assert.deepEqual(Array.from({ length: 6 }, (_, attempt) => qceRestartDelayMs(attempt)),
+        [1000, 2000, 4000, 8000, 16000, null]);
+    assert.throws(() => qceRestartDelayMs(-1), RangeError);
+    assert.throws(() => qceRestartDelayMs(1.5), RangeError);
+});
 
 test('bridge JSON preserves nested Map, Set and bigint values', () => {
     const serialized = JSON.stringify({
@@ -134,12 +142,12 @@ test('bridge exposes raw NapCat services with the original arguments', async () 
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
                 method: 'GroupService.getAllMemberList',
-                params: ['960420904', true]
+                params: ['900000001', true]
             })
         });
         const groupBody = await groupResponse.json();
         assert.equal(groupBody.ok, true);
-        assert.deepEqual(groupCalls, [['960420904', true]]);
+        assert.deepEqual(groupCalls, [['900000001', true]]);
         assert.deepEqual(groupBody.result.result.infos, {
             u_1: { uin: '10001', nick: 'one' }
         });

@@ -1,5 +1,6 @@
 # Windows x64 / CPython 3.12 packaging lock. Keep in sync with the reader runtime.
 altgraph==0.17.4
+ijson==3.4.0.post0
 cffi==1.17.1
 cryptography==45.0.7
 packaging==25.0

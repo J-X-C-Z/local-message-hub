@@ -644,19 +644,19 @@ mod tests {
 
     #[test]
     fn detects_duplicate_login_for_requested_account() {
-        let log = "\u{1b}[31merror\u{1b}[39m 当前账号(12519212)已登录,无法重复登录";
-        assert!(log_reports_account_already_logged_in(log, "12519212"));
+        let log = "\u{1b}[31merror\u{1b}[39m 当前账号(100000002)已登录,无法重复登录";
+        assert!(log_reports_account_already_logged_in(log, "100000002"));
     }
 
     #[test]
     fn accepts_full_width_duplicate_login_punctuation() {
-        let log = "当前账号（12519212）已登录，无法重复登录";
-        assert!(log_reports_account_already_logged_in(log, "12519212"));
+        let log = "当前账号（100000002）已登录，无法重复登录";
+        assert!(log_reports_account_already_logged_in(log, "100000002"));
     }
 
     #[test]
     fn ignores_duplicate_login_for_another_account() {
-        let log = "当前账号(12519212)已登录,无法重复登录";
+        let log = "当前账号(100000002)已登录,无法重复登录";
         assert!(!log_reports_account_already_logged_in(log, "987654321"));
     }
 }

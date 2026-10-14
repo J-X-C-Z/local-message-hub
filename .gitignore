@@ -90,6 +90,7 @@ mmtls/
 # Unified hub local data and bundled runtime
 .local/
 .runtime/
+qq-local.json
 output/
 __pycache__/
 *.pyc

@@ -21,6 +21,8 @@ use axum::http::StatusCode;
 pub struct MessageCacheEntry {
     /// 缓存的原始消息。
     pub messages: Vec<Value>,
+    /// 递归估算的缓存占用，用于限制全局缓存体量。
+    pub estimated_bytes: usize,
     /// 最近更新时间戳（毫秒）。
     pub last_update: i64,
     /// 是否还有更多消息。

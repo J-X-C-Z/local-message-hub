@@ -31,10 +31,12 @@ search, pagination, concurrent WAL write, and backup/restore results.
 |---|---|---|---|---|
 | 微信 | 当前 Windows 用户本机 WeChat 4.x 数据库快照；不访问云端归档 | 仅本机数据库/缓存中可解析的内容 | 按 `(sort_seq, shard, local_id)` 持久续读；source keyset 不会发现游标之前的回填 | 可导出本工具索引中的标准消息记录，不导出/改写微信原始数据库 |
 | 企业微信 | 当前用户本机本地缓存快照；不包含企业后台会话存档或未缓存文件 | 本地快照能解析或定位的附件；缺失缓存不可恢复 | 每次完整重读本地快照；按消息 ID 幂等更新，不因快照缺行删除既有索引 | 可导出本工具索引中的标准消息记录，不导出/改写企业微信原始数据库 |
-| QQ | 当前 NapCat 可见记录，加上 QCE 能获取的私聊漫游范围；覆盖率受平台预算限制 | 漫游端能下载的图片、语音、视频、文件；未取回附件明确显示未缓存 | 中断后续读已提交的位置；下一次完整同步从第一页重读并按消息 ID 对账；分页期间源变化可能要等完整重扫才收敛 | 可导出本工具索引中的标准消息记录，不导出 QQ 客户端数据库 |
+| QQ | 本机 QQNT 消息数据库与已提交 WAL；加密库需有效本地密钥，不扫码或请求在线漫游 | 当前账号本机缓存中可定位的附件；缺失缓存不在线下载 | 每次新建只读快照，从第一页重读并按稳定消息 ID 对账 | 仅导出统一索引记录；不写入 QQ 数据库，不保证涵盖未缓存历史 |
 | Telegram | Telegram Desktop 用户主动导入的单个会话 JSON；不是原生客户端或自动同步 | 保留安全的相对附件路径元数据；不读取本机导出目录中的附件文件 | 不适用；由用户导入新导出 | 仅统一索引导出，不回写 Telegram |
 
-所有平台的 JSON/CSV/Markdown/TXT/HTML 导出都来自统一索引，不代表原始
+联系人与群聊可从联系人视图导出 JSON/CSV，保留平台、账号、统一身份和
+本地资料字段；临时头像访问链接不会写入文件。所有平台的
+JSON/CSV/Markdown/TXT/HTML 导出都来自统一索引，不代表原始
 客户端数据库的完整镜像。WeChat 的 keyset 续读、QQ 的位置分页与 WeCom
 的完整快照是不同保证；只有 WeChat 是 source-cursor 增量采集。QQ/WeCom
 通过完整重扫/快照重放和消息 ID 幂等对账，不声称零重扫或删除镜像。
@@ -48,15 +50,26 @@ Enterprise WeChat: user's own local account, directly integrated source under
 database root and SM4 key. Sync parses local snapshots, not enterprise backend
 conversation archives. Files absent from the local cache cannot be displayed.
 
-QQ: bundled NapCat/QCE release and the original exporter history APIs. Use
-Data Sources > QQ > Login (or open `/#qq-login`), scan the locally rendered
-QR code with your own mobile QQ account, confirm login, then synchronize.
-NapCat authentication credentials are retained only in process memory; they
-are not returned to the WebUI or placed in browser URLs. The login QR is
-encoded to PNG locally, without any external QR generation service.
-Service readiness and account online status are distinct. An unavailable service
-or an unlogged account must never be represented as connected or filled with
-demonstration messages.
+QQ: history uses the bundled read-only QQNT local database reader. Open Data
+Sources > QQ, configure the local database when discovery is ambiguous, and
+synchronize the selected account. If its encrypted database needs a key, the
+UI offers an explicitly confirmed, bounded read-only discovery against the
+current Windows user's running QQ process; only a key validated against the
+local database is saved in private Hub configuration. It does not require QR
+login, restart, debugger, injection, or online history access. Service readiness
+and source connection are distinct; an unavailable service must never be shown
+as connected or filled with demonstration messages.
+
+The retained NapCat/QCE runtime is not a prerequisite for local QQ history.
+Features that explicitly use its online bridge remain separate and require
+their own logged-in session and per-message approval where applicable.
+
+QQ text sending is one of those separate features. Local conversation ids are
+QQNT uids for private chats, so the Hub resolves them to the numeric QQ number
+or group code before a send request is created, and shows both spellings during
+review. Reading needs only the local database; sending needs an online NapCat
+channel, the same QQ account, and per-message local approval. An identity that
+cannot be resolved is refused instead of guessed.
 
 For older QQ history, open a direct/private conversation and choose Import
 roaming history in its details. The bounded QCE scanner imports the selected
@@ -69,23 +82,48 @@ uncached. QQ roaming is private-chat only; QCE reports whether its bounded scan
 was partial, and Tencent server-side completeness cannot be proven even when
 the scan finishes without a partial result.
 
-## First-Phase Surface
+## Unified WebUI And Optional Modules
 
-Platform selection/all-platform search, conversations, sender labels, contacts
-and groups, date/type/text filters, older-message pagination, local media
-resolution, local voice decoding, JSON/HTML/CSV/Markdown/TXT exports, refresh,
-auto synchronization and light/dark settings. A basic SQL statistics view is
-included. Annual/pair reports, Moments and advanced WeFlow-specific features are
-not yet ported into this WebUI; the full original WeFlow source is retained.
+The WebUI provides platform selection and cross-platform search, conversations,
+contacts and groups, sender labels, date/type/text filters, cursor paging,
+local media resolution, voice decoding, image/video preview and JSON/CSV/
+Markdown/TXT/HTML/XLSX/SQL/ChatLab exports. Analytics include private and group
+profiles, annual and pair reports, and content-free relationship milestones.
+Optional capability-gated modules cover Moments browsing/search/export and
+cached media, automatic export, local desktop notifications, account lock,
+resource batch export, MCP metadata writes and approved text sending. The
+QQ route goes through NapCat OneBot 11; the WeCom route uses an independent
+bot identity; the WeChat route types into the already-open conversation
+window of the logged-in local client on Windows. All three are off by
+default, require per-message local UI approval with a request-bound
+one-time challenge, and never expose approve or deliver tools over MCP.
+Modules that need source-client database hooks, an unverified platform
+sender, or unsupported source schemas stay unavailable rather than claiming
+parity.
+Desktop notifications remain opt-in, contain no message body, and support
+platform filters, a conversation allowlist, per-conversation mutes, and normal
+or silent browser presentation.
+
+The Moments reader recognizes only validated local schemas and cached media;
+it does not fetch CDN content. During explicit sync, the Python WeChat adapter
+can read avatars from the exact `head_image.db` schema
+`head_image(username, md5, image_buffer, update_time)`, matching exact contact
+usernames and caching bounded JPEG bytes in Hub storage. Unsupported schema
+variants fail closed. Rendering remains local-cache-only; no CDN fetch occurs.
+Real-account/browser acceptance remains open.
 
 ## Index Backups
 
 Settings can create/download an online SQLite snapshot and restore a selected
 snapshot. Restore checks database integrity, schema version and required tables
 and columns, and keeps a pre-restore recovery snapshot. If replacement fails,
-the service attempts to restore that recovery snapshot. This covers only
-`.local/hub.sqlite3`; it does not include the original platform databases,
-credentials, or media cache. Treat downloaded backups as sensitive chat data.
+the service attempts to restore that recovery snapshot. An explicit
+"include cached QQ attachments" option creates a ZIP containing that index
+snapshot and only QQ roaming media files referenced by the snapshot. The bundle
+excludes QCE temporary JSON, WeChat/WeCom source caches, original platform
+databases, account configuration and keys. Restore validates its manifest,
+paths, sizes and SHA-256 digests before merging files; conflicting local files
+are not overwritten. Both backup types remain sensitive chat data.
 
 Settings also has a two-step local cleanup action. It pauses automatic sync and
 removes the Hub index, its backup/import files and generated QQ roaming cache.
