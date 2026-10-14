@@ -237,6 +237,16 @@ class WeChatSenderTest(unittest.TestCase):
         self.assertEqual(similar.exception.code, "wechat_conversation_not_open")
         self.assertEqual(self.win32.clipboard, None)
 
+    def test_history_marker_title_requires_an_exact_identity_match(self):
+        from .sender import HISTORY_MARKER
+
+        self.assertTrue(WeChatGUISender._title_proves_target(
+            "Synthetic Friend" + HISTORY_MARKER, ["Synthetic Friend"]))
+        self.assertFalse(WeChatGUISender._title_proves_target(
+            "Synthetic Friend" + HISTORY_MARKER + " unrelated", ["Synthetic Friend"]))
+        self.assertFalse(WeChatGUISender._title_proves_target(
+            HISTORY_MARKER + "Synthetic Friend" + " unrelated", ["Synthetic Friend"]))
+
     def test_unrelated_window_is_never_used(self):
         self.open_chat_window("Someone Else", 11)
         with self.assertRaises(WeChatSendError) as wrong:

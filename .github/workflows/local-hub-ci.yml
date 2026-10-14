@@ -31,10 +31,8 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-      - name: Install checksum-pinned MinGW GCC 16.2.0
+      - name: Download checksum-pinned MinGW GCC 16.2.0 packages
         shell: pwsh
-        env:
-          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $packages = @(
             @{ File = 'mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '97f6eb042afbb1d27237a4479ea444acb3d594789bba5e0182360d2c4b983b88' },
@@ -43,19 +41,25 @@ jobs:
           )
           $packageRoot = Join-Path $env:RUNNER_TEMP 'lmh-pinned-gcc'
           New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
-          $packagePaths = foreach ($package in $packages) {
+          foreach ($package in $packages) {
             $path = Join-Path $packageRoot $package.File
             Invoke-WebRequest -Uri $package.Url -OutFile $path
             $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($actual -ne $package.Sha256) { throw "SHA-256 mismatch for $($package.File)." }
-            $path
           }
-          $pacman = Join-Path $env:MSYS2_LOCATION 'usr\bin\pacman.exe'
-          & $pacman -U --noconfirm @packagePaths
-          if ($LASTEXITCODE -ne 0) { throw 'Installing checksum-pinned MinGW GCC packages failed.' }
-          $gcc = Join-Path $env:MSYS2_LOCATION 'mingw64\bin\gcc.exe'
-          $version = & $gcc --version | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0 -or $version -notmatch '\s16\.2\.0(?:\s|$)') { throw "Expected GCC 16.2.0, found $version." }
+      - name: Install checksum-pinned MinGW GCC 16.2.0 packages
+        shell: msys2 {0}
+        run: |
+          package_root="$(cygpath -u "$RUNNER_TEMP")/lmh-pinned-gcc"
+          pacman -U --noconfirm \
+            "$package_root/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst" \
+            "$package_root/mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst" \
+            "$package_root/mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst"
+          version="$(gcc --version | head -n 1)"
+          if [[ ! "$version" =~ [[:space:]]16\.2\.0([[:space:]]|$) ]]; then
+            printf 'Expected GCC 16.2.0, found %s.\n' "$version" >&2
+            exit 1
+          fi
       - name: Add MinGW linker to PATH
         shell: pwsh
         env:

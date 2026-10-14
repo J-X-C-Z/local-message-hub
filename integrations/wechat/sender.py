@@ -399,9 +399,8 @@ class WeChatGUISender:
         """Exact-title match only: WeChat appends members, counts and suffixes."""
         if title in titles:
             return True
-        return any(title == name + HISTORY_MARKER or
-                   title.startswith(name + HISTORY_MARKER) or
-                   title.startswith(HISTORY_MARKER + name) for name in titles)
+        return any(title in (name + HISTORY_MARKER, HISTORY_MARKER + name)
+                   for name in titles)
 
     def _require_account(self, requested):
         try:

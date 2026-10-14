@@ -7262,6 +7262,25 @@ key is absent.
   Cloudflare verification page. The workflow now uses the official package
   host directly; all three existing SHA-256 pins were confirmed against full
   downloads, and YAML plus embedded PowerShell parsing passed locally.
-- The correction is prepared for the existing public feature branch. A new
-  hosted run and uploaded-artifact download/provenance round trip are still
-  required; no real message was sent and no source-client database was modified.
+- Hosted run 38541563975 passed all three direct-download SHA-256 checks but
+  failed at `pacman -U`, which could not resolve the exact pinned `libgcc` and
+  `libstdc++` requirements of GCC. Inspection of each downloaded `.PKGINFO`
+  confirmed that package names, versions, and dependency constraints match.
+  The workflow now runs installation inside the setup-msys2 shell and converts
+  `RUNNER_TEMP` to an MSYS path before invoking pacman. YAML, embedded
+  PowerShell, Bash syntax, and `git diff --check` pass locally; the pacman
+  context fix has not yet had a hosted run. setup-msys2 logged a non-fatal
+  `clangarm64.db` timeout while continuing its update.
+- A new hosted run and uploaded-artifact download/provenance round trip are
+  still required; no real message was sent and no source-client database was
+  modified.
+
+## 2026-10-14 - P13 Exact WeChat Window Identity
+
+- Replaced prefix matching for the personal WeChat history-window marker with
+  exact-title matching. A different conversation whose title only begins with
+  the selected contact plus `chat history` can no longer be treated as the
+  approved target.
+- Added synthetic checks for exact marker matches and arbitrary trailing text.
+  The sender test suite passes without opening WeChat or delivering a message;
+  real window-title variants and delivery remain unverified.
