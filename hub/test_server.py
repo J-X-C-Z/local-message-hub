@@ -4392,6 +4392,48 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual({row['id'] for row in records}, {str(i) for i in range(7)})
                 self.assertEqual([row['timestamp'] for row in records], sorted(row['timestamp'] for row in records))
 
+    def test_manual_message_export_streams_projected_rows_from_disk_spool(self):
+        from hub.exports import render_export, write_export
+
+        self.hub.store.ingest('wechat', 'account', [{'id': 'room', 'title': 'Room'}], [
+            {'id': str(index), 'conversation_id': 'room', 'timestamp': index,
+             'type': 'text', 'text': f'message {index}'} for index in range(5)
+        ])
+        observed = []
+
+        def capture(messages, stream, *args, **kwargs):
+            observed.append((messages, kwargs.copy()))
+            return write_export(messages, stream, *args, **kwargs)
+
+        with patch('hub.server.render_export', wraps=render_export) as metadata, \
+                patch('hub.server.write_export', side_effect=capture):
+            with self.request('/api/export?platform=wechat&q=message&format=json') as response:
+                records = json.load(response)
+
+        self.assertEqual([row['id'] for row in records], ['0', '1', '2', '3', '4'])
+        self.assertEqual(len(observed), 1)
+        self.assertFalse(isinstance(observed[0][0], (list, tuple)))
+        self.assertEqual(observed[0][1]['count'], 5)
+        self.assertEqual(metadata.call_count, 1)
+        self.assertEqual(metadata.call_args.args[0], [])
+
+    def test_manual_chatlab_export_still_rejects_mixed_conversation_kinds(self):
+        self.hub.store.ingest('wechat', 'account', [
+            {'id': 'private', 'title': 'Private', 'kind': 'private'},
+            {'id': 'group', 'title': 'Group', 'kind': 'group'},
+        ], [
+            {'id': 'private-1', 'conversation_id': 'private', 'timestamp': 1,
+             'type': 'text', 'text': 'mixed export'},
+            {'id': 'group-1', 'conversation_id': 'group', 'timestamp': 2,
+             'type': 'text', 'text': 'mixed export'},
+        ])
+
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/export?platform=wechat&q=mixed%20export&format=chatlab')
+
+        self.assertEqual(error.exception.code, 400)
+        self.assertIn('mixed group and private', error.exception.read().decode())
+
     def test_traversal_rejected(self):
         with self.assertRaises(HTTPError) as result:
             self.request('/%2e%2e/hub/server.py')

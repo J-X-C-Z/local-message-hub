@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import stat
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -26,7 +27,8 @@ from urllib.parse import parse_qs, urlsplit, unquote, quote
 import xml.etree.ElementTree as ET
 
 from .store import ChatStore, PLATFORMS, parse_bound
-from .exports import render_contact_export, render_group_member_export, render_export
+from .exports import (render_contact_export, render_group_member_export, render_export,
+                     resolve_chatlab_conversation_type, write_export)
 from .moments_exports import MomentsExportTooLarge, render_moments_export_bounded
 from .analytics import AnalyticsService
 from .capabilities import describe_capabilities, normalize_capabilities, unavailable_reason
@@ -3088,20 +3090,77 @@ class Handler(BaseHTTPRequestHandler):
                 return
         elif path == '/api/export':
             query.pop('cursor', None)
-            rows, cursor = [], None
-            while True:
-                if params.get('conversation_id'):
-                    page = store.messages(account_id=params.get('account_id', ''),
-                                          conversation_id=params['conversation_id'], **query, limit=5000, cursor=cursor)
-                else:
-                    page = store.search(**{**query, 'q': query.get('q', '')}, limit=5000, cursor=cursor)
-                rows.extend(page['items'])
-                cursor = page.get('next_cursor')
-                if not cursor or not page['items']:
-                    break
-            rows.sort(key=lambda r: r['timestamp'] or 0)
-            data, mime, filename = render_export(rows, params.get('format', 'json'), '本地消息档案')
-            self.send_bytes(data, mime, extra={'Content-Disposition': f'attachment; filename="{filename}"'})
+            format_id = params.get('format', 'json')
+            mime, filename = render_export([], format_id, '本地消息档案')[1:]
+            with tempfile.TemporaryDirectory(prefix='lmh-export-') as temporary:
+                spool = sqlite3.connect(Path(temporary) / 'messages.sqlite3')
+                try:
+                    spool.execute('''CREATE TABLE export_rows (
+                        seq INTEGER PRIMARY KEY, timestamp INTEGER NOT NULL, platform TEXT,
+                        account_id TEXT, conversation_kind TEXT, sender_id TEXT,
+                        sender_name TEXT, payload TEXT NOT NULL)''')
+                    cursor, sequence = None, 0
+                    while True:
+                        if params.get('conversation_id'):
+                            page = store.messages(account_id=params.get('account_id', ''),
+                                conversation_id=params['conversation_id'], **query,
+                                limit=5000, cursor=cursor)
+                        else:
+                            page = store.search(**{**query, 'q': query.get('q', '')},
+                                                limit=5000, cursor=cursor)
+                        spool.executemany('''INSERT INTO export_rows
+                            (seq, timestamp, platform, account_id, conversation_kind,
+                             sender_id, sender_name, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                            (sequence + index, int(row.get('timestamp') or 0), row.get('platform'),
+                             row.get('account_id'), row.get('conversation_kind'), row.get('sender_id'),
+                             row.get('sender_name'), json.dumps(row, ensure_ascii=False,
+                                                               separators=(',', ':')))
+                            for index, row in enumerate(page['items'])
+                        ))
+                        sequence += len(page['items'])
+                        cursor = page.get('next_cursor')
+                        if not cursor or not page['items']:
+                            break
+                    spool.commit()
+                    count = int(spool.execute('SELECT COUNT(*) FROM export_rows').fetchone()[0])
+                    normalized_format = format_id.strip().lower().lstrip('.')
+                    if normalized_format in ('excel', 'xls'):
+                        normalized_format = 'xlsx'
+                    kind = (resolve_chatlab_conversation_type(
+                        row[0] for row in spool.execute(
+                            'SELECT DISTINCT conversation_kind FROM export_rows'))
+                            if normalized_format in ('chatlab', 'chatlab-jsonl') else None)
+                    source_platforms = [row[0] for row in spool.execute(
+                        'SELECT DISTINCT platform FROM export_rows ORDER BY platform')]
+
+                    def export_rows():
+                        for row in spool.execute(
+                                'SELECT payload FROM export_rows ORDER BY timestamp, seq'):
+                            yield json.loads(row[0])
+
+                    def export_members():
+                        rows = spool.execute('''WITH ranked AS (
+                            SELECT platform, account_id, sender_id, sender_name, timestamp, seq,
+                                   ROW_NUMBER() OVER (PARTITION BY platform, account_id, sender_id
+                                                      ORDER BY timestamp, seq) AS rank
+                            FROM export_rows WHERE sender_id IS NOT NULL AND sender_id != '')
+                            SELECT platform, account_id, sender_id, sender_name FROM ranked
+                            WHERE rank=1 ORDER BY timestamp, seq''')
+                        for platform, account_id, sender_id, sender_name in rows:
+                            yield {'platformId': str(sender_id),
+                                   'accountName': str(sender_name or sender_id or '未知'),
+                                   'platform': str(platform or ''),
+                                   'accountId': str(account_id or '')}
+
+                    output = Path(temporary) / 'export.bin'
+                    with output.open('w+b') as stream:
+                        write_export(export_rows(), stream, format_id, '本地消息档案',
+                                     count=count, source_platforms=source_platforms,
+                                     members=export_members(), conversation_type=kind)
+                finally:
+                    spool.close()
+                self.send_file(output, mime,
+                               f'attachment; filename="{filename}"')
             return
         elif path == '/api/export/contacts':
             contacts = store.contacts(query['platform'], query.get('q', ''), limit=50_001,

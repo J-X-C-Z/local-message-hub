@@ -8077,3 +8077,15 @@ key is absent.
   successfully on the same commit.
 - The live `/api/sources` status check reports WeChat, WeCom and QQ connected
   without source errors. No account identifiers or message counts were recorded.
+
+## 2026-10-15 - Stream Manual Message Exports
+
+- Manual `/api/export` now pages rows into a temporary SQLite spool, retains
+  timestamp and stable tie ordering, and feeds the existing streaming writer.
+  This removes the full in-memory row list and full response byte buffer from
+  the manual export path. ChatLab mixed conversation-type rejection is retained.
+- Three focused endpoint checks and `git diff --check` passed. No real message
+  data was accessed for the regression checks. The temporary spool consumes
+  disk space proportional to the export size.
+- Windows run `38645889678` targets the earlier commit `e1155df2d91523f9e061c6609125402c444e813b`,
+  before this patch; it cannot serve as hosted acceptance for this change.

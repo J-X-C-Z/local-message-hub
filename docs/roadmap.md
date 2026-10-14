@@ -3859,3 +3859,14 @@ Windows portable build and sanitized source archive passed isolated startup,
 MCP, privacy, and manifest checks. Real QQ/WeChat/WeCom delivery, full P11
 resource/decryption and cache acceptance, P12 desktop/native acceptance, and
 hosted verification of the current uncommitted tree remain open.
+
+**P11-02/P14 export follow-up (2026-10-15):** manual message export now pages
+results into a temporary SQLite spool and passes a single-pass iterator to the
+existing streaming writer, avoiding an in-memory list plus a second complete
+response buffer. Timestamp ordering and stable same-timestamp order are kept;
+mixed private/group ChatLab exports remain rejected. Three focused endpoint
+checks and `git diff --check` pass. The Windows run `38645889678` was triggered
+on commit `e1155df2d91523f9e061c6609125402c444e813b` before this change, so it
+does not validate this patch. Temporary disk use grows with export size. P11 and
+P14 remain `IN_PROGRESS` pending current-commit hosted package/artifact checks;
+real cache, client delivery, and live desktop/native acceptance remain open.
