@@ -7965,3 +7965,13 @@ key is absent.
   explicit private kind; all four affected focused tests pass locally, while
   orphan/null-kind rejection remains covered. Hosted rerun and artifact
   upload/download verification remain outstanding.
+
+## 2026-10-15 - P14 Hosted Rerun
+
+- Hosted run `38621260116` passed on commit
+  `c2c755024f8114ca56a84edf93fd1194d376b5f4`: full Windows checks, portable
+  and sanitized source package builds, package smoke tests, provenance
+  manifest verification, artifact upload/download, and downloaded-byte checks.
+- The release artifact is 251,776,531 bytes and retained through 2026-10-21.
+- P14-01 is complete. Live P9/P13 delivery, P11 real-cache parity, and P12
+  desktop/native acceptance remain open.

@@ -43,16 +43,20 @@ privacy/package checks, and the 25,000-message performance benchmark. Follow-up
 focused tests also passed after correcting unknown WeChat image suffix handling
 and refusing duplicate display-name targets in the GUI sender. The rebuilt
 current-worktree portable and source packages passed isolated smoke and
-`local-worktree` manifest verification. P9/P13 live delivery, P11 real-cache
-parity, P12 live desktop/native acceptance, and P14 hosted verification for
-these uncommitted changes remain open.
+`local-worktree` manifest verification. Hosted run `38621260116` passed the
+corrected full checks, Windows portable/source package builds, upload/download,
+and downloaded-byte/provenance verification for commit
+`c2c755024f8114ca56a84edf93fd1194d376b5f4`; the artifact is retained through
+2026-10-21. P14-01 is now DONE. P9/P13 live delivery, P11 real-cache parity,
+and P12 live desktop/native acceptance remain open.
 
 **P14 CI fixture correction (2026-10-15):** hosted run `38618407580` failed in
 the local test step because ChatLab memory/export fixtures omitted conversation
 types after the exporter began rejecting null/unknown kinds. The fixtures now
 declare their private conversation type explicitly; the four affected tests
 pass locally. Orphan/null-kind rejection remains intact. A hosted rerun for the
-corrected source and artifact round-trip is still required.
+corrected source and artifact round-trip passed as run `38621260116`; see the
+latest P8-P14 status above.
 
 **P14 current-worktree gate (2026-10-14):** After the core search capability
 alignment, `scripts/check-local-hub.ps1` passed for the modified worktree: 789
@@ -707,7 +711,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Local p377 evidence is recorded below. Hosted run 38547565569 on code commit `c38d5fb90f9195d348831932ef5fb93afe7b273f` and run 38550004873 on current commit `75fa73185b5b1acf960da35ef331901c3284deef` both passed the full Windows gate, portable and source package builds/smokes, pre-upload manifest verification, artifact upload/download, and downloaded-byte/provenance verification. Latest artifact `LocalMessageHub-windows-release` is 251,741,288 bytes and retained until 2026-10-21. | IN_PROGRESS |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Local p377 evidence is recorded below. Hosted runs 38547565569, 38550004873, and latest run 38621260116 on commit `c2c755024f8114ca56a84edf93fd1194d376b5f4` passed the full Windows gate, package builds/smokes, manifest checks, artifact upload/download, and downloaded-byte/provenance verification. Latest artifact `LocalMessageHub-windows-release` is 251,776,531 bytes and retained through 2026-10-21. | DONE |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects
