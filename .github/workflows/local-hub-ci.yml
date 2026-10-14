@@ -51,10 +51,15 @@ jobs:
         shell: msys2 {0}
         run: |
           package_root="$(cygpath -u "$RUNNER_TEMP")/lmh-pinned-gcc"
-          pacman -U --noconfirm \
-            "$package_root/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst" \
-            "$package_root/mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst" \
-            "$package_root/mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst"
+          for package in \
+            mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst \
+            mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst \
+            mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst; do
+            if ! pacman -U --noconfirm "$package_root/$package"; then
+              printf 'Installing %s failed.\n' "$package" >&2
+              exit 1
+            fi
+          done
           version="$(gcc --version | head -n 1)"
           if [[ ! "$version" =~ [[:space:]]16\.2\.0([[:space:]]|$) ]]; then
             printf 'Expected GCC 16.2.0, found %s.\n' "$version" >&2

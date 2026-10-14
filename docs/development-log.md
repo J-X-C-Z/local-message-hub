@@ -7271,6 +7271,13 @@ key is absent.
   PowerShell, Bash syntax, and `git diff --check` pass locally; the pacman
   context fix has not yet had a hosted run. setup-msys2 logged a non-fatal
   `clangarm64.db` timeout while continuing its update.
+- Hosted run 38542671122 reported the same two missing GCC sibling dependencies
+  even with all three explicit package targets in that MSYS2 shell. This
+  disproved path conversion as the cause. The workflow now asks pacman to
+  install the pinned `libgcc`, `libstdc++`, and GCC archives in dependency
+  order, with an immediate failure check after each transaction. YAML and the
+  embedded PowerShell/Bash syntax checks pass locally; sequential installation
+  still needs a hosted run.
 - A new hosted run and uploaded-artifact download/provenance round trip are
   still required; no real message was sent and no source-client database was
   modified.
