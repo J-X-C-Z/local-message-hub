@@ -37,9 +37,9 @@ jobs:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $packages = @(
-            @{ File = 'mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '97f6eb042afbb1d27237a4479ea444acb3d594789bba5e0182360d2c4b983b88' },
-            @{ File = 'mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '6cc48c5efe5ebab70a1ee1f6806c422205d5515c0f50d7a0e6a67336268c2afe' },
-            @{ File = 'mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst'; Url = 'https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-libstdc%2B%2B-16.2.0-5-any.pkg.tar.zst'; Sha256 = '2ec9a91ce896249b1a440a44e1bc0126f82efb540955827adec30e83a9bfb1f6' }
+            @{ File = 'mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-gcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '97f6eb042afbb1d27237a4479ea444acb3d594789bba5e0182360d2c4b983b88' },
+            @{ File = 'mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libgcc-16.2.0-5-any.pkg.tar.zst'; Sha256 = '6cc48c5efe5ebab70a1ee1f6806c422205d5515c0f50d7a0e6a67336268c2afe' },
+            @{ File = 'mingw-w64-x86_64-libstdc++-16.2.0-5-any.pkg.tar.zst'; Url = 'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libstdc%2B%2B-16.2.0-5-any.pkg.tar.zst'; Sha256 = '2ec9a91ce896249b1a440a44e1bc0126f82efb540955827adec30e83a9bfb1f6' }
           )
           $packageRoot = Join-Path $env:RUNNER_TEMP 'lmh-pinned-gcc'
           New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null

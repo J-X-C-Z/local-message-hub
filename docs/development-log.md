@@ -7251,3 +7251,17 @@ key is absent.
   `ada67b5b0f20f82d551edd074d215b156d4bf0296fb2be2b964d28d19156e996`.
 - Hosted Actions and the downloaded-artifact round trip remain unverified. No
   commit, push, or publication was made.
+
+## 2026-10-14 - P14 Hosted CI toolchain correction
+
+- Public branch `codex/roadmap-p8-p14-20261014` contains p377 at
+  `638555653242501c1b08bbfd7f039e0037e5af1e`; the earlier clean-archive
+  omission of workflow/package helpers is closed by that commit.
+- Hosted run 38540434801 failed during MinGW package download, before the
+  local gate or package steps, because the geo-redirected mirror returned a
+  Cloudflare verification page. The workflow now uses the official package
+  host directly; all three existing SHA-256 pins were confirmed against full
+  downloads, and YAML plus embedded PowerShell parsing passed locally.
+- The correction is prepared for the existing public feature branch. A new
+  hosted run and uploaded-artifact download/provenance round trip are still
+  required; no real message was sent and no source-client database was modified.
