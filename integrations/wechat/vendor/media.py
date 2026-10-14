@@ -538,18 +538,21 @@ class MediaDownloader:
     ZOOM_SHOWN = "图片适应窗口大小"
 
     def _image_files(self, user: str, md5: str) -> dict:
-        """这条图片在本机有哪几档副本：``{tier: (path, bytes)}``，缺的档不出现。
+        """返回已知档位和未分类候选；已知档为 ``(path, bytes)``，缺的档不出现。
 
-        一次目录扫描出全部三档。原来每查一档就 ``os.walk`` 一整棵会话附件树，
+        一次目录扫描出全部已知档位和候选。原来每查一档就 ``os.walk`` 整棵会话附件树，
         批量状态接口如果也这么写，300 张图就是 900 次全树遍历。
         """
         base_name = str(md5).lower()
+        candidate_suffixes = ("_b.dat", ".b.dat", "_w.dat", ".w.dat",
+                              "_c.dat", ".c.dat")
         want = {
             base_name + suffix: tier
             for tier, suffixes in (
                 ("original", ("_h.dat", ".h.dat", "_hd.dat", ".hd.dat")),
                 ("mid", (".dat",)),
                 ("thumb", ("_t.dat", ".t.dat", "_thumb.dat")),
+                ("candidate", candidate_suffixes),
             )
             for suffix in suffixes
         }
@@ -566,6 +569,7 @@ class MediaDownloader:
         except ValueError:
             return {}
         candidates = {}
+        variants = []
         for root, _, files in os.walk(base):
             for f in files:
                 tier = want.get(f.lower())
@@ -579,6 +583,11 @@ class MediaDownloader:
                                 not os.path.isfile(resolved)):
                             continue
                         size = os.path.getsize(resolved)
+                        if tier == "candidate":
+                            suffix = f.lower()[len(base_name):]
+                            variants.append((candidate_suffixes.index(suffix),
+                                             resolved.lower(), (resolved, size)))
+                            continue
                         rank = (-size, -os.path.getmtime(resolved), resolved.lower())
                         if tier not in candidates or rank < candidates[tier][0]:
                             candidates[tier] = (rank, (resolved, size))
@@ -586,7 +595,10 @@ class MediaDownloader:
                         continue
                     except ValueError:
                         continue
-        return {tier: candidate[1] for tier, candidate in candidates.items()}
+        result = {tier: candidate[1] for tier, candidate in candidates.items()}
+        if variants:
+            result["candidate"] = [item[2] for item in sorted(variants)]
+        return result
 
     @staticmethod
     def original_ready(h_size: Optional[int], mid_size: Optional[int] = None,
@@ -963,7 +975,9 @@ class MediaDownloader:
         Returns:
             dict：``local_id`` / ``md5`` / ``tiers``（``{'original': 字节, 'mid':…,
             'thumb':…}``，没有的档不出现）/ ``best``（本机最高一档）/
-            ``available`` / ``has_mid`` / ``reason``。
+            ``available`` / ``has_mid`` / ``reason`` / ``candidate_available``。
+            ``candidate_available`` 表示存在未分类的本地 DAT 变体，只有 ``best``
+            无已知档位可用时才尝试解码，不承诺具体画质。
 
             - ``available``：有没有**原件** ``_h.dat``（且不是空壳）。**只有这一档是
               确定的原图**。
@@ -989,7 +1003,7 @@ class MediaDownloader:
     def _image_status_for(self, user: str, local_id: int, md5: str,
                           verify: bool = False) -> dict:
         files = self._image_files(user, md5)
-        tiers = {t: sz for t, (_p, sz) in files.items()}
+        tiers = {t: files[t][1] for t in self.IMAGE_TIERS if t in files}
         best = next((t for t in self.IMAGE_TIERS if t in tiers), None)
         reason = "no_local_copy"
         if "original" in tiers:
@@ -1007,6 +1021,7 @@ class MediaDownloader:
             reason = "only_thumbnail"
         return {"local_id": local_id, "md5": md5, "tiers": tiers,
                 "best": best, "available": reason == "ok", "reason": reason,
+                "candidate_available": bool(files.get("candidate")),
                 # 有没有 .dat 这一份。注意这不等于「有完整图」——.dat 有时本身就是预览版。
                 "has_mid": ("mid" in tiers) or ("original" in tiers)}
 
@@ -1310,6 +1325,17 @@ class MediaDownloader:
             elif 'thumb' in files:
                 pick, suffix = files['thumb'], '_thumb'
             else:
+                for candidate in files.get('candidate', ()):
+                    try:
+                        data = self.decrypt_image(candidate[0], aes_key, xor_key)
+                    except (OSError, ValueError):
+                        continue
+                    except RuntimeError as exc:
+                        if not str(exc).startswith("无法获取图片 AES 密钥："):
+                            raise
+                        continue
+                    return self._write_decrypted(
+                        data, "%s_%s_candidate" % (user, local_id), save_dir)
                 return None
         elif tier == 'full':
             # 「不是 _t.dat 的那一份」，**只读本机**：download_image 的口径就是本机有什么

@@ -224,15 +224,34 @@ class MediaTests(unittest.TestCase):
 
             for candidate in image_dir.glob(f"{md5}*"):
                 candidate.unlink()
-            for suffix in ("_b.dat", ".b.dat", "_w.dat", ".w.dat", "_c.dat", ".c.dat"):
-                for candidate in image_dir.glob(f"{md5}*"):
-                    candidate.unlink()
+            variants = ("_b.dat", ".b.dat", "_w.dat", ".w.dat", "_c.dat", ".c.dat")
+            for suffix in variants:
                 (image_dir / f"{md5}{suffix}").write_bytes(b"x" * 2048)
-                self.assertNotIn("thumb", downloader._image_files("fixture", md5))
-                with patch.object(downloader, "decrypt_image") as decrypt:
-                    self.assertIsNone(downloader.download_image("fixture", 7, tier="thumb"))
-                    self.assertIsNone(downloader.download_image("fixture", 7, tier="best"))
-                    decrypt.assert_not_called()
+
+            found = downloader._image_files("fixture", md5)
+            self.assertEqual([Path(path).name for path, _size in found["candidate"]],
+                             [f"{md5}{suffix}" for suffix in variants])
+            status = downloader._image_status_for("fixture", 7, md5)
+            self.assertEqual(status["tiers"], {})
+            self.assertIsNone(status["best"])
+            self.assertTrue(status["candidate_available"])
+            with patch.object(downloader, "decrypt_image",
+                              side_effect=[RuntimeError("无法获取图片 AES 密钥：test"),
+                                           ValueError("not an image"), decoded]) as decrypt:
+                fallback = downloader.download_image("fixture", 7, tier="best")
+            self.assertTrue(fallback.endswith("fixture_7_candidate.jpg"))
+            self.assertEqual(decrypt.call_count, 3)
+            self.assertEqual(decrypt.call_args_list[0].args[0], found["candidate"][0][0])
+            self.assertEqual(decrypt.call_args_list[1].args[0], found["candidate"][1][0])
+            self.assertEqual(decrypt.call_args_list[2].args[0], found["candidate"][2][0])
+            with patch.object(downloader, "decrypt_image") as decrypt:
+                self.assertIsNone(downloader.download_image("fixture", 7, tier="original"))
+                self.assertIsNone(downloader.download_image("fixture", 7, tier="thumb"))
+                decrypt.assert_not_called()
+            with patch.object(downloader, "decrypt_image",
+                              side_effect=RuntimeError("unexpected decoder failure")):
+                with self.assertRaisesRegex(RuntimeError, "unexpected decoder failure"):
+                    downloader.download_image("fixture", 7, tier="best")
 
     def test_uncached_voice_does_not_attempt_decode(self):
         provider = self.provider({"local_type": 34})

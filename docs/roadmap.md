@@ -28,6 +28,9 @@ remains disabled. A read-only live check on 2026-10-15 after starting through
 the repository launcher found all three sources connected without errors,
 including completed QQ indexing. This point-in-time state may change; no account
 identifiers or message totals are retained here.
+The latest bounded `/api/sources` check on 2026-10-15 again reports WeChat,
+WeCom, and QQ connected without source errors; this is point-in-time runtime
+evidence and records no account identifiers or message counts.
 NapCat is retained only as an optional sender that requires an online session and
 explicit per-message approval; real delivery is unverified. Real cached-media
 parity and complete media acceptance remain IN_PROGRESS. QQ snapshots still
@@ -57,10 +60,21 @@ retained through 2026-10-21. Documentation-only commit
 hosted Windows workflow `38638279271`, including portable/source packaging,
 upload/download, and matching SHA-256/provenance checks. Its 251,780,323-byte
 artifact is retained through 2026-10-21. Fresh local packages also passed
-isolated startup, privacy, and manifest verification. P14-01 is DONE for this
-source tree. P9/P13 live
+isolated startup, privacy, and manifest verification for the preceding source
+tree. The subsequent P11 DAT-candidate change is not in those packages or the
+hosted run; P14 is therefore IN_PROGRESS for the current worktree. P9/P13 live
 delivery, P11 real-cache parity, and P12 live desktop/native acceptance remain
 open.
+
+**Latest hosted P14 evidence (2026-10-15):** GitHub run `38641017039` completed
+successfully for commit `5c184cf2d9b29e217670d9f5ad6b5bacf96c503d`. Its
+`LocalMessageHub-windows-release` artifact (`11930632619`) is 251,779,370 bytes
+with SHA-256 `da0608ad3d8711fe73c9b9297e30896635386c39694d12f3943c5987b8092876`,
+retained through 2026-10-21. The rewritten `main` and roadmap refs point to the
+same commit; mirrored `main` run `38643215399` also completed successfully on
+that SHA. Subsequent local P11 changes add best-preview-only WeChat DAT
+candidates and are not covered by this hosted artifact; P14 remains
+`IN_PROGRESS` until the current change is included in a hosted gate.
 
 **P14 CI fixture correction (2026-10-15):** hosted run `38618407580` failed in
 the local test step because ChatLab memory/export fixtures omitted conversation
@@ -443,14 +457,17 @@ that tile and preserves its current preview on a cache miss. Ordinary viewport
 previews remain on `mid`; full resource/decryption parity and real-cache
 acceptance remain open.
 
-P11-01 follow-up (2026-10-14): The WeChat image cache resolver recognizes the
-suffixes classified by the pinned WeFlow reader's active selector: original
-`_h/.h/_hd/.hd`, base `.dat`, and thumbnail `_t/.t/_thumb`; it deterministically
-selects the largest file within each tier. B/W/C cache suffixes are not assigned
-a quality tier because the active selector does not classify them. Account-root
-containment checks remain in place. Focused synthetic coverage verifies the
-known tiers and rejects unknown B/W/C tiers; full resource/decryption parity
-and real-cache acceptance remain open.
+P11-01 follow-up (2026-10-15): The WeChat image cache resolver classifies only
+original `_h/.h/_hd/.hd`, base `.dat`, and thumbnail `_t/.t/_thumb` suffixes,
+selecting the largest file within each known tier. When `best` has no known
+copy, `_b/.b/_w/.w/_c/.c` are tried as local decode candidates in the pinned
+WeFlow selector's order; they are not exposed as quality tiers, selected for
+`original`/`full`, or used when a known tier exists. The decoder validates the
+DAT contents, and account-root containment checks remain in place. Focused
+synthetic coverage verifies candidate ordering, invalid-candidate fallback,
+missing-key continuation and original/thumbnail boundaries. Unexpected runtime
+errors still surface. Full resource/decryption parity and real-cache acceptance
+remain open.
 
 P11-01 follow-up (2026-10-14): The local QQ parser now preserves QCE-style
 `market_face` messages as image resources, including filename, MD5 and size, so
@@ -752,7 +769,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Hosted code run `38638279271` on `a2a1aae365cb31aaee9a7de406d9af1723efd4ea` passed the full Windows gate and artifact round-trip; artifact `LocalMessageHub-windows-release` is 251,780,323 bytes, SHA-256 `85e3bd31d62b8745b6ea27dd822f2520db95306093d572aef4c35bccb947ca6c`, retained through 2026-10-21. The current worktree passed 819 Python tests, four source-mutation gate checks, configured WebUI/JS checks and the 25,000-message benchmark. The 9,783-file Windows portable package and 690-file sanitized source bundle passed isolated startup, privacy and local manifest verification. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; the packaging smoke verifies repeated identical builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest regression suite binds hosted creation, pre-upload verification and downloaded-artifact verification to the same GitHub commit/run provenance. Latest hosted code run `38641017039` on `5c184cf2d9b29e217670d9f5ad6b5bacf96c503d` succeeded with artifact `LocalMessageHub-windows-release` (`11930632619`), 251,779,370 bytes, SHA-256 `da0608ad3d8711fe73c9b9297e30896635386c39694d12f3943c5987b8092876`, retained through 2026-10-21. Before the latest P11 DAT-candidate change, the worktree passed 819 Python tests, four source-mutation gate checks, configured WebUI/JS checks and the 25,000-message benchmark. The 9,783-file Windows portable package and 690-file sanitized source bundle passed isolated startup, privacy and local manifest verification. The current candidate change has one focused synthetic test and `git diff --check`; it still needs a hosted Windows gate. | IN_PROGRESS |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects
@@ -3785,11 +3802,11 @@ and three focused MCP tests passed with synthetic records. No adapter delivered
 a message; live NapCat delivery remains unverified.
 
 **P11 parity audit (2026-10-15):** real cache/device acceptance remains open.
-WeFlow recognizes `_b`, `.b`, `_w`, `.w`, `_c`, and `.c` image cache variants.
-The Hub does not classify these variants as thumbnails or best-available
-media until their semantics are verified; it currently exposes only the
-confirmed thumbnail suffixes. Their exact dimensions are not inferred. Full
-resource library and batch-decryption parity remains open.
+The Hub tries WeFlow `_b`, `.b`, `_w`, `.w`, `_c`, and `.c` image cache
+variants only as last-resort local decode candidates for `best`; their exact
+dimensions and quality are not inferred, and status, thumbnail, original, and
+full selection do not classify them. Full resource library and batch-decryption
+parity remains open.
 
 **P8-P14 current local gate (2026-10-15):** the current worktree passes 811
 Python tests, four source-mutation gate checks, 32 WebUI checks, source package
@@ -3835,8 +3852,9 @@ remain open, so P14 remains `IN_PROGRESS`.
 unsupported, null, and orphaned conversation kinds instead of labeling them as
 private; an actually empty export retains its established private default.
 The WeChat sender validates display-name uniqueness even when that name equals
-the conversation ID. B/W/C image suffixes remain unclassified pending upstream
-semantics. Focused ChatLab and WeChat sender regressions pass. A fresh local
+the conversation ID. B/W/C image suffixes remain outside quality tiers and can
+be tried only as best-preview candidates after known local tiers. Focused
+ChatLab and WeChat sender regressions pass. A fresh local
 Windows portable build and sanitized source archive passed isolated startup,
 MCP, privacy, and manifest checks. Real QQ/WeChat/WeCom delivery, full P11
 resource/decryption and cache acceptance, P12 desktop/native acceptance, and

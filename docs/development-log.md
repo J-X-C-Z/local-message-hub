@@ -8054,3 +8054,26 @@ key is absent.
   251,780,323 bytes with digest
   `sha256:85e3bd31d62b8745b6ea27dd822f2520db95306093d572aef4c35bccb947ca6c`,
   retained through 2026-10-21. P14-01 is complete for this source tree.
+
+## 2026-10-15 - WeChat DAT Candidate Fallback and Latest Hosted Evidence
+
+- The WeChat local image resolver now tries `_b/.b/_w/.w/_c/.c` DAT files as
+  ordered decode candidates only for `best`, after all known original, mid and
+  thumbnail tiers are absent. These variants are not labeled as a quality tier
+  and cannot satisfy explicit original/full/thumbnail selection. Account-root
+  containment, symlink rejection and content signature validation remain in
+  the existing resolver/decrypt path.
+- One focused synthetic regression verifies candidate order, invalid-candidate
+  fallback, missing-AES-key continuation and selection boundaries. Unexpected
+  runtime errors still surface. No real WeChat cache or database was read;
+  real-cache acceptance and broader WeFlow parity remain open.
+- GitHub run `38641017039` completed successfully for public commit
+  `5c184cf2d9b29e217670d9f5ad6b5bacf96c503d`; artifact
+  `LocalMessageHub-windows-release` (`11930632619`) is 251,779,370 bytes with
+  SHA-256 `da0608ad3d8711fe73c9b9297e30896635386c39694d12f3943c5987b8092876`,
+  retained through 2026-10-21. This run predates the local DAT-candidate change,
+  so P14 is `IN_PROGRESS` for the current worktree until that change passes a
+  hosted Windows gate. Mirrored `main` run `38643215399` also completed
+  successfully on the same commit.
+- The live `/api/sources` status check reports WeChat, WeCom and QQ connected
+  without source errors. No account identifiers or message counts were recorded.
