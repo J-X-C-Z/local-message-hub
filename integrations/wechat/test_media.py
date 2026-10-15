@@ -1107,6 +1107,32 @@ class MediaTests(unittest.TestCase):
         self.assertFalse(result["playable"])
         decoder.decode.assert_not_called()
 
+    def test_silk_read_stays_bounded_if_file_grows_after_stat(self):
+        class GrowingFile:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size):
+                self.read_size = size
+                return b"123"
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "fixture.silk"
+            source.write_bytes(b"1")
+            growing_file = GrowingFile()
+            decoder = types.SimpleNamespace(decode=Mock(side_effect=AssertionError("must not decode")))
+            with patch.object(Path, "open", autospec=True, return_value=growing_file), \
+                    patch.dict(sys.modules, {"pilk_nogil": decoder}), \
+                    patch("integrations.wechat.voice.MAX_SILK_BYTES", 2):
+                result = voice_media_result(str(source))
+
+        self.assertEqual(growing_file.read_size, 3)
+        self.assertEqual(result["reason"], "voice_decode_limit_exceeded")
+        decoder.decode.assert_not_called()
+
     def test_oversized_decoded_pcm_retains_original_and_removes_temporary(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "fixture.silk"

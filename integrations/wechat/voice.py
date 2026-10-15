@@ -21,7 +21,8 @@ def voice_media_result(silk_path: str) -> dict:
     try:
         if source.stat().st_size > MAX_SILK_BYTES:
             raise OverflowError("SILK input exceeds decode limit")
-        silk = source.read_bytes()
+        with source.open("rb") as input_file:
+            silk = input_file.read(MAX_SILK_BYTES + 1)
         if len(silk) > MAX_SILK_BYTES:
             raise OverflowError("SILK input exceeds decode limit")
         pcm = pilk_nogil.decode(silk, None, pcm_rate=24000)

@@ -8264,3 +8264,12 @@ passed (1 test); the full WeChat media module passed 61 tests and
 - Focused P11 checks passed: WeChat cursor/provider 6/6, composite resource
   identity 1/1, source media list-preview-ZIP HTTP flow 1/1, and media WebUI
   preview/export coverage. No real media was opened or sent.
+
+## 2026-10-15 - P11 Bounded SILK Reads
+
+- The shared voice decoder now reads at most 16 MiB plus one sentinel byte,
+  even if a cached SILK file grows after its initial size check. Oversized input
+  is rejected before decoding for WeChat, WeCom, and Hub/QQ callers.
+- Focused regressions passed (2 tests), including simulated post-stat growth;
+  `git diff --check` passed. No real media cache was accessed. Full resource and
+  decryption parity remains open.
