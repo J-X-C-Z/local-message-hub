@@ -3333,6 +3333,15 @@ class Handler(BaseHTTPRequestHandler):
                         key: value for key, value in self.hub.send_approval_challenges.items()
                         if value[2] != 'wecom_bot'
                     }
+            elif path == '/api/wecom-bot/identity/remove':
+                if body.get('confirmation') != 'REMOVE_WECOM_BOT_CREDENTIALS':
+                    raise ValueError('缺少移除机器人凭据确认')
+                result = self.hub.wecom_bot_credentials.delete()
+                with self.hub.lock:
+                    self.hub.send_approval_challenges = {
+                        key: value for key, value in self.hub.send_approval_challenges.items()
+                        if value[2] != 'wecom_bot'
+                    }
             elif path == '/api/wecom-bot-sends/prepare':
                 identity = self.hub.wecom_bot_credentials.status()
                 if not identity['configured']:
@@ -3839,6 +3848,8 @@ class Handler(BaseHTTPRequestHandler):
             return 'wechat_send'
         if path == '/api/wecom-bot/identity':
             return 'wecom_bot_send'
+        if path == '/api/wecom-bot/identity/remove' and method == 'POST':
+            return None
         if path == '/api/wecom-bot-sends' or path.startswith('/api/wecom-bot-sends/'):
             return 'wecom_bot_send'
         if path in ('/api/export', '/api/export/contacts', '/api/export/group-members'):

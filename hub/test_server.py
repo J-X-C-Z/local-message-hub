@@ -877,7 +877,9 @@ class ServerTest(unittest.TestCase):
         self.hub.wecom_bot_sender.sender = bot
         with patch.object(self.hub.wecom_bot_credentials, 'status') as identity_status, patch.object(
                 self.hub.wecom_bot_credentials, 'set') as set_identity, patch.object(
-                self.hub.wecom_bot_credentials, 'delete') as delete_identity:
+                self.hub.wecom_bot_credentials, 'delete', return_value={
+                    'configured': False, 'bot_id': '',
+                    'identity': '企业微信智能机器人（非当前员工身份）'}) as delete_identity:
             with self.assertRaises(HTTPError) as identity_disabled:
                 self.request('/api/wecom-bot/identity')
             self.assertEqual(identity_disabled.exception.code, 403)
@@ -891,6 +893,23 @@ class ServerTest(unittest.TestCase):
             identity_status.assert_not_called()
             set_identity.assert_not_called()
             delete_identity.assert_not_called()
+            with self.assertRaises(HTTPError) as unconfirmed_revoke:
+                self.request('/api/wecom-bot/identity/remove', headers,
+                             json.dumps({'confirmation': 'wrong'}).encode())
+            self.assertEqual(unconfirmed_revoke.exception.code, 400)
+            delete_identity.assert_not_called()
+            self.hub.send_approval_challenges = {
+                'bot-challenge': ('token-1', 9999999999, 'wecom_bot'),
+                'qq-challenge': ('token-2', 9999999999, 'qq'),
+            }
+            with self.request('/api/wecom-bot/identity/remove', headers, json.dumps({
+                    'confirmation': 'REMOVE_WECOM_BOT_CREDENTIALS'}).encode()) as response:
+                removed = json.load(response)
+            self.assertFalse(removed['configured'])
+            delete_identity.assert_called_once()
+            self.assertEqual(set(self.hub.send_approval_challenges), {'qq-challenge'})
+            self.assertIsNone(Handler.capability_for_path(
+                '/api/wecom-bot/identity/remove', method='POST'))
         with patch.object(self.hub.wecom_bot_credentials, 'status', return_value={
                 'configured': True, 'bot_id': 'bot_123',
                 'identity': '企业微信智能机器人（非当前员工身份）'}), patch.object(

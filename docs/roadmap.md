@@ -3905,3 +3905,11 @@ to its recorded commit only. The sanitized source commit
 `f5ffedcca788c2bc7e0256b75b19d5b7264475b1` has Windows runs `38658744084`
 (`main`) and `38658743704` (roadmap branch) in progress; P14 remains
 `IN_PROGRESS` until both package/artifact gates complete.
+
+**P13 credential-revocation follow-up (2026-10-15):** with
+`wecom_bot_send` disabled, Settings now offers only a confirmed removal action
+for any locally saved bot credential. The dedicated loopback POST route keeps
+credential read/write and all send APIs behind the send capability, preserves
+the account-lock gate, and invalidates only WeCom approval challenges. Focused
+HTTP and WebUI regressions pass. Real bot authorization and delivery remain
+open; P13-01 stays `IN_PROGRESS`.

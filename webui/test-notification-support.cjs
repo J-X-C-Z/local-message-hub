@@ -47,6 +47,7 @@ assert.doesNotMatch(supported, /aria-label="桌面通知"[^>]*disabled/);
 const sourceMutationCapabilities = renderSettings(true, false, {
   anti_recall: {name: '防撤回拦截', available: false, enabled: false, reason: '尚未开放'},
   qq_history: {name: 'QQ 在线漫游历史', available: false, enabled: false, reason: '已停用'},
+  wecom_bot_send: {name: '企业微信机器人消息发送', available: true, enabled: false},
 });
 for (const [id, label] of [['anti_recall', '防撤回拦截'], ['qq_history', 'QQ 在线漫游历史']]) {
   assert.doesNotMatch(sourceMutationCapabilities, new RegExp(`data-action="capability:${id}"`),
@@ -55,5 +56,7 @@ for (const [id, label] of [['anti_recall', '防撤回拦截'], ['qq_history', 'Q
 }
 assert.doesNotMatch(sourceMutationCapabilities, /data-action="capability:(?:anti_recall|qq_history)"[^>]*role="switch"/,
   'source mutation and retired online-history controls must remain non-interactive');
+assert.match(sourceMutationCapabilities, /data-action="remove-wecom-bot-credentials"/,
+  'saved bot credentials can be revoked while sending is disabled');
 
 console.log('PASS unavailable settings stay non-interactive and notification support is explained');

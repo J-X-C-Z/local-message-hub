@@ -8150,3 +8150,15 @@ key is absent.
 - The current source commit `f5ffedcca788c2bc7e0256b75b19d5b7264475b1` has
   Windows runs `38658744084` (`main`) and `38658743704` (roadmap branch) in
   progress. They predate this local change and do not validate it.
+
+## 2026-10-15 - Revoke WeCom Bot Credentials While Sending Is Off
+
+- Added a loopback-only, confirmation-bound credential removal endpoint that
+  remains available when `wecom_bot_send` is disabled. Reads, saves, and every
+  sending route remain capability-gated; the existing account-lock and origin
+  checks still run first. Removal invalidates only WeCom approval challenges.
+- Settings exposes the removal action without revealing whether credentials
+  are configured. The focused server send/approval route test, WebUI settings
+  test, and `git diff --check` pass. No credentials or deliveries were used.
+- The remote Windows runs for commit `247970d4433939c7a12daccd03421afe12175dde`
+  predate this local change and do not validate it.
