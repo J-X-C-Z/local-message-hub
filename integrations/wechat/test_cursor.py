@@ -99,6 +99,27 @@ class CursorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cursor"):
             self.reader.get_messages_after("synthetic-room", {"sort_seq": "bad"})
 
+    def test_source_media_page_returns_exact_shard_identity_without_body(self):
+        for index, path in enumerate(self.paths):
+            conn = sqlite3.connect(path)
+            conn.execute(
+                f"INSERT INTO {self.table} VALUES (?, 3, 44, ?, ?, NULL, NULL, NULL, NULL, ?)",
+                (8, 200 + index, "SECRET MESSAGE BODY", 20 + index),
+            )
+            conn.commit()
+            conn.close()
+
+        first = self.reader.get_media_rows("synthetic-room", {3}, offset=0, limit=1)
+        second = self.reader.get_media_rows("synthetic-room", {3}, offset=1, limit=1)
+        self.assertEqual(first["total"], 2)
+        self.assertEqual(second["total"], 2)
+        self.assertEqual((first["items"][0]["shard"], first["items"][0]["local_id"]),
+                         ("message_1.db", 8))
+        self.assertEqual((second["items"][0]["shard"], second["items"][0]["local_id"]),
+                         ("message_0.db", 8))
+        self.assertNotIn("content", first["items"][0])
+        self.assertNotIn("SECRET MESSAGE BODY", repr(first))
+
     def test_provider_cursor_is_scoped_to_conversation_and_maps_rows(self):
         provider = WeChatProvider.__new__(WeChatProvider)
         provider.reader = Mock()
@@ -118,6 +139,28 @@ class CursorTests(unittest.TestCase):
         self.assertEqual(second["messages"][0]["sort_seq"], 3)
         with self.assertRaisesRegex(ValueError, "cursor"):
             provider.messages_after("another-room", first["next_cursor"], limit=2)
+
+    def test_provider_source_media_keeps_composite_identity_and_omits_content(self):
+        provider = WeChatProvider.__new__(WeChatProvider)
+        provider.reader = Mock()
+        provider.reader.get_media_rows.return_value = {"total": 1, "items": [{
+            "local_id": 9, "local_type": 3, "sender_id": 4, "create_time": 12,
+            "sort_seq": 12, "shard": "message_2.db",
+        }]}
+        provider._sender_names = Mock(return_value={4: "Synthetic sender"})
+
+        page = provider.source_media("synthetic-room", media_type="image")
+
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["items"][0]["id"], "synthetic-room:message_2.db:9")
+        self.assertEqual(page["items"][0]["extra"], {
+            "resource_kind": "wechat_source", "shard": "message_2.db",
+            "local_id": 9, "local_type": 3,
+        })
+        self.assertEqual(page["items"][0]["sender_name"], "Synthetic sender")
+        self.assertNotIn("content", page["items"][0])
+        provider.reader.get_media_rows.assert_called_once()
+        self.assertEqual(provider.reader.get_media_rows.call_args.args[1], {3})
 
 
 if __name__ == "__main__":

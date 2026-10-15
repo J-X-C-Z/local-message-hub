@@ -64,6 +64,32 @@ class ResourceJobManager:
                 identity = (kind, account_id, post_id, media_index, variant)
                 validated_item = {"resource_kind": kind, "platform": platform, "account_id": account_id,
                                   "post_id": post_id, "media_index": media_index, "variant": variant}
+            elif kind == "wechat_source":
+                allowed = {"resource_kind", "platform", "account_id", "conversation_id",
+                           "shard", "local_id", "image_tier", "video_variant"}
+                conversation_id = str(item.get("conversation_id") or "")
+                shard = str(item.get("shard") or "")
+                local_id = item.get("local_id")
+                local_id_text = str(local_id) if type(local_id) is int else local_id
+                image_tier = item.get("image_tier", "best")
+                video_variant = item.get("video_variant")
+                if (set(item) - allowed or platform != "wechat" or not account_id or
+                        not conversation_id or not shard or Path(shard).name != shard or
+                        not isinstance(local_id_text, str) or not local_id_text.isascii() or
+                        not local_id_text.isdecimal() or len(local_id_text) > 20 or
+                        len(account_id) > 256 or len(conversation_id) > 512 or len(shard) > 256 or
+                        image_tier not in ("best", "mid", "thumb", "original") or
+                        video_variant not in (None, "poster")):
+                    raise ValueError("微信源媒体身份参数无效")
+                local_id = int(local_id_text)
+                identity = (kind, account_id, conversation_id, shard, local_id,
+                            image_tier, video_variant)
+                validated_item = {"resource_kind": kind, "platform": platform,
+                                  "account_id": account_id, "conversation_id": conversation_id,
+                                  "shard": shard, "local_id": local_id,
+                                  "image_tier": image_tier}
+                if video_variant is not None:
+                    validated_item["video_variant"] = video_variant
             elif kind == "qq_cache":
                 allowed = {"resource_kind", "platform", "account_id", "resource_id"}
                 resource_id = str(item.get("resource_id") or "")

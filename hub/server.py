@@ -1612,6 +1612,44 @@ class Hub:
 
     def resolve_media(self, params):
         platform = params.get('platform')
+        if params.get('resource_kind') == 'wechat_source':
+            allowed = {'resource_kind', 'platform', 'account_id', 'conversation_id',
+                       'shard', 'local_id', 'image_tier', 'video_variant'}
+            if (set(params) - allowed or platform != 'wechat' or
+                    not all(isinstance(params.get(key), str) and params[key] and len(params[key]) <= 512
+                            for key in ('account_id', 'conversation_id', 'shard'))):
+                raise ValueError('微信源媒体身份参数无效')
+            shard = params['shard']
+            local_id = params.get('local_id')
+            local_id_text = str(local_id) if type(local_id) is int else local_id
+            if (Path(shard).name != shard or not isinstance(local_id_text, str) or
+                    not local_id_text.isascii() or not local_id_text.isdecimal() or len(local_id_text) > 20):
+                raise ValueError('微信源媒体身份参数无效')
+            image_tier = params.get('image_tier', 'mid')
+            video_variant = params.get('video_variant')
+            if image_tier not in ('best', 'mid', 'thumb', 'original') or video_variant not in (None, 'poster'):
+                raise ValueError('微信媒体预览选项无效')
+            provider = self.providers.get('wechat')
+            if provider is None:
+                from integrations.wechat.provider import WeChatProvider
+                provider = WeChatProvider()
+                with self.lock:
+                    self.providers['wechat'] = provider
+            reader = getattr(provider, 'reader', None)
+            current_account = str(getattr(reader, 'wxid', None) or
+                                  getattr(reader, 'account', None) or '')
+            if not reader or current_account != params['account_id']:
+                raise ValueError('微信源媒体账号已变化，请刷新列表')
+            result = provider.media(params['conversation_id'], int(local_id_text), shard,
+                                    image_tier=image_tier, video_variant=video_variant)
+            path = result.get('path')
+            if not result.get('available') or not path:
+                return {'media_url': None, 'available': False,
+                        'message': '本机缓存中没有可读取的此媒体'}
+            mime = mimetypes.guess_type(Path(path).name)[0]
+            return {'media_url': '/local-media/' + self.register_media_path(Path(path).resolve()),
+                    'available': True, 'mime_type': mime,
+                    'download_name': 'wechat-' + str(result.get('type') or 'media')}
         if 'image_tier' in params and platform != 'wechat':
             raise ValueError('图片质量选项仅适用于微信聊天图片')
         video_variant = params.get('video_variant')
@@ -1906,7 +1944,7 @@ class Hub:
         return self.voice_transcriber.transcribe(audio)
 
     def resolve_resource(self, params):
-        if 'image_tier' in params and (params.get('resource_kind') or 'message') != 'message':
+        if 'image_tier' in params and (params.get('resource_kind') or 'message') not in ('message', 'wechat_source'):
             raise ValueError('图片质量选项仅适用于微信聊天图片')
         if params.get('resource_kind') == 'qq_cache':
             self.require_capability('media')
@@ -1919,6 +1957,17 @@ class Hub:
             path, name = provider.resolve_cached_resource(
                 str(params.get('resource_id') or ''), str(params.get('account_id') or ''))
             return path, name
+        if params.get('resource_kind') == 'wechat_source':
+            self.require_capability('media')
+            resolved = self.resolve_media(params)
+            token = (resolved.get('media_url') or '').rsplit('/', 1)[-1]
+            if not token:
+                raise FileNotFoundError
+            with self.lock:
+                path = self.media_paths.pop(token, None)
+            if path is None or not Path(path).is_file():
+                raise FileNotFoundError
+            return Path(path), resolved.get('download_name') or 'wechat-media'
         if params.get('resource_kind') == 'moment':
             if not self.capability_enabled('moments'):
                 raise ValueError('朋友圈功能已关闭')
@@ -2284,6 +2333,70 @@ class Hub:
                     if isinstance(live_photo, dict):
                         register_cached_moment_media(live_photo)
         return result
+
+    def list_wechat_source_media(self, params):
+        account_id = params.get('account_id', '')
+        conversation_id = params.get('conversation_id', '')
+        media_type = params.get('type', '')
+        if (params.get('platform') != 'wechat' or not account_id or not conversation_id or
+                len(account_id) > 256 or len(conversation_id) > 512):
+            raise ValueError('请先选择准确的微信账号和会话')
+        if params.get('q'):
+            raise ValueError('微信源媒体视图按媒体类型和日期筛选')
+        if media_type not in ('', 'image', 'video', 'voice', 'file'):
+            raise ValueError('此来源视图不支持该媒体类型')
+        try:
+            offset, limit = int(params.get('offset', 0)), int(params.get('limit', 60))
+        except (TypeError, ValueError):
+            raise ValueError('媒体分页参数无效') from None
+        if not 0 <= offset <= 10_000 or not 1 <= limit <= 60:
+            raise ValueError('源媒体分页范围为 0 至 10000')
+        start = parse_bound(params.get('start'))
+        end = parse_bound(params.get('end'), end=True)
+        if start is not None and end is not None and start > end:
+            raise ValueError('开始日期不能晚于结束日期')
+        provider = self.providers.get('wechat')
+        if provider is None:
+            from integrations.wechat.provider import WeChatProvider
+            provider = WeChatProvider()
+            with self.lock:
+                self.providers['wechat'] = provider
+        reader = getattr(provider, 'reader', None)
+        current_account = str(getattr(reader, 'wxid', None) or
+                              getattr(reader, 'account', None) or '')
+        if not reader or current_account != account_id:
+            raise ValueError('微信源媒体账号已变化，请先同步并重新选择账号')
+        selected_types = (provider._SOURCE_MEDIA_TYPES.get(media_type) if media_type else
+                          set().union(*provider._SOURCE_MEDIA_TYPES.values()))
+        raw_types = sorted({str(int(value) & 0xFFFFFFFF) for value in selected_types})
+        first = provider.source_media(conversation_id, media_type=media_type,
+                                      start_time=start, end_time=end, offset=0, limit=1)
+        raw_total = int(first.get('total') or 0)
+        indexed_total = self.store.wechat_indexed_source_media_count(
+            account_id, conversation_id, raw_types, start, end)
+        total = max(0, raw_total - indexed_total)
+        wanted, found, raw_offset = offset + limit, [], 0
+        while raw_offset < raw_total and raw_offset < 10_000 and len(found) < wanted:
+            page = provider.source_media(conversation_id, media_type=media_type,
+                                         start_time=start, end_time=end,
+                                         offset=raw_offset, limit=500)
+            candidates = page.get('items') or []
+            if not candidates:
+                break
+            indexed = self.store.wechat_source_media_ids(
+                account_id, conversation_id, [row['id'] for row in candidates])
+            found.extend(row for row in candidates if row['id'] not in indexed)
+            raw_offset += len(candidates)
+        if len(found) < wanted and raw_offset < raw_total:
+            raise ValueError('此会话源媒体数量较多，请缩小日期范围或指定媒体类型')
+        conversation = self.store.get_conversation('wechat', account_id, conversation_id)
+        title = conversation.get('title') if conversation else provider.reader.get_nickname(conversation_id)
+        items = []
+        for row in found[offset:offset + limit]:
+            items.append({**row, 'account_id': account_id, 'conversation_title': title,
+                          'conversation_kind': conversation.get('kind') if conversation else
+                          ('group' if conversation_id.endswith('@chatroom') else 'direct')})
+        return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
     def _issue_moment_media_url(self, candidate, cache_root, mime=None):
         root = Path(cache_root).resolve(strict=True)
@@ -2965,6 +3078,10 @@ class Handler(BaseHTTPRequestHandler):
                                                 'mime_type': item['mime_type'], 'size': item['size']}})
                     result = {'items': items, 'total': gallery['total'],
                               'has_more': gallery['has_more'], 'available': gallery['available']}
+                self.json(result)
+                return
+            if media_source == 'wechat-source':
+                result = self.hub.list_wechat_source_media({**params, 'platform': query['platform']})
                 self.json(result)
                 return
             if media_source == 'moments' and not self.hub.capability_enabled('moments'):

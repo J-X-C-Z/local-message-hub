@@ -96,3 +96,16 @@ test('Moments source-mutation HTTP routes remain connected to the fail-closed ga
   assert.doesNotMatch(main, /ipcMain\.handle\('sns:deleteSnsPost'/)
   assert.match(ui, /className="icon-btn-ghost debug-btn delete-btn"[\s\S]*?disabled[\s\S]*?源客户端修改尚未开放/)
 })
+
+test('anti-revoke settings expose status refresh only while native mutation is unavailable', () => {
+  const fs = require('node:fs')
+  const settings = fs.readFileSync(path.join(__dirname, '../src/pages/SettingsPage.tsx'), 'utf8')
+  const tabStart = settings.indexOf('const renderAntiRevokeTab = () => {')
+  const tabEnd = settings.indexOf('const renderDatabaseTab = () => (', tabStart)
+  assert.ok(tabStart >= 0 && tabEnd > tabStart, 'anti-revoke tab must remain identifiable')
+
+  const tab = settings.slice(tabStart, tabEnd)
+  assert.match(tab, /handleRefreshAntiRevokeStatus\(\)/)
+  assert.doesNotMatch(tab, /antiRevokeSelectedIds|anti-revoke-selection-strip|全选|清空选择/)
+  assert.doesNotMatch(settings, /handle(?:Install|Uninstall)AntiRevokeTriggers|electronAPI\.chat\.(?:install|uninstall)AntiRevokeTriggers/)
+})

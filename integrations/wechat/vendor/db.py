@@ -2123,6 +2123,46 @@ class WeChatDB:
         rows.sort(key=lambda r: r["sort_seq"], reverse=True)
         return [r["local_id"] for r in rows]
 
+    def get_media_rows(self, user: str, types: set, *, offset: int = 0,
+                       limit: int = 60, start_time: int | None = None,
+                       end_time: int | None = None) -> dict:
+        """Page media identities and display metadata without reading message bodies."""
+        offset, limit = int(offset), int(limit)
+        type_codes = sorted({int(value) for value in types})
+        if offset < 0 or not 1 <= limit <= 500 or not type_codes:
+            raise ValueError("invalid media page")
+        where = " WHERE local_type IN (%s)" % ",".join("?" for _ in type_codes)
+        params = list(type_codes)
+        if start_time is not None:
+            where += " AND create_time >= ?"
+            params.append(int(start_time))
+        if end_time is not None:
+            where += " AND create_time <= ?"
+            params.append(int(end_time))
+
+        def _read(tables):
+            rows, total = [], 0
+            for shard_order, (conn, table) in enumerate(tables):
+                quoted = '"' + table.replace('"', '""') + '"'
+                total += int(conn.execute("SELECT count(*) FROM %s%s" % (quoted, where), params).fetchone()[0])
+                shard = self._shard_label(conn)
+                cursor = conn.execute(
+                    "SELECT local_id, local_type, real_sender_id, create_time, sort_seq "
+                    "FROM %s%s ORDER BY sort_seq DESC, local_id ASC LIMIT ?" % (quoted, where),
+                    (*params, offset + limit),
+                )
+                rows.extend((int(row["sort_seq"] or 0), shard_order,
+                             {"local_id": int(row["local_id"]),
+                              "local_type": int(row["local_type"]),
+                              "sender_id": row["real_sender_id"],
+                              "create_time": int(row["create_time"] or 0),
+                              "sort_seq": int(row["sort_seq"] or 0), "shard": shard})
+                            for row in cursor.fetchall())
+            rows.sort(key=lambda item: item[0], reverse=True)
+            return {"items": [item[2] for item in rows[offset:offset + limit]], "total": total}
+
+        return self._run_msg_query(user, _read) or {"items": [], "total": 0}
+
     def get_new_messages(self, user: str, since_seq: int = 0, limit: int = 200) -> List[dict]:
         """返回 sort_seq > since_seq 的新消息（升序），供轮询监听使用
 

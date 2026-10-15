@@ -124,6 +124,8 @@ class MomentsExportTest(unittest.TestCase):
                 actual = render_moments_export_bounded(self.result, format)
                 self.assertEqual(bytes(actual[0]), expected[0])
                 self.assertEqual(actual[1:], expected[1:])
+                if format == 'xlsx':
+                    self.assertEqual(render_moments_export(self.result, format)[0], expected[0])
 
     def test_bounded_renderer_stops_consuming_items_at_output_limit(self):
         consumed = []

@@ -122,6 +122,12 @@ def _xlsx_text(value):
     return xml_escape(''.join(clipped))
 
 
+def _xlsx_entry(name):
+    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    entry.compress_type = zipfile.ZIP_DEFLATED
+    return entry
+
+
 class _CappedBytesIO(io.BytesIO):
     def __init__(self, max_bytes):
         super().__init__()
@@ -145,8 +151,8 @@ def _render_xlsx(items, source, max_bytes=32 * 1024 * 1024):
                '类型', '地点', '媒体数', '点赞', '评论']
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
         for path, content in files.items():
-            archive.writestr(path, content)
-        with archive.open('xl/worksheets/sheet1.xml', 'w') as sheet:
+            archive.writestr(_xlsx_entry(path), content)
+        with archive.open(_xlsx_entry('xl/worksheets/sheet1.xml'), 'w') as sheet:
             sheet.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
             for row_index, values in enumerate([headers, *_metadata_rows(source)], 1):
                 _write_xlsx_row(sheet, row_index, values)

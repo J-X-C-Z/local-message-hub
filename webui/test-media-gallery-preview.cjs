@@ -55,7 +55,7 @@ const context = {
 };
 const controlledFetch = context.fetch;
 vm.runInNewContext(source.replace(initCall,
-  '\nglobalThis.__startMediaPreviews = startMediaPreviews; globalThis.__cancelMediaPreviews = cancelMediaPreviews; globalThis.__state = state; globalThis.__resolveMedia = resolveMedia; globalThis.__loadBestWechatImage = loadBestWechatImage; globalThis.__renderMediaTile = renderMediaTile; globalThis.__previewMedia = previewMedia; globalThis.__typeOptions = typeOptions; globalThis.__stubMediaUi = (render, preview) => { renderView = render; previewMedia = preview; };\n'), context);
+  '\nglobalThis.__startMediaPreviews = startMediaPreviews; globalThis.__cancelMediaPreviews = cancelMediaPreviews; globalThis.__state = state; globalThis.__resolveMedia = resolveMedia; globalThis.__loadBestWechatImage = loadBestWechatImage; globalThis.__renderMediaTile = renderMediaTile; globalThis.__previewMedia = previewMedia; globalThis.__typeOptions = typeOptions; globalThis.__resourceExportItems = resourceExportItems; globalThis.__mediaEntries = mediaEntries; globalThis.__mediaEntryKey = mediaEntryKey; globalThis.__stubMediaUi = (render, preview) => { renderView = render; previewMedia = preview; };\n'), context);
 
 const state = context.__state;
 state.view = 'media';
@@ -265,6 +265,37 @@ assert.equal(qqCacheImage.media_url, '/local-media/qq-cache-image',
 assert.equal(qqCacheImage.media_mime_type, 'image/png');
 assert.equal(previewFor(0).innerHTML,
   '<img src="/local-media/qq-cache-image" alt="cached.png" loading="lazy">');
+
+const sourceImage = {id: 'room:message_4.db:17', platform: 'wechat', account_id: 'fixture-account',
+  conversation_id: 'fixture-room', type: 'image', timestamp: 1,
+  extra: {resource_kind: 'wechat_source', shard: 'message_4.db', local_id: 17, local_type: 3}};
+state.items = [sourceImage];
+state.imageExportTier = 'best';
+context.fetch = async url => {
+  const params = new URL(url, 'http://localhost').searchParams;
+  assert.equal(params.get('resource_kind'), 'wechat_source');
+  assert.equal(params.get('platform'), 'wechat');
+  assert.equal(params.get('account_id'), 'fixture-account');
+  assert.equal(params.get('conversation_id'), 'fixture-room');
+  assert.equal(params.get('shard'), 'message_4.db');
+  assert.equal(params.get('local_id'), '17');
+  assert.equal(params.get('image_tier'), 'mid');
+  assert.equal(params.has('path'), false);
+  assert.equal(params.has('text'), false);
+  return {ok: true, json: async () => ({media_url: '/local-media/wechat-source-token'})};
+};
+context.__startMediaPreviews(9);
+observers.at(-1).show([0]);
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(sourceImage.media_url, '/local-media/wechat-source-token',
+  'unindexed WeChat media resolves with its account, conversation, shard, and local ID');
+const sourceEntry = context.__mediaEntries()[0];
+assert.match(context.__mediaEntryKey(sourceEntry), /message_4\.db.*17/,
+  'source selection identity retains the composite shard key');
+assert.equal(JSON.stringify(context.__resourceExportItems([sourceEntry])[0]), JSON.stringify({
+  resource_kind: 'wechat_source', platform: 'wechat', account_id: 'fixture-account',
+  conversation_id: 'fixture-room', shard: 'message_4.db', local_id: 17, image_tier: 'best',
+}));
 
 console.log('PASS visible WeChat, WeCom, and QQ images resolve through bounded local preview paths');
 }

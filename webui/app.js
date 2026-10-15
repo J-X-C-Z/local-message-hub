@@ -106,7 +106,7 @@ function invalidateSendCompose() {
   sendComposeController = null;
 }
 const typeOptions = selected => {
-  const mediaTypes = state.filters.source === 'qq-cache'
+  const mediaTypes = ['qq-cache', 'wechat-source'].includes(state.filters.source)
     ? ['image', 'video', 'voice', 'file']
     : ['image', 'sticker', 'video', 'voice', 'file'];
   const types = Object.entries(typeNames).filter(([key]) => state.view !== 'media' || mediaTypes.includes(key));
@@ -623,8 +623,9 @@ function renderListing() {
   const momentsEnabled = state.settings.capabilities?.moments?.enabled === true;
   const qqCacheView = state.view === 'media' && f.source === 'qq-cache';
   const accountScope = selectedAccountScope();
+  const sourceConversationReady = accountScope?.platform === 'wechat' && Boolean(f.conversation_id);
   const accountFilter = ['contacts', 'media'].includes(state.view) ? `<select name="account_scope" aria-label="${state.view === 'media' ? '媒体账号' : '联系人账号'}"><option value="">全部账号</option>${state.accountScopes.map(account => {const key = JSON.stringify([account.platform, account.account_id]);return `<option value="${esc(key)}" ${accountScope?.platform === account.platform && accountScope?.account_id === account.account_id ? 'selected' : ''}>${esc(platforms[account.platform]?.name || account.platform)} · ${esc(account.account_id)}</option>`;}).join('')}</select>` : '';
-  const filter = `<form id="listing-search" class="filter-row"><div class="search-field">${icon('search')}<input name="q" aria-label="${isSearch ? '搜索所有聊天记录' : '搜索' + views[state.view].name}" placeholder="${isSearch ? '搜索所有聊天记录…' : '搜索' + views[state.view].name + (qqCacheView ? '文件名' : '')}" value="${esc(f.q)}" autocomplete="off"></div>${accountFilter}${state.view === 'contacts' ? `<select name="kind" aria-label="联系人类型"><option value="" ${!f.kind ? 'selected' : ''}>全部联系人类型</option><option value="official" ${f.kind === 'official' ? 'selected' : ''}>公众号</option></select>` : ''}${state.view === 'media' ? `<select name="source" aria-label="媒体来源"><option value="all" ${f.source === 'all' ? 'selected' : ''}>全部媒体</option><option value="chat" ${f.source === 'chat' ? 'selected' : ''}>聊天附件</option><option value="moments" ${f.source === 'moments' ? 'selected' : ''} ${momentsEnabled ? '' : 'disabled'}>朋友圈</option><option value="qq-cache" ${f.source === 'qq-cache' ? 'selected' : ''}>QQ 缓存文件</option></select>${!qqCacheView ? `<input name="conversation_id" aria-label="精确会话 ID" placeholder="会话 ID（精确筛选）" value="${esc(f.conversation_id || '')}">` : ''}` : ''}${state.view !== 'contacts' ? `<select name="type" aria-label="消息类型">${typeOptions(f.type)}</select>` : ''}${(isSearch || state.view === 'media') ? `<label>日期</label><input type="date" name="start" aria-label="开始日期" value="${esc(f.start)}"><input type="date" name="end" aria-label="结束日期" value="${esc(f.end)}">` : ''}<button class="btn primary" type="submit">${icon('search')}查询</button></form>`;
+  const filter = `<form id="listing-search" class="filter-row">${f.source === 'wechat-source' && state.view === 'media' ? '' : `<div class="search-field">${icon('search')}<input name="q" aria-label="${isSearch ? '搜索所有聊天记录' : '搜索' + views[state.view].name}" placeholder="${isSearch ? '搜索所有聊天记录…' : '搜索' + views[state.view].name + (qqCacheView ? '文件名' : '')}" value="${esc(f.q)}" autocomplete="off"></div>`}${accountFilter}${state.view === 'contacts' ? `<select name="kind" aria-label="联系人类型"><option value="" ${!f.kind ? 'selected' : ''}>全部联系人类型</option><option value="official" ${f.kind === 'official' ? 'selected' : ''}>公众号</option></select>` : ''}${state.view === 'media' ? `<select name="source" aria-label="媒体来源"><option value="all" ${f.source === 'all' ? 'selected' : ''}>全部媒体</option><option value="chat" ${f.source === 'chat' ? 'selected' : ''}>聊天附件</option><option value="wechat-source" ${f.source === 'wechat-source' ? 'selected' : ''} ${sourceConversationReady ? '' : 'disabled'}>微信数据库媒体 ${sourceConversationReady ? '' : '（需选微信账号和会话）'}</option><option value="moments" ${f.source === 'moments' ? 'selected' : ''} ${momentsEnabled ? '' : 'disabled'}>朋友圈</option><option value="qq-cache" ${f.source === 'qq-cache' ? 'selected' : ''}>QQ 缓存文件</option></select>${!qqCacheView ? `<input name="conversation_id" aria-label="精确会话 ID" placeholder="会话 ID（精确筛选）" value="${esc(f.conversation_id || '')}">` : ''}` : ''}${state.view !== 'contacts' ? `<select name="type" aria-label="消息类型">${typeOptions(f.type)}</select>` : ''}${(isSearch || state.view === 'media') ? `<label>日期</label><input type="date" name="start" aria-label="开始日期" value="${esc(f.start)}"><input type="date" name="end" aria-label="结束日期" value="${esc(f.end)}">` : ''}<button class="btn primary" type="submit">${icon('search')}查询</button></form>`;
   let body;
   if (state.loading) body = loading();
   else if (!state.items.length) body = empty(isSearch && !f.q ? '搜索你的聊天档案' : '没有匹配的记录', state.error || (isSearch && !f.q ? '关键词、时间与消息类型' : '可调整筛选条件或查看数据源连接状态'), '', isSearch ? 'search' : views[state.view].icon);
@@ -682,6 +683,8 @@ function mediaEntryKey(entry) {
   const message = entry.message;
   if (entry.resourceKind === 'moment') return JSON.stringify(['moment', message.account_id, message.post_id, message.media_index, message.variant]);
   if (entry.resourceKind === 'qq_cache') return JSON.stringify(['qq_cache', message.account_id, message.extra?.resource_id || message.id]);
+  if (entry.resourceKind === 'wechat_source') return JSON.stringify(['wechat_source', message.account_id,
+    message.conversation_id, message.extra?.shard, message.extra?.local_id]);
   return JSON.stringify([message.platform, message.account_id, message.id, entry.resourceIndex]);
 }
 function mediaEntryAvailable(entry) {
@@ -700,7 +703,7 @@ function renderMediaTile(entry, i) {
   const size = Number(resource?.size ?? message.extra?.size);
   const sizeLabel = entry.resourceKind === 'qq_cache' && Number.isFinite(size) && size > 0
     ? `<small>${esc(fmtBytes(size))}</small>` : '';
-  const canOpenChat = message.conversation_id && message.id != null && !['moment', 'qq_cache'].includes(entry.resourceKind);
+  const canOpenChat = message.conversation_id && message.id != null && !['moment', 'qq_cache', 'wechat_source'].includes(entry.resourceKind);
   const mimeType = resource?.mime_type || message.extra?.mime_type || message.media_mime_type;
   const unsupportedImagePreview = entry.type === 'image' && ['image/heic', 'image/tiff'].includes(String(mimeType || '').toLowerCase());
   const preview = unsupportedImagePreview
@@ -714,7 +717,7 @@ function renderMediaTile(entry, i) {
   const sender = message.sender_name || message.sender_avatar_url
     ? `<div class="media-sender">${avatar(message.sender_name || '发送者', message.platform, message.sender_avatar_url, 'media-avatar')}<span class="truncate">${esc(message.sender_name || '发送者')}</span></div>` : '';
   const canLoadBestWechatImage = message.platform === 'wechat' && entry.type === 'image'
-    && entry.resourceKind === 'message' && entry.resourceIndex === null && !cachedEmoji
+    && ['message', 'wechat_source'].includes(entry.resourceKind) && entry.resourceIndex === null && !cachedEmoji
     && message.conversation_id && message.id != null;
   const actions = [
     canLoadBestWechatImage ? iconButton('maximize-2', `wechat-best-image:${i}`, '读取本机缓存中的最佳画质') : '',
@@ -731,7 +734,8 @@ async function startMediaPreviews(request = state.request) {
   cancelMediaPreviews();
   if (state.view !== 'media' || state.loading || request !== state.request) return;
   const pending = mediaEntries().map((entry, index) => ({entry, index})).filter(({entry}) =>
-    (entry.resourceKind === 'qq_cache' && entry.message.platform === 'qq' && entry.type === 'image' ||
+    (entry.resourceKind === 'wechat_source' && entry.message.platform === 'wechat' && ['image', 'video'].includes(entry.type) ||
+      entry.resourceKind === 'qq_cache' && entry.message.platform === 'qq' && entry.type === 'image' ||
       entry.message.platform === 'wechat' && ['image', 'video'].includes(entry.type) &&
       (entry.resourceKind || 'message') === 'message' && entry.resourceIndex === null &&
       !['47', '11000'].includes(String(entry.message.raw_type || '')) ||
@@ -752,7 +756,12 @@ async function startMediaPreviews(request = state.request) {
   const resolve = async ({entry, index}) => {
       const message = entry.message;
       try {
-        const params = entry.resourceKind === 'qq_cache'
+        const params = entry.resourceKind === 'wechat_source'
+          ? {resource_kind: 'wechat_source', platform: 'wechat', account_id: message.account_id,
+            conversation_id: message.conversation_id, shard: message.extra.shard,
+            local_id: String(message.extra.local_id),
+            ...(entry.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})}
+          : entry.resourceKind === 'qq_cache'
           ? {resource_kind: 'qq_cache', platform: 'qq', account_id: message.account_id,
             resource_id: message.extra?.resource_id || message.id}
           : {platform: message.platform, account_id: message.account_id, message_id: message.id,
@@ -819,12 +828,16 @@ async function startMediaPreviews(request = state.request) {
 async function loadBestWechatImage(index) {
   const entry = mediaEntries()[index];
   if (!entry || entry.message.platform !== 'wechat' || entry.type !== 'image'
-      || entry.resourceKind !== 'message' || entry.resourceIndex !== null
+      || !['message', 'wechat_source'].includes(entry.resourceKind) || entry.resourceIndex !== null
       || ['47', '11000'].includes(String(entry.message.raw_type || ''))) return;
   const request = state.request;
   const key = mediaEntryKey(entry);
   try {
-    const result = await api('/api/media/resolve', {
+    const result = await api('/api/media/resolve', entry.resourceKind === 'wechat_source' ? {
+      resource_kind: 'wechat_source', platform: 'wechat', account_id: entry.message.account_id,
+      conversation_id: entry.message.conversation_id, shard: entry.message.extra.shard,
+      local_id: String(entry.message.extra.local_id), image_tier: 'best',
+    } : {
       platform: 'wechat', account_id: entry.message.account_id,
       message_id: entry.message.id, conversation_id: entry.message.conversation_id,
       image_tier: 'best',
@@ -847,6 +860,10 @@ function resourceExportItems(entries) {
     const message = entry.message;
     if (entry.resourceKind === 'moment') return {resource_kind: 'moment', platform: 'wechat', account_id: message.account_id,
       post_id: message.post_id, media_index: message.media_index, variant: message.variant || 'original'};
+    if (entry.resourceKind === 'wechat_source') return {resource_kind: 'wechat_source', platform: 'wechat',
+      account_id: message.account_id, conversation_id: message.conversation_id,
+      shard: message.extra.shard, local_id: Number(message.extra.local_id),
+      image_tier: entry.type === 'image' ? state.imageExportTier : 'best'};
     if (entry.resourceKind === 'qq_cache') return {resource_kind: 'qq_cache', platform: 'qq',
       account_id: message.account_id, resource_id: message.extra?.resource_id || message.id};
     const item = {platform: message.platform, account_id: message.account_id, message_id: message.id,
@@ -867,7 +884,7 @@ function renderResourceToolbar() {
   const selected = state.selectedMedia.size;
   const selectable = entries.filter(mediaEntryAvailable);
   const hasWechatImage = [...state.selectedMedia.values()].some(entry => entry.message.platform === 'wechat'
-    && entry.resourceKind === 'message' && entry.type === 'image' && entry.resourceIndex === null);
+    && ['message', 'wechat_source'].includes(entry.resourceKind) && entry.type === 'image' && entry.resourceIndex === null);
   const allSelected = selectable.length > 0 && selectable.every(entry => state.selectedMedia.has(mediaEntryKey(entry)));
   const progress = job ? `<span class="resource-progress-label">${job.state === 'completed' ? '已完成' : job.state === 'failed' ? '失败' : job.state === 'cancelled' ? '已取消' : '打包中'} ${fmt(job.completed || 0)} / ${fmt(job.total || 0)} · 成功 ${fmt(job.exported || 0)} · 跳过 ${fmt(job.failed || 0)}</span><progress max="${Math.max(1, Number(job.total) || 1)}" value="${Math.min(Number(job.completed) || 0, Number(job.total) || 0)}"></progress>` : '';
   return `<div class="resource-toolbar"><div class="resource-toolbar-copy"><strong>${selected ? `已选 ${fmt(selected)} 项` : '批量附件'}</strong><span>${progress || '可跨页选择；最多 100 项。仅导出平台读取器可取得的本机附件'}</span></div><div class="resource-toolbar-actions">${hasWechatImage ? `<label class="resource-quality">微信图片<select id="media-image-tier" aria-label="微信图片导出质量"><option value="best" ${state.imageExportTier === 'best' ? 'selected' : ''}>最佳可用</option><option value="mid" ${state.imageExportTier === 'mid' ? 'selected' : ''}>中图</option><option value="thumb" ${state.imageExportTier === 'thumb' ? 'selected' : ''}>缩略图</option><option value="original" ${state.imageExportTier === 'original' ? 'selected' : ''}>仅原图</option></select></label>` : ''}<button class="btn" data-action="resource-select-page" ${state.loading || !selectable.length ? 'disabled aria-disabled="true"' : ''}>${icon(allSelected ? 'list-minus' : 'list-checks')}${allSelected ? '清空本页' : '选择本页'}</button>${running ? `<button class="btn" data-action="resource-export-cancel" ${job.state === 'cancelling' ? 'disabled aria-disabled="true"' : ''}>${icon('x')}取消</button>` : `<button class="btn primary" data-action="resource-export" ${!selected || selected > 100 || state.loading ? 'disabled aria-disabled="true"' : ''}>${icon('archive')}导出所选</button>`}</div></div>`;
@@ -1652,7 +1669,13 @@ function previewMedia(url, type, name = '', mimeType = '') {
 async function resolveMedia(message, resourceIndex = null) {
   try {
     const qqCache = message.extra?.resource_kind === 'qq_cache' || message.resource_kind === 'qq_cache';
-    const result = await api('/api/media/resolve', qqCache
+    const wechatSource = message.extra?.resource_kind === 'wechat_source' || message.resource_kind === 'wechat_source';
+    const result = await api('/api/media/resolve', wechatSource
+      ? {resource_kind: 'wechat_source', platform: 'wechat', account_id: message.account_id,
+        conversation_id: message.conversation_id, shard: message.extra.shard,
+        local_id: String(message.extra.local_id),
+        ...(message.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})}
+      : qqCache
       ? {resource_kind: 'qq_cache', platform: 'qq', account_id: message.account_id,
         resource_id: message.extra?.resource_id || message.id}
       : {platform: message.platform, account_id: message.account_id, message_id: message.id, conversation_id: message.conversation_id, resource_index: resourceIndex});
@@ -2097,7 +2120,7 @@ document.addEventListener('submit', async event => {
     try {await api('/api/contact-identities', null, {method: 'POST', body: JSON.stringify({platform: state.managedContact.platform, account_id: state.managedContact.account_id, contact_id: state.managedContact.id, identity_id: new FormData(form).get('identity_id')})});closeModal();toast('统一身份已关联');await loadView();}
     catch (e) {toast(e.message, true);}
   }
-  else if (form.id === 'listing-search') {clearMediaSelection();state.filters = {...state.filters, ...Object.fromEntries(new FormData(form))};state.page = 0;state.pageCursors = [null];await loadView();}
+  else if (form.id === 'listing-search') {clearMediaSelection();state.filters = {...state.filters, ...Object.fromEntries(new FormData(form))};if (state.filters.source === 'wechat-source') {state.filters.q = '';if (selectedAccountScope()?.platform !== 'wechat' || !state.filters.conversation_id) {state.filters.source = 'chat';toast('微信源媒体需要准确的微信账号和会话', true);}if (!['', 'image', 'video', 'voice', 'file'].includes(state.filters.type)) state.filters.type = '';}state.page = 0;state.pageCursors = [null];await loadView();}
   else if (form.id === 'moments-search') {state.momentFilter = Object.fromEntries(new FormData(form));state.momentOffset = 0;await loadView();}
   else if (form.id === 'message-search') {
     const request = ++state.request;

@@ -8225,13 +8225,13 @@ key is absent.
 
 ## 2026-10-15 - P11 Unindexed WeChat Media Gap
 
-- The unified media library currently indexes Hub messages and cannot list
+- The unified media library initially indexed Hub messages and could not list
   source-database media that has not been synced. The source bulk lookup only
   returns local IDs; completing list, preview, and ZIP export requires a stable
   account/conversation/shard/local-ID identity and consistent deduplication and
   pagination across those paths. No partial API or UI was added.
-- P11 remains open for this gap, full WeFlow media/decryption parity, and
-  real-account cache acceptance.
+- The source-media identity gap was implemented later the same day below. Full
+  WeFlow media/decryption parity and real-account cache acceptance remain open.
 
 **2026-10-15 P11 small original cache selection:** WeFlow classifies `_h`,
 `.h`, `_hd`, and `.hd` files as HD image tiers without a minimum file-size
@@ -8242,3 +8242,25 @@ gate is unchanged. Focused regression
 `integrations.wechat.test_media.MediaTests.test_small_cached_original_requires_complete_structure_for_selection`
 passed (1 test); the full WeChat media module passed 61 tests and
 `git diff --check` passed. No real account cache was read.
+
+## 2026-10-15 - P11 WeChat Source Media, P12 UI Boundary, and P14 XLSX Gate
+
+- The WeChat media library now pages unindexed source rows for one exact local
+  account and conversation. Composite account/conversation/shard/local-ID
+  identity flows through previews and ZIP export; indexed rows are deduplicated,
+  source message bodies are not read, and file paths remain server-side. The
+  listing is bounded to 10,000 raw rows per view. Full WeFlow cache/decryption
+  parity and real-account media acceptance remain open.
+- P12-03 Settings now retains read-only anti-revoke status refresh/search/list
+  and removes inactive install/uninstall controls until the native implementation
+  can be inspected. Source-mutation checks passed 5/5. P12-03 remains NOT_STARTED
+  for native lifecycle and isolated rollback acceptance.
+- Hosted workflow `38668177485` failed one existing XLSX byte-equality test
+  because ZIP entry timestamps varied between renders; `main` run
+  `38668177268` passed. The Moments XLSX exporter now fixes entry timestamps.
+  The focused export module passed 10/10 and `git diff --check` passed. Current
+  worktree changes still require both hosted package runs and artifact round-trip
+  verification before P14 can be marked complete.
+- Focused P11 checks passed: WeChat cursor/provider 6/6, composite resource
+  identity 1/1, source media list-preview-ZIP HTTP flow 1/1, and media WebUI
+  preview/export coverage. No real media was opened or sent.

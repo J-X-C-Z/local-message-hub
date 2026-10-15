@@ -841,6 +841,41 @@ class ChatStore:
             ).fetchone()
         return self._row_to_conversation(row) if row else None
 
+    def wechat_source_media_ids(self, account_id, conversation_id, message_ids):
+        """Return source identities already represented in the indexed message table."""
+        ids = list(dict.fromkeys(str(value) for value in message_ids if value))
+        found = set()
+        with self._lock:
+            conn = self._require_connection()
+            for start in range(0, len(ids), 400):
+                batch = ids[start:start + 400]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT id FROM messages WHERE platform='wechat' AND account_id=? "
+                    f"AND conversation_id=? AND id IN ({placeholders})",
+                    [str(account_id), str(conversation_id), *batch],
+                )
+                found.update(str(row["id"]) for row in rows)
+        return found
+
+    def wechat_indexed_source_media_count(self, account_id, conversation_id, raw_types,
+                                         start_time=None, end_time=None):
+        types = list(dict.fromkeys(str(value) for value in raw_types))
+        if not types:
+            return 0
+        where = ["platform='wechat'", "account_id=?", "conversation_id=?",
+                 "raw_type IN (" + ",".join("?" for _ in types) + ")"]
+        params = [str(account_id), str(conversation_id), *types]
+        if start_time is not None:
+            where.append("timestamp >= ?")
+            params.append(int(start_time))
+        if end_time is not None:
+            where.append("timestamp <= ?")
+            params.append(int(end_time))
+        with self._lock:
+            return int(self._require_connection().execute(
+                "SELECT count(*) FROM messages WHERE " + " AND ".join(where), params).fetchone()[0])
+
     def messages(
         self,
         platform,

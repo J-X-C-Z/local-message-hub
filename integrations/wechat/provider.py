@@ -145,6 +145,10 @@ class HubMediaDownloader(MediaDownloader):
 
 class WeChatProvider:
     platform = "wechat"
+    _SOURCE_MEDIA_TYPES = {
+        "image": {3}, "voice": {34}, "video": {43},
+        "file": {49, 34359738417, 103079215153, 25769803825},
+    }
 
     def __init__(self, data_dir: str | None = None, account: str | None = None):
         try:
@@ -455,6 +459,36 @@ class WeChatProvider:
         finally:
             for conn, _ in tables:
                 conn.close()
+
+    def source_media(self, session_id: str, *, media_type: str = "", start_time=None,
+                     end_time=None, offset=0, limit=60) -> dict[str, Any]:
+        """Page unprojected source media metadata without materializing message content."""
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 512:
+            raise ValueError("invalid WeChat conversation")
+        if media_type and media_type not in self._SOURCE_MEDIA_TYPES:
+            raise ValueError("unsupported WeChat source media type")
+        types = (self._SOURCE_MEDIA_TYPES[media_type] if media_type else
+                 set().union(*self._SOURCE_MEDIA_TYPES.values()))
+        result = self.reader.get_media_rows(session_id, types, offset=offset, limit=limit,
+                                            start_time=start_time, end_time=end_time)
+        items = []
+        for row in result["items"]:
+            local_type = int(row["local_type"]) & 0xFFFFFFFF
+            kind = {3: "image", 34: "voice", 43: "video", 49: "file"}.get(local_type)
+            if kind is None:
+                continue
+            shard = row["shard"]
+            sender_id = row.get("sender_id")
+            sender = self._sender_names(shard).get(int(sender_id or 0), "")
+            items.append({"id": f"{session_id}:{shard}:{row['local_id']}",
+                          "platform": self.platform, "conversation_id": session_id,
+                          "timestamp": row["create_time"], "sort_seq": row["sort_seq"],
+                          "sender_id": sender_id, "sender_name": sender,
+                          "type": kind, "text": "", "raw_type": str(local_type),
+                          "extra": {"resource_kind": "wechat_source", "shard": shard,
+                                    "local_id": row["local_id"],
+                                    "local_type": row["local_type"]}})
+        return {"items": items, "total": result["total"]}
 
     def emoji_cache_account_dir(self) -> Path:
         account_id = str(self.reader.account or '').strip()

@@ -87,6 +87,20 @@ class ResourceJobTest(unittest.TestCase):
         finally:
             manager.close()
 
+    def test_wechat_source_identity_is_composite_and_numeric_local_id_is_canonical(self):
+        source = {"resource_kind": "wechat_source", "platform": "wechat",
+                  "account_id": "synthetic", "conversation_id": "room",
+                  "shard": "message_1.db", "local_id": "7", "image_tier": "best"}
+        canonical = {**source, "local_id": 7}
+        self.assertEqual(self.manager._validate_items([source]), [canonical])
+        self.assertEqual(self.manager._validate_items([source, canonical]), [canonical])
+        for invalid in ({**source, "shard": "../message_1.db"},
+                        {**source, "local_id": -1}, {**source, "local_id": True},
+                        {**source, "local_id": "1" * 21},
+                        {**source, "local_id": "7", "path": "C:/private/cache.jpg"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.manager._validate_items([invalid])
+
     def test_job_reports_partial_resolver_failures_without_private_error_text(self):
         source = self.root / "good.bin"
         source.write_bytes(b"ok")

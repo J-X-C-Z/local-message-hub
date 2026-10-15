@@ -3943,6 +3943,117 @@ class ServerTest(unittest.TestCase):
                 self.assertNotIn('qq-roaming', serialized_manifest)
         self.assertEqual({platform: path.read_bytes() for platform, path in sources.items()}, payloads)
 
+    def test_unindexed_wechat_source_media_lists_previews_and_exports_by_shard_identity(self):
+        from types import SimpleNamespace
+        from urllib.parse import urlencode
+        from unittest.mock import Mock
+
+        account, room = 'account', 'room'
+        self.hub.store.ingest('wechat', account, [{'id': room, 'title': 'Synthetic room'}], [{
+            'id': f'{room}:message_0.db:7', 'conversation_id': room, 'timestamp': 30,
+            'type': 'image', 'raw_type': '3', 'local_id': 7, 'shard': 'message_0.db',
+        }])
+        source_rows = [
+            {'id': f'{room}:message_0.db:7', 'platform': 'wechat', 'conversation_id': room,
+             'timestamp': 30, 'type': 'image', 'raw_type': '3', 'text': '',
+             'extra': {'resource_kind': 'wechat_source', 'shard': 'message_0.db',
+                       'local_id': 7, 'local_type': 3}},
+            {'id': f'{room}:message_1.db:7', 'platform': 'wechat', 'conversation_id': room,
+             'timestamp': 20, 'type': 'image', 'raw_type': '3', 'text': '',
+             'extra': {'resource_kind': 'wechat_source', 'shard': 'message_1.db',
+                       'local_id': 7, 'local_type': 3}},
+            {'id': f'{room}:message_2.db:8', 'platform': 'wechat', 'conversation_id': room,
+             'timestamp': 10, 'type': 'file', 'raw_type': '49', 'text': '',
+             'extra': {'resource_kind': 'wechat_source', 'shard': 'message_2.db',
+                       'local_id': 8, 'local_type': 49}},
+        ]
+        payload = b'local source image'
+        media_path = Path(self.temp.name) / 'private-source-name.png'
+        media_path.write_bytes(payload)
+        provider = __import__('integrations.wechat.provider', fromlist=['WeChatProvider']).WeChatProvider.__new__(
+            __import__('integrations.wechat.provider', fromlist=['WeChatProvider']).WeChatProvider)
+        provider.reader = SimpleNamespace(wxid=account, account='', get_nickname=lambda _room: 'Synthetic room')
+
+        def source_media(_room, *, media_type='', start_time=None, end_time=None, offset=0, limit=60):
+            rows = [row for row in source_rows if not media_type or row['type'] == media_type]
+            rows = [row for row in rows if (start_time is None or row['timestamp'] >= start_time)
+                    and (end_time is None or row['timestamp'] <= end_time)]
+            return {'items': rows[offset:offset + limit], 'total': len(rows)}
+
+        provider.source_media = source_media
+        provider.media = Mock(return_value={'available': True, 'path': str(media_path)})
+        self.hub.providers['wechat'] = provider
+        self.hub.set_capabilities({'media': True})
+
+        with self.request('/api/media?' + urlencode({
+                'source': 'wechat-source', 'platform': 'wechat', 'account_id': account,
+                'conversation_id': room, 'limit': '60'})) as response:
+            listing = json.load(response)
+        self.assertEqual(listing['total'], 2)
+        self.assertEqual([item['id'] for item in listing['items']],
+                         [f'{room}:message_1.db:7', f'{room}:message_2.db:8'])
+        serialized = json.dumps(listing)
+        self.assertNotIn('SECRET MESSAGE BODY', serialized)
+        self.assertNotIn(str(media_path), serialized)
+
+        image = listing['items'][0]
+        identity = {'resource_kind': 'wechat_source', 'platform': 'wechat',
+                    'account_id': account, 'conversation_id': room,
+                    'shard': 'message_1.db', 'local_id': '7', 'image_tier': 'mid'}
+        with self.request('/api/media/resolve?' + urlencode(identity)) as response:
+            resolved = json.load(response)
+        self.assertTrue(resolved['available'])
+        with self.request(resolved['media_url']) as response:
+            self.assertEqual(response.read(), payload)
+        provider.media.assert_called_with(room, 7, 'message_1.db',
+                                          image_tier='mid', video_variant=None)
+
+        identity['image_tier'] = 'best'
+        headers = {'Content-Type': 'application/json'}
+        with self.request('/api/resource-jobs', headers,
+                          json.dumps({'items': [identity]}).encode()) as response:
+            job = json.load(response)
+        deadline = time.monotonic() + 3
+        state = job
+        while state['state'] not in ('completed', 'failed', 'cancelled') and time.monotonic() < deadline:
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + job['id']) as response:
+                state = json.load(response)
+        self.assertEqual(state['state'], 'completed')
+        self.assertEqual(state['exported'], 1)
+        with self.request(state['download_url']) as response:
+            with ZipFile(io.BytesIO(response.read())) as archive:
+                manifest = json.loads(archive.read('manifest.json'))['items']
+                self.assertEqual(manifest[0]['conversation_id'], room)
+                self.assertEqual(manifest[0]['shard'], 'message_1.db')
+                self.assertEqual(manifest[0]['local_id'], 7)
+                self.assertEqual(archive.read('attachments/001-wechat-media'), payload)
+                self.assertNotIn(str(media_path), json.dumps(manifest))
+
+        for local_id in range(100, 161):
+            shard = 'message_3.db'
+            source_rows.append({
+                'id': f'{room}:{shard}:{local_id}', 'platform': 'wechat',
+                'conversation_id': room, 'timestamp': local_id, 'type': 'image',
+                'raw_type': '3', 'text': '',
+                'extra': {'resource_kind': 'wechat_source', 'shard': shard,
+                          'local_id': local_id, 'local_type': 3},
+            })
+        source_rows.append({
+            'id': f'{room}:message_4.db:160', 'platform': 'wechat',
+            'conversation_id': room, 'timestamp': 160, 'type': 'image',
+            'raw_type': '3', 'text': '',
+            'extra': {'resource_kind': 'wechat_source', 'shard': 'message_4.db',
+                      'local_id': 160, 'local_type': 3},
+        })
+        with self.request('/api/media?' + urlencode({
+                'source': 'wechat-source', 'platform': 'wechat', 'account_id': account,
+                'conversation_id': room, 'limit': '2', 'offset': '62'})) as response:
+            page = json.load(response)
+        self.assertEqual(page['total'], 64)
+        self.assertEqual([item['id'] for item in page['items']], [
+            f'{room}:message_3.db:160', f'{room}:message_4.db:160'])
+
     def test_wechat_media_http_resolution_covers_cached_types_without_source_mutation(self):
         from urllib.parse import urlencode
         from unittest.mock import Mock, patch
