@@ -692,6 +692,13 @@ returns `local_media_identity_unavailable` before calling the provider, with a
 focused HTTP regression. The live process predates this change, so live
 reverification and broader real-cache acceptance remain open.
 
+**P11 small-original cache follow-up (2026-10-15):** cached WeChat original
+images below 1 KiB are now accepted only when decrypted image structure is
+complete, across status, `original`, `best`, `full`, and pre-download cache
+checks. Truncated small images still fall back or fail, and the file-size gate
+for in-progress download waits is unchanged. One focused synthetic regression
+passes; real-account/cache acceptance and broader media parity remain open.
+
 ## Phase 13 - Additional Platform Sending
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |

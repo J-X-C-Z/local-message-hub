@@ -8208,3 +8208,13 @@ key is absent.
   (`main`) and `3e2410bbce8b4becba84deb1f0b759e3715e40896e15afdfca5c1931441f80de`
   (roadmap branch). These runs predate the `.thumb.dat` source change above;
   P14 remains in progress for the current worktree.
+
+**2026-10-15 P11 small original cache selection:** WeFlow classifies `_h`,
+`.h`, `_hd`, and `.hd` files as HD image tiers without a minimum file-size
+rule. Hub cached selection now structurally validates decrypted originals
+below 1 KiB in status, `original`, `best`, `full`, and pre-download paths;
+truncated files remain rejected. The existing download-wait size/stability
+gate is unchanged. Focused regression
+`integrations.wechat.test_media.MediaTests.test_small_cached_original_requires_complete_structure_for_selection`
+passed (1 test); the full WeChat media module passed 61 tests and
+`git diff --check` passed. No real account cache was read.

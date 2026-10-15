@@ -603,17 +603,7 @@ class MediaDownloader:
     @staticmethod
     def original_ready(h_size: Optional[int], mid_size: Optional[int] = None,
                        min_bytes: int = 1024) -> bool:
-        """``_h.dat`` 存不存在、是不是空壳。**不比大小**——尺寸不能当「下完没下完」的判据。
-
-        固定字节阈值和不同缓存档位之间的比例都无法可靠判断下载是否完成：
-        压缩图可能比原图更大，编码也可能不同。错误判断会让已有原图被当成未完成，
-        并触发不必要的界面操作。
-
-        判「完整」改看**解密后的结构**（:meth:`_image_complete`：JPEG 有没有 ``FF D9``、
-        PNG 有没有 ``IEND``）；正在下载中的截断由 :meth:`_wait_h_dat` 的「大小不再变化」
-        轮询负责，不靠尺寸猜。``mid_size`` 参数保留不动签名（1.2.4.2 已发布），
-        但不再参与判断。
-        """
+        """File-size guard; small cached originals are separately checked for structure."""
         return bool(h_size) and int(h_size) >= int(min_bytes)
 
     @staticmethod
@@ -1007,7 +997,7 @@ class MediaDownloader:
         best = next((t for t in self.IMAGE_TIERS if t in tiers), None)
         reason = "no_local_copy"
         if "original" in tiers:
-            ok = self.original_ready(tiers["original"])
+            ok = self._cached_original_ready(user, md5, files["original"])
             if ok and verify:
                 complete = self._decrypted_complete(user, md5)
                 if complete is False:
@@ -1037,6 +1027,16 @@ class MediaDownloader:
         if not data:
             return None
         return self._image_complete(data)
+
+    def _cached_original_ready(self, user: str, md5: str, hit=None,
+                               min_bytes: int = 1024) -> bool:
+        """Accept a small cached original only when its decrypted image structure is complete."""
+        if not hit:
+            hit = self._image_files(user, md5).get("original")
+        if not hit:
+            return False
+        return self.original_ready(hit[1], min_bytes=min_bytes) or \
+            self._decrypted_complete(user, md5) is True
 
     def list_image_status(self, user: str, limit: int = 300) -> List[dict]:
         """会话里所有图片消息的档位一览（按时间降序）。
@@ -1249,8 +1249,7 @@ class MediaDownloader:
                     return m.group(1).decode().lower()
         return None
 
-    @staticmethod
-    def _pick_full(files, mid_sz):
+    def _pick_full(self, user, md5, files):
         """本机「不是 ``_t.dat`」的那一份：``_h.dat`` > ``.dat``；只有预览图时 ``None``。
 
         别把这里的 ``.dat`` 理解成"完整图"：它是微信下发的那一份，可能是完整图也可能
@@ -1259,7 +1258,7 @@ class MediaDownloader:
         ``_h.dat``）。
         """
         hit = files.get('original')
-        if hit and MediaDownloader.original_ready(hit[1], mid_sz):
+        if hit and self._cached_original_ready(user, md5, hit):
             return hit, '_h'
         if 'mid' in files:
             return files['mid'], ''
@@ -1303,7 +1302,6 @@ class MediaDownloader:
         files = self._image_files(user, md5)
         if not files:
             return None
-        mid_sz = (files.get('mid') or (0, 0))[1]
         if tier is None:                       # 老行为：压缩版 → 缩略图
             if 'mid' in files:
                 pick, suffix = files['mid'], ''
@@ -1313,12 +1311,12 @@ class MediaDownloader:
                 return None
         elif tier == 'original':
             hit = files.get('original')
-            if not hit or not self.original_ready(hit[1], mid_sz):
+            if not hit or not self._cached_original_ready(user, md5, hit):
                 return None
             pick, suffix = hit, '_h'
         elif tier == 'best':
             hit = files.get('original')
-            if hit and self.original_ready(hit[1], mid_sz):
+            if hit and self._cached_original_ready(user, md5, hit):
                 pick, suffix = hit, '_h'
             elif 'mid' in files:
                 pick, suffix = files['mid'], ''
@@ -1341,7 +1339,7 @@ class MediaDownloader:
             # 「不是 _t.dat 的那一份」，**只读本机**：download_image 的口径就是本机有什么
             # 就交什么，绝不碰界面。要确定的原件（本机没有就驱动界面去下载）用
             # download_image_original()。
-            got = self._pick_full(files, mid_sz)
+            got = self._pick_full(user, md5, files)
             if got is None:
                 wxlog.debug("图片 %s/%s 本机只有预览图（或压根没下过）：download_image 不碰"
                             "界面，要让微信去下请用 download_image_original()", user, local_id)
@@ -2134,7 +2132,8 @@ class MediaDownloader:
         """
         files = self._image_files(user, md5)
         hit = files.get('original')
-        if not hit or not self.original_ready(hit[1], min_bytes=min_bytes):
+        if not hit or not self._cached_original_ready(
+                user, md5, hit, min_bytes=min_bytes):
             return None
         try:
             data = self.decrypt_image(hit[0], aes_key, xor_key)

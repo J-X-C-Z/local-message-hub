@@ -150,6 +150,41 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(mid.read_bytes(), b"synthetic-mid")
             self.assertEqual(thumb.read_bytes(), b"synthetic-thumbnail")
 
+    def test_small_cached_original_requires_complete_structure_for_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "image_h.dat"
+            mid = root / "image.dat"
+            original.write_bytes(b"x" * 80)
+            mid.write_bytes(b"synthetic-mid")
+            image = b"\xff\xd8\xff" + b"small-image-data" * 2 + b"\xff\xd9"
+            payloads = {str(original): image, str(mid): b"\xff\xd8\xffmid"}
+            reader = Mock()
+            reader.get_message_row.return_value = {
+                "local_type": 3, "packed_info": b"a" * 32,
+            }
+            downloader = MediaDownloader(reader, save_dir=str(root / "hub-cache"))
+            files = {"original": (str(original), original.stat().st_size),
+                     "mid": (str(mid), mid.stat().st_size)}
+            with patch.object(downloader, "_image_files", return_value=files), \
+                 patch.object(downloader, "decrypt_image",
+                              side_effect=lambda path, *_: payloads[path]):
+                status = downloader._image_status_for("fixture", 7, "a" * 32)
+                self.assertTrue(status["available"])
+                self.assertEqual(status["best"], "original")
+                for tier in ("original", "best", "full"):
+                    result = downloader.download_image("fixture", 7, tier=tier)
+                    self.assertTrue(result.endswith("fixture_7_h.jpg"))
+
+                payloads[str(original)] = image[:-2]
+                status = downloader._image_status_for("fixture", 7, "a" * 32)
+                self.assertFalse(status["available"])
+                self.assertEqual(status["best"], "mid")
+                self.assertIsNone(downloader.download_image("fixture", 7, tier="original"))
+                for tier in ("best", "full"):
+                    result = downloader.download_image("fixture", 7, tier=tier)
+                    self.assertTrue(result.endswith("fixture_7.jpg"))
+
     def test_image_cache_resolver_rejects_symlink_outside_attachment_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
