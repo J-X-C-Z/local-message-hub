@@ -4272,3 +4272,18 @@ artifact upload/download byte and provenance verification. Artifacts and SHA-256
 digests are recorded in the P14-01 row above; both are retained through
 2026-10-22. P14-01 is `DONE` for this revision. P9/P11/P12/P13 live-device,
 real-cache, and desktop acceptance remains open as recorded above.
+
+**P12-01 fixed-toast probe (2026-10-16):** after the user authorized one
+body-free test, the live 8765 Hub accepted `/api/notifications/test` and
+returned `submitted: true`. Notifications were enabled only for this request
+and `/api/settings` confirmed they were disabled again afterward. The user has
+not confirmed that Windows displayed the toast; native desktop delivery remains
+unverified and P12-01 stays `IN_PROGRESS`.
+
+**P11 synthetic media/analytics regressions (2026-10-16):** QQ media projections
+now resolve attachment type from `type`, then `kind`, then `k` for both chat and
+unified media queries; explicit `type` wins conflicts. Relationship image
+achievements now exclude WeChat sticker codes 47/11000 while preserving legacy
+NULL-type images and WeCom/QQ attachment counts. Five focused synthetic checks
+passed. Real-cache breadth and complete WeFlow media parity remain open, so
+P11-01 stays `IN_PROGRESS`.

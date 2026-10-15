@@ -852,8 +852,9 @@ class StoreTestCase(unittest.TestCase):
     def test_qq_media_alias_is_visible_in_chat_and_unified_media_queries(self):
         self.store.ingest("qq", "acc1", [conv("qq-alias-room", platform="qq", title="QQ Alias")], [
             msg("qq-alias", "qq-alias-room", 100, "", type="text", platform="qq",
-                media=[{"name": "alias-photo.png", "type": "image"},
-                       {"name": "alias-voice.silk", "type": "audio"}]),
+                media=[{"name": "alias-photo.png", "kind": "图片"},
+                       {"name": "alias-voice.silk", "k": "audio"},
+                       {"name": "type-wins.pdf", "type": "file", "kind": "image", "k": "video"}]),
             msg("qq-empty-primary", "qq-alias-room", 90, "", type="text", platform="qq",
                 roaming_resources=[], media=[{"name": "must-not-fallback.png", "type": "image"}]),
         ])
@@ -861,11 +862,16 @@ class StoreTestCase(unittest.TestCase):
         for source in ("chat", "all"):
             with self.subTest(source=source):
                 page = self.store.media("qq", source=source, expand_attachments=True)
-                self.assertEqual(page["total"], 2)
+                self.assertEqual(page["total"], 3)
                 self.assertEqual([(item["media_entry"]["resource_index"],
                                    item["media_entry"]["type"])
-                                  for item in page["items"]], [(0, "image"), (1, "voice")])
+                                  for item in page["items"]],
+                                 [(0, "image"), (1, "voice"), (2, "file")])
                 self.assertEqual(self.store.media("qq", type="image", source=source,
+                                                  expand_attachments=True)["total"], 1)
+                self.assertEqual(self.store.media("qq", type="voice", source=source,
+                                                  expand_attachments=True)["total"], 1)
+                self.assertEqual(self.store.media("qq", type="file", source=source,
                                                   expand_attachments=True)["total"], 1)
                 self.assertEqual(self.store.media("qq", q="alias-voice.silk", source=source,
                                                   expand_attachments=True)["total"], 1)

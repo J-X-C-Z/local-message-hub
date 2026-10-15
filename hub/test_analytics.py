@@ -386,6 +386,24 @@ class AnalyticsTestCase(unittest.TestCase):
         self.assertFalse(group["available"])
         self.assertEqual(group["items"], [])
 
+    def test_wechat_stickers_do_not_count_as_image_achievement(self):
+        self.store.ingest("wechat", "acct", [
+            {"id": "sticker-achievement-room", "title": "Synthetic person", "kind": "direct"},
+        ], [
+            {**self.message("legacy-image", "sticker-achievement-room", ts(2024, 1, 1),
+                            "image", "peer", "Peer", kind="image"), "raw_type": None},
+            {**self.message("sticker-47", "sticker-achievement-room", ts(2024, 1, 2),
+                            "sticker", "peer", "Peer", kind="image"), "raw_type": "47"},
+            {**self.message("sticker-11000", "sticker-achievement-room", ts(2024, 1, 3),
+                            "sticker", "peer", "Peer", kind="image"), "raw_type": "11000"},
+        ])
+
+        report = self.analytics.relationship_achievements(
+            "wechat", "acct", "sticker-achievement-room")
+        images = next(item["current"] for item in report["items"] if item["id"] == "images_100")
+
+        self.assertEqual(images, 1)
+
     def test_relationship_achievements_fail_closed_for_unknown_conversation_kind(self):
         self.store.ingest("wechat", "acct", [
             {"id": "unknown-kind", "title": "Unclassified", "kind": "unknown"},

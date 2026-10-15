@@ -493,7 +493,9 @@ class AnalyticsService:
                           MAX(timestamp) AS last_timestamp,
                           CAST(julianday(date(MAX(timestamp),'unixepoch','+8 hours')) -
                                julianday(date(MIN(timestamp),'unixepoch','+8 hours')) AS INTEGER) AS span_days,
-                          SUM(CASE WHEN type='image' OR """ + _has_attachment_type('m', ('image', 'photo', 'picture', 'images', '图片')) + """ THEN 1 ELSE 0 END) AS images,
+                          SUM(CASE WHEN (type='image' AND NOT (
+                                   platform='wechat' AND COALESCE(raw_type,'') IN ('47','11000')
+                               )) OR """ + _has_attachment_type('m', ('image', 'photo', 'picture', 'images', '图片')) + """ THEN 1 ELSE 0 END) AS images,
                           SUM(CASE WHEN type='voice' OR """ + _has_attachment_type('m', ('voice', 'audio', '语音')) + """ THEN 1 ELSE 0 END) AS voices,
                           SUM(CASE WHEN type='video' OR """ + _has_attachment_type('m', ('video', 'videos', '视频')) + """ THEN 1 ELSE 0 END) AS videos,
                           SUM(CASE WHEN type='file' OR """ + _has_attachment_type('m', ('file', 'files', '文件')) + """ THEN 1 ELSE 0 END) AS files,

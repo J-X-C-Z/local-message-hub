@@ -8777,3 +8777,24 @@ passed (1 test); the full WeChat media module passed 61 tests and
 - This verifies P14 for the P11-02 bundle code revision. P9/P13 real sends,
   P11 real-cache breadth, P12-01 visible toast delivery, and P12-03/04 native
   mutation remain open.
+
+## 2026-10-16 - P12-01 Fixed Toast Probe
+
+- After the user authorized one body-free test, the live 8765 Hub accepted
+  `/api/notifications/test` with `submitted: true`. Notifications were enabled
+  only for this request; a follow-up `/api/settings` read confirmed the
+  capability was disabled again.
+- The user has not confirmed that Windows displayed the toast. This records
+  API submission only; P12-01 remains `IN_PROGRESS` pending visible desktop
+  acceptance.
+
+## 2026-10-16 - P11 Media Classification and Achievement Counts
+
+- QQ attachment projections now resolve categories from `type`, then `kind`,
+  then `k` in both chat-only and unified media queries. Existing aliases and
+  attachment order remain intact; explicit `type` wins conflicting fields.
+- WeChat sticker raw types 47 and 11000 no longer count toward the private-chat
+  image achievement. Legacy NULL raw types still count as images, and WeCom/QQ
+  attachment-derived counts are unchanged.
+- Five focused synthetic store/analytics regressions passed. Real-cache breadth
+  and full WeFlow media parity remain unverified; P11-01 stays `IN_PROGRESS`.

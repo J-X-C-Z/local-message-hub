@@ -1693,7 +1693,9 @@ class ChatStore:
             WHEN c.platform='qq' AND json_type(c.extra, '$.media')='array'
                 THEN json_extract(c.extra, '$.media')
             ELSE '[]' END ELSE '[]' END"""
-        resource_type = "lower(COALESCE(json_extract(j.value, '$.type'), 'file'))"
+        resource_type = "lower(COALESCE(NULLIF(json_extract(j.value, '$.type'), ''), " \
+                        "NULLIF(json_extract(j.value, '$.kind'), ''), " \
+                        "NULLIF(json_extract(j.value, '$.k'), ''), 'file'))"
         normalized_type = f"""CASE {resource_type}
             WHEN 'audio' THEN 'voice' WHEN 'photo' THEN 'image'
             WHEN 'picture' THEN 'image' WHEN 'images' THEN 'image'
@@ -1795,7 +1797,9 @@ class ChatStore:
                 WHEN m.platform='wecom' AND json_type(m.extra,'$.attachments')='array' THEN json_extract(m.extra,'$.attachments')
                 WHEN m.platform='qq' AND json_type(m.extra,'$.roaming_resources')='array' THEN json_extract(m.extra,'$.roaming_resources')
                 WHEN m.platform='qq' AND json_type(m.extra,'$.media')='array' THEN json_extract(m.extra,'$.media') ELSE '[]' END ELSE '[]' END"""
-            raw = "lower(COALESCE(json_extract(j.value,'$.type'),'file'))"
+            raw = ("lower(COALESCE(NULLIF(json_extract(j.value,'$.type'),''), "
+                   "NULLIF(json_extract(j.value,'$.kind'),''), "
+                   "NULLIF(json_extract(j.value,'$.k'),''), 'file'))")
             normalized = f"CASE {raw} WHEN 'audio' THEN 'voice' WHEN 'photo' THEN 'image' WHEN 'picture' THEN 'image' WHEN 'images' THEN 'image' WHEN 'videos' THEN 'video' WHEN 'files' THEN 'file' WHEN '图片' THEN 'image' WHEN '语音' THEN 'voice' WHEN '视频' THEN 'video' WHEN '文件' THEN 'file' ELSE {raw} END"
             branches.append(f"""SELECT 'message' AS resource_kind,m.platform,m.account_id,m.id,m.conversation_id,
                 c.title AS conversation_title,c.kind AS conversation_kind,c.avatar_url AS conversation_avatar_url,
