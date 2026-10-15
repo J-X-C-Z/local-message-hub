@@ -3800,6 +3800,21 @@ class ServerTest(unittest.TestCase):
                               b'{}') as response:
                 self.assertEqual(json.load(response), {'submitted': True})
             show.assert_called_once_with('这是一条测试通知，不含聊天内容。')
+            show.side_effect = RuntimeError('Windows 未接受桌面通知')
+            with self.assertRaises(HTTPError) as unavailable:
+                self.request('/api/notifications/test', {'Content-Type': 'application/json'},
+                             b'{}')
+            self.assertEqual(unavailable.exception.code, 503)
+            self.assertEqual(json.loads(unavailable.exception.read()),
+                             {'error': 'Windows 未接受桌面通知'})
+            show.side_effect = RuntimeError(r'PowerShell failed: C:\private\script.ps1')
+            with self.assertRaises(HTTPError) as hidden_detail:
+                self.request('/api/notifications/test', {'Content-Type': 'application/json'},
+                             b'{}')
+            self.assertEqual(hidden_detail.exception.code, 503)
+            self.assertEqual(json.loads(hidden_detail.exception.read()),
+                             {'error': 'Windows 未接受桌面通知'})
+            show.side_effect = None
             show.reset_mock()
             with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
                               json.dumps({'event_id': event['event_id']}).encode()) as response:
@@ -3904,6 +3919,83 @@ class ServerTest(unittest.TestCase):
         self.hub.delete_local_index('DELETE_LOCAL_INDEX')
         self.assertFalse(archive.exists())
         self.assertEqual((self.hub.resource_jobs.root / 'keep.txt').read_text(encoding='utf-8'), 'retain')
+
+    def test_session_bundle_contains_selected_export_cached_media_and_private_safe_manifest(self):
+        source = Path(self.temp.name) / 'private-cache' / 'fixture.png'
+        source.parent.mkdir()
+        source.write_bytes(b'synthetic image bytes')
+        self.hub.store.ingest('wechat', 'fixture', [{'id': 'bundle-room', 'title': 'Fixture'}], [
+            {'id': 'bundle-image', 'conversation_id': 'bundle-room', 'timestamp': 2,
+             'type': 'image', 'text': 'bundle fixture', 'file_name': str(source),
+             'media_url': 'http://127.0.0.1/private?token=account-secret',
+             'access_token': 'account-secret'}
+        ])
+        seen = []
+        def local_resolver(request):
+            seen.append(dict(request))
+            return source, 'fixture.png'
+        self.hub.resource_jobs.resolver = local_resolver
+        headers = {'Content-Type': 'application/json'}
+        with self.request('/api/settings', headers,
+                          b'{"capabilities":{"export":true,"media":true}}'):
+            pass
+        payload = json.dumps({'query': {'platform': 'wechat', 'account_id': 'fixture',
+            'conversation_id': 'bundle-room', 'format': 'json'}}).encode()
+        with self.request('/api/export/bundle', headers, payload) as response:
+            job = json.load(response)
+        deadline = time.monotonic() + 3
+        state = job
+        while state['state'] not in ('completed', 'failed', 'cancelled') and time.monotonic() < deadline:
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + job['id']) as response:
+                state = json.load(response)
+        self.assertEqual(state['state'], 'completed', state)
+        self.assertEqual(state['exported'], 1)
+        self.assertTrue(seen[0].get('_local_only'))
+        with self.request(state['download_url']) as response:
+            archive_data = response.read()
+        with ZipFile(io.BytesIO(archive_data)) as archive:
+            self.assertIn('export.json', archive.namelist())
+            self.assertIn('attachments/001-fixture.png', archive.namelist())
+            self.assertEqual(archive.read('attachments/001-fixture.png'), b'synthetic image bytes')
+            manifest_data = archive.read('manifest.json')
+            manifest = json.loads(manifest_data)
+            self.assertEqual(manifest['format'], 'json')
+            self.assertEqual(manifest['export_file'], 'export.json')
+            self.assertEqual(manifest['items'][0]['file'], 'attachments/001-fixture.png')
+            self.assertEqual(manifest['items'][0]['message_id'], 'bundle-image')
+            all_archived = b''.join(archive.read(name) for name in archive.namelist())
+            self.assertNotIn(str(source).encode(), all_archived)
+            self.assertNotIn(b'127.0.0.1', all_archived)
+            self.assertNotIn(b'account-secret', all_archived)
+
+    def test_session_bundle_requires_both_capabilities_and_fails_over_100_resources(self):
+        headers = {'Content-Type': 'application/json'}
+        payload = json.dumps({'query': {'platform': 'qq', 'account_id': 'fixture',
+            'conversation_id': 'bundle-room', 'format': 'json'}}).encode()
+        with self.request('/api/settings', headers,
+                          b'{"capabilities":{"export":true,"media":false}}'):
+            pass
+        with self.assertRaises(HTTPError) as denied:
+            self.request('/api/export/bundle', headers, payload)
+        self.assertEqual(denied.exception.code, 403)
+        self.hub.set_capabilities({'export': True, 'media': True})
+        self.hub.store.ingest('qq', 'fixture', [{'id': 'bundle-room', 'title': 'Fixture'}], [
+            {'id': 'too-many', 'conversation_id': 'bundle-room', 'timestamp': 3,
+             'type': 'file', 'text': '',
+             'roaming_resources': [{'name': f'{index}.bin'} for index in range(101)]}
+        ])
+        with self.request('/api/export/bundle', headers, payload) as response:
+            job = json.load(response)
+        deadline = time.monotonic() + 3
+        state = job
+        while state['state'] not in ('completed', 'failed', 'cancelled') and time.monotonic() < deadline:
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + job['id']) as response:
+                state = json.load(response)
+        self.assertEqual(state['state'], 'failed')
+        self.assertEqual(state['error'], '会话导出附件超过单次 100 项上限，请缩小筛选范围')
+        self.assertIsNone(state['download_url'])
 
     def test_disabling_media_cancels_active_resource_export(self):
         entered = threading.Event()

@@ -8667,3 +8667,97 @@ passed (1 test); the full WeChat media module passed 61 tests and
   SHA-256 `eaa6ff2e4d0e1aa5a6156bac4b529bca77532da4810a5751e7a2282c134ee880`.
   Both are retained through 2026-10-22. P14-01 is complete for this revision;
   real-device delivery, current Toast display, and real-cache parity remain open.
+
+## 2026-10-15 - P9/P13 Isolated Send Acceptance Recheck
+
+- 110 focused QQ sender/target, personal WeChat sender, WeCom bot
+  sender/media, and shared durable-send tests passed. Nine HTTP route tests
+  passed for default-off capabilities, request-bound approval, expiry,
+  revocation, rejection, local QQ target resolution, and WeCom bot identity.
+- A read-only process/listener inventory found WeChat processes but no
+  NapCat/QQ send runtime. No client endpoint was contacted; no message was
+  prepared or sent.
+- No implementation gap was established by this review. Real NapCat delivery,
+  WeChat UI composition and read-back receipt, and WeCom bot/device delivery
+  remain open; P9-02 and P13-01 stay `IN_PROGRESS`.
+
+## 2026-10-15 - P11 Real Indexed Media Probe
+
+- The running local Hub reported all three sources connected, with indexed
+  records and no source errors. The account-wide unindexed WeChat source-media
+  page returned no candidates in this snapshot.
+- The existing media API resolved one real indexed WeChat image to JPEG and
+  one voice to WAV. Both local responses returned HTTP 200, non-empty content,
+  and matching file signatures. The first bounded candidate for WeChat
+  video/file and WeCom/QQ images did not resolve.
+- No message body, account identifier, path, or media bytes were recorded.
+  The source clients were not modified; this was a resolver read, which may
+  populate Hub-owned media cache. Only image/voice cache reads are verified;
+  complete cache coverage and WeFlow parity remain open. P11-01 stays
+  `IN_PROGRESS`.
+
+## 2026-10-15 - P11-02 Session Export Media Bundle
+
+- Added an opt-in session export bundle: the existing selected message export
+  format is placed in a cancellable ZIP beside media identities collected from
+  the same cursor-paged export rows. The existing bounded resource resolver,
+  media capability, 100-item limit, per-file/aggregate byte limits, and atomic
+  archive publication are reused. QQ resolution uses only Hub-cached media and
+  does not call QCE or download from a source client.
+- Unavailable individual media is listed as failed in the identity manifest;
+  exceeding the item or byte budget, renderer failure, or cancellation fails
+  the whole job and does not expose a partial archive. The manifest contains
+  identity mapping and archive-relative names, never local cache paths or
+  temporary URLs. The intermediate message export is removed after ZIP
+  creation. The export UI keeps its prior format flow unless the user
+  selects “附带已解析媒体” and reports that unresolved resources appear in the
+  manifest.
+- Focused HTTP/resource tests cover selected-format bytes, identity mapping,
+  capability rejection, path/URL redaction, missing media, the 100-item hard
+  limit, byte-budget failure, and cancellation without a published archive.
+  The UI contract covers both opt-in bundle requests and the unchanged ordinary
+  export request. Source-only WeChat media, Moments catalogs, the QQ global
+  gallery, full resolver parity, and real-cache acceptance remain outside this
+  bundle path; P11-02 stays `IN_PROGRESS`.
+
+## 2026-10-15 - P12-01 Local Hub Toast Probe
+
+- After the user's approval, the running 8765 Hub accepted its fixed test
+  notification request. Notifications were restored to disabled immediately;
+  an empty platform allowlist suppressed message-event notifications during
+  the probe.
+- API acceptance does not prove Windows displayed the toast. The user still
+  needs to confirm notification-center visibility, and the background-window
+  path remains unverified; P12-01 stays `IN_PROGRESS`.
+
+## 2026-10-15 - P14 Current Worktree Gate
+
+- `scripts/check-local-hub.ps1` passed on the current modified worktree: 852
+  Python tests, five source-mutation gate checks, 32 primary WebUI checks,
+  package privacy/smoke/determinism checks, Python/JavaScript syntax checks,
+  and `git diff --check`.
+- The 25,000-message synthetic benchmark completed with 1.364 s ingest,
+  0.029 s first search, 1.851 s for 50 cursor pages, 0.088 s backup, and
+  0.241 s restore; WAL reported zero failures.
+- Hosted Windows CI and artifact round-trip have not been run for this
+  uncommitted worktree. P14-01 hosted evidence remains tied to the commit
+  recorded in its status row.
+- A post-gate review found the synthetic WeChat voice test writing its decoded
+  WAV into the repository runtime directory. The test now redirects that
+  output to its temporary runtime; its focused regression passes, the generated
+  artifact and task cache were removed, and the full gate was not rerun for
+  this test-only isolation fix.
+
+## 2026-10-15 - Latest Hosted P14 Acceptance
+
+- Commit `c424fdd4a1601fa77fb43f698efe7d24aee42341` passed the hosted Windows
+  workflow on `main` (`38750963688`) and
+  `codex/roadmap-p8-p14-20261014` (`38750980409`), including local checks,
+  portable/source builds, privacy and deterministic-manifest checks, artifact
+  upload/download, and downloaded-byte/provenance verification.
+- The `main` artifact (`11981748188`) is 251,955,476 bytes with SHA-256
+  `b3df9e74a670e852e9c0e71c1d8db05fac0a4f07512c9b3d20876a3014ad6ac0`;
+  the roadmap artifact (`11982382739`) is 251,955,030 bytes with SHA-256
+  `7d3ccb3b5a9e02bf27d5eeb54119bf20e00c48a4d0c5c0f1ac2b35b22348bac2`.
+  Both are retained through 2026-10-22.
+- These hosted runs do not include the current uncommitted P11-02 bundle work.

@@ -30,7 +30,7 @@ import xml.etree.ElementTree as ET
 
 from .store import ChatStore, PLATFORMS, parse_bound
 from .exports import (render_contact_export, render_group_member_export, render_export,
-                     resolve_chatlab_conversation_type, write_export)
+                     message_resource_requests, resolve_chatlab_conversation_type, write_export)
 from .moments_exports import MomentsExportTooLarge, render_moments_export_bounded
 from .analytics import AnalyticsService
 from .capabilities import describe_capabilities, normalize_capabilities, unavailable_reason
@@ -2098,6 +2098,16 @@ class Hub:
         if not row or row.get('conversation_id') != params['conversation_id']:
             raise ValueError('消息不存在')
         row = {**row.get('extra', {}), **row}
+        if params.get('_local_only') and params['platform'] == 'qq':
+            provider = self.providers.get('qq')
+            if provider is None:
+                provider = QQProvider()
+                with self.lock:
+                    self.providers['qq'] = provider
+            resolved = provider.cached_media(row, params.get('resource_index'))
+            if not resolved.get('available') or not resolved.get('path'):
+                raise FileNotFoundError('QQ 媒体未在本机缓存')
+            return Path(resolved['path']), resolved.get('name') or row.get('file_name') or 'qq-media'
         if params['platform'] == 'wechat' and str(row.get('raw_type') or '') in ('47', '11000'):
             if not row.get('emoji_md5'):
                 raise FileNotFoundError('本机没有该微信表情的已缓存文件')
@@ -2933,6 +2943,112 @@ class Handler(BaseHTTPRequestHandler):
     def json(self, payload, status=200, extra=None):
         self.send_bytes(json.dumps(payload, ensure_ascii=False).encode(),
                         'application/json; charset=utf-8', status, extra)
+
+    def _build_export_bundle(self, query, work, cancel):
+        format_id = query.get('format', 'json')
+        mime, filename = render_export([], format_id, '本地消息档案')[1:]
+        normalized_format = format_id.strip().lower().lstrip('.')
+        if normalized_format in ('excel', 'xls'):
+            normalized_format = 'xlsx'
+        export_query = {key: query.get(key, '') for key in ('platform', 'q', 'type', 'start', 'end')}
+        export_query = {key: value for key, value in export_query.items() if value != ''}
+        conversation_id = query.get('conversation_id', '')
+        account_id = query.get('account_id', '')
+        spool_path = work / 'messages.sqlite3'
+        spool = sqlite3.connect(spool_path)
+        requests, cursor, sequence = [], None, 0
+        def bundle_safe_value(value, key=''):
+            if isinstance(value, dict):
+                safe = {}
+                for child_key, child_value in value.items():
+                    lowered = str(child_key).lower()
+                    if any(marker in lowered for marker in
+                           ('path', 'url', 'token', 'secret', 'password', 'authorization',
+                            'cookie', 'ticket', 'credential')):
+                        continue
+                    safe[child_key] = bundle_safe_value(child_value, lowered)
+                return safe
+            if isinstance(value, list):
+                return [bundle_safe_value(item, key) for item in value]
+            if isinstance(value, str) and key in {'name', 'file_name', 'filename'}:
+                if '://' in value:
+                    return ''
+                return Path(value).name
+            return value
+        try:
+            spool.execute('''CREATE TABLE export_rows (
+                seq INTEGER PRIMARY KEY, timestamp INTEGER NOT NULL, platform TEXT,
+                account_id TEXT, conversation_kind TEXT, sender_id TEXT,
+                sender_name TEXT, payload TEXT NOT NULL)''')
+            while True:
+                if cancel.is_set():
+                    raise InterruptedError
+                if conversation_id:
+                    page = self.hub.store.messages(account_id=account_id,
+                        conversation_id=conversation_id, **export_query,
+                        limit=5000, cursor=cursor)
+                else:
+                    page = self.hub.store.search(**{**export_query, 'q': export_query.get('q', '')},
+                                                 limit=5000, cursor=cursor)
+                payload_rows = []
+                for index, row in enumerate(page['items']):
+                    if cancel.is_set():
+                        raise InterruptedError
+                    row = bundle_safe_value(row)
+                    row['media_url'] = None
+                    if row.get('file_name'):
+                        row['file_name'] = Path(str(row['file_name'])).name
+                    payload_rows.append((sequence + index, int(row.get('timestamp') or 0),
+                        row.get('platform'), row.get('account_id'), row.get('conversation_kind'),
+                        row.get('sender_id'), row.get('sender_name'),
+                        json.dumps(row, ensure_ascii=False, separators=(',', ':'))))
+                    requests.extend(message_resource_requests(row))
+                    if len(requests) > 100:
+                        raise ValueError('会话导出附件超过单次 100 项上限，请缩小筛选范围')
+                spool.executemany('''INSERT INTO export_rows
+                    (seq, timestamp, platform, account_id, conversation_kind, sender_id,
+                     sender_name, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', payload_rows)
+                sequence += len(page['items'])
+                cursor = page.get('next_cursor')
+                if not cursor or not page['items']:
+                    break
+            spool.commit()
+            count = sequence
+            kind = (resolve_chatlab_conversation_type(row[0] for row in spool.execute(
+                'SELECT DISTINCT conversation_kind FROM export_rows'))
+                if normalized_format in ('chatlab', 'chatlab-jsonl') else None)
+            source_platforms = [row[0] for row in spool.execute(
+                'SELECT DISTINCT platform FROM export_rows ORDER BY platform')]
+            def export_rows():
+                for row in spool.execute('SELECT payload FROM export_rows ORDER BY timestamp, seq'):
+                    if cancel.is_set():
+                        raise InterruptedError
+                    yield json.loads(row[0])
+            def export_members():
+                rows = spool.execute('''WITH ranked AS (
+                    SELECT platform, account_id, sender_id, sender_name, timestamp, seq,
+                           ROW_NUMBER() OVER (PARTITION BY platform, account_id, sender_id
+                                              ORDER BY timestamp, seq) AS rank
+                    FROM export_rows WHERE sender_id IS NOT NULL AND sender_id != '')
+                    SELECT platform, account_id, sender_id, sender_name FROM ranked
+                    WHERE rank=1 ORDER BY timestamp, seq''')
+                for platform, member_account, sender_id, sender_name in rows:
+                    if cancel.is_set():
+                        raise InterruptedError
+                    yield {'platformId': str(sender_id),
+                           'accountName': str(sender_name or sender_id or '未知'),
+                           'platform': str(platform or ''),
+                           'accountId': str(member_account or '')}
+            output = work / filename
+            with output.open('w+b') as stream:
+                write_export(export_rows(), stream, format_id, '本地消息档案', count=count,
+                             source_platforms=source_platforms, members=export_members(),
+                             conversation_type=kind)
+        finally:
+            spool.close()
+            spool_path.unlink(missing_ok=True)
+        return {'path': str(output), 'filename': filename, 'format': normalized_format,
+                'mime': mime, 'items': requests}
 
     def allowed(self):
         host = self.headers.get('Host', '')
@@ -3919,6 +4035,20 @@ class Handler(BaseHTTPRequestHandler):
                                                    for item in items) and not self.hub.capability_enabled('moments'):
                     raise PermissionError('朋友圈功能已关闭')
                 result = self.hub.resource_jobs.start(items)
+            elif path == '/api/export/bundle':
+                self.hub.require_capability('export')
+                self.hub.require_capability('media')
+                query = body.get('query')
+                if not isinstance(query, dict):
+                    raise ValueError('会话导出筛选参数无效')
+                allowed = {'format', 'platform', 'account_id', 'conversation_id',
+                           'q', 'type', 'start', 'end'}
+                if set(query) - allowed or any(not isinstance(value, str) for value in query.values()):
+                    raise ValueError('会话导出筛选参数无效')
+                if query.get('platform', 'all') not in (*PLATFORMS, 'all'):
+                    raise ValueError('会话导出平台无效')
+                result = self.hub.resource_jobs.start_bundle(
+                    lambda work, cancel: self._build_export_bundle(query, work, cancel))
             elif path.startswith('/api/source/') and path.endswith('/configure'):
                 self.hub.configure(path.split('/')[3], body)
                 result = {'message': '配置已保存，正在同步'}
@@ -3941,6 +4071,16 @@ class Handler(BaseHTTPRequestHandler):
             self.json({'error': str(exc), 'code': 'capability_disabled'}, 403)
         except (ValueError, TypeError) as exc:
             self.json({'error': str(exc)}, 400)
+        except RuntimeError as exc:
+            if path in ('/api/notifications/test', '/api/notifications/message'):
+                safe_errors = {'Windows 桌面通知仅支持 Windows 本机 Hub',
+                               'Windows 未接受桌面通知'}
+                message = str(exc)
+                self.json({'error': message if message in safe_errors
+                           else 'Windows 未接受桌面通知'}, 503)
+                return
+            print('Action failure:', type(exc).__name__, flush=True)
+            self.json({'error': '本机操作失败，请检查数据源配置'}, 500)
         except Exception as exc:
             print('Action failure:', type(exc).__name__, flush=True)
             self.json({'error': '本机操作失败，请检查数据源配置'}, 500)
@@ -4400,6 +4540,8 @@ class Handler(BaseHTTPRequestHandler):
             return 'wecom_bot_send'
         if path in ('/api/export', '/api/export/contacts', '/api/export/group-members'):
             return 'export'
+        if path == '/api/export/bundle':
+            return 'media' if method == 'POST' else 'export'
         if path == '/api/sync' or (path.startswith('/api/source/') and path.endswith('/configure')):
             return 'sync'
         if path.startswith('/api/auto-export'):

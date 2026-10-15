@@ -37,7 +37,7 @@ const state = {
   remembered: {}, conversations: [], conversationTotal: 0, cq: '', messages: [],
   messageTotal: 0, messageOffset: 0, messageCursor: null, messageHasMore: false, messageFilter: {q: '', type: '', start: '', end: ''},
   filters: {q: '', type: '', kind: '', start: '', end: '', source: 'all', account_scope: '', conversation_id: ''}, items: [], total: 0, accountScopes: [], page: 0, pageCursors: [null],
-  loading: true, busy: false, error: '', stats: null, statsTab: 'overview', privateProfiles: [], groupProfiles: [], groupMemberLists: new Map(), relationshipProfiles: [], annualReport: null, reportYear: Number(new Intl.DateTimeFormat('en', {timeZone: 'Asia/Hong_Kong', year: 'numeric'}).format(new Date())), reportYearScope: 'year', request: 0, showDates: false, managedContact: null, selectedMedia: new Map(), imageExportTier: 'best', resourceJob: null, voiceTranscripts: new Map(), wechatRoster: [], groupRosterKey: '', groupRosterRequest: 0,
+  loading: true, busy: false, error: '', stats: null, statsTab: 'overview', privateProfiles: [], groupProfiles: [], groupMemberLists: new Map(), relationshipProfiles: [], annualReport: null, reportYear: Number(new Intl.DateTimeFormat('en', {timeZone: 'Asia/Hong_Kong', year: 'numeric'}).format(new Date())), reportYearScope: 'year', request: 0, showDates: false, managedContact: null, selectedMedia: new Map(), imageExportTier: 'best', resourceJob: null, exportBundleJob: null, voiceTranscripts: new Map(), wechatRoster: [], groupRosterKey: '', groupRosterRequest: 0,
   theme: localStorage.getItem('hub.theme') || 'light', lastSync: null, backups: [], pendingSends: [], sendReview: null, qqSendReadiness: null, wechatSendReadiness: null, wecomBotIdentity: null, pairReport: null, mcp: null, operations: [], importJobs: [], importFile: null, importPreview: null, importBusy: false, importPlatform: 'all', importAccount: '', moments: {items: [], total: 0}, momentFilter: {q: '', username: '', start: '', end: '', account_id: ''}, momentOffset: 0, momentExporting: false, momentExportFormat: 'json', qqForwardResources: new Map(), qqForwardObjectUrls: new Set()
 };
 state.selfSentDaily = null;
@@ -1398,7 +1398,7 @@ function modal(title, body, footer = '', wide = false, focus = true) {
   icons();
   if (focus) setTimeout(() => document.querySelector('.dialog input, .dialog button')?.focus(), 0);
 }
-function closeModal() { invalidateSendCompose();document.querySelector('#overlay').innerHTML = '';state.wechatRoster = [];state.groupRosterKey = '';state.groupRosterRequest++;state.managedContact = null; }
+function closeModal() { invalidateSendCompose();if (state.exportBundleJob?.id && ['queued', 'running', 'cancelling'].includes(state.exportBundleJob.state)) cancelExportBundle(true);document.querySelector('#overlay').innerHTML = '';state.wechatRoster = [];state.groupRosterKey = '';state.groupRosterRequest++;state.managedContact = null; }
 async function showPairReport(conversation, year = null) {
   if (!conversation || !conversation.platform || conversation.platform === 'all') {toast('请先选择具体平台的私聊会话', true);return;}
   if (conversation.kind === 'group') {toast('双人报告仅适用于私聊会话', true);return;}
@@ -1536,13 +1536,21 @@ async function prepareSend(form) {
 function showExport() {
   const title = state.view === 'chat' ? state.selected?.title : '搜索结果';
   if (!title) {toast('请先选择会话');return;}
-  modal('导出 ' + title, `<form id="export-form"><div class="export-details"><span>${esc(title)}</span><span>${state.view === 'chat' ? fmt(state.messageTotal) : fmt(state.total)} 条匹配消息</span></div><div class="field"><label>文件格式</label><div class="format-options">${[['json', 'JSON'], ['html', 'HTML'], ['csv', 'CSV'], ['md', 'Markdown'], ['txt', 'TXT'], ['xlsx', 'Excel / XLSX'], ['sql', 'SQL'], ['chatlab', 'ChatLab JSON'], ['chatlab-jsonl', 'ChatLab JSONL']].map(([id, name], index) => `<label class="format-option"><input type="radio" name="format" value="${id}" ${!index ? 'checked' : ''}>${name}</label>`).join('')}</div></div></form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="download-export">' + icon('download') + '导出</button>');
+  const mediaEnabled = state.settings?.capabilities?.media?.enabled === true;
+  modal('导出 ' + title, `<form id="export-form"><div class="export-details"><span>${esc(title)}</span><span>${state.view === 'chat' ? fmt(state.messageTotal) : fmt(state.total)} 条匹配消息</span></div><div class="field"><label>文件格式</label><div class="format-options">${[['json', 'JSON'], ['html', 'HTML'], ['csv', 'CSV'], ['md', 'Markdown'], ['txt', 'TXT'], ['xlsx', 'Excel / XLSX'], ['sql', 'SQL'], ['chatlab', 'ChatLab JSON'], ['chatlab-jsonl', 'ChatLab JSONL']].map(([id, name], index) => `<label class="format-option"><input type="radio" name="format" value="${id}" ${!index ? 'checked' : ''}>${name}</label>`).join('')}</div></div><label class="format-option"><input type="checkbox" name="include_media" ${mediaEnabled ? '' : 'disabled'}>附带已解析媒体${mediaEnabled ? '' : '（媒体能力已关闭）'}</label><p class="muted small">仅打包本机已解析的媒体；未取得项会列入 manifest。</p><p id="export-bundle-status" class="muted small" hidden></p></form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="download-export">' + icon('download') + '导出</button>');
 }
 async function downloadExport(button) {
   button.disabled = true;
   const format = new FormData(document.querySelector('#export-form')).get('format');
   const params = state.view === 'chat' ? {platform: state.selected.platform, account_id: state.selected.account_id, conversation_id: state.selected.id, ...state.messageFilter, format} : {platform: state.platform, ...state.filters, format};
   try {
+    if (document.querySelector('#export-form [name="include_media"]')?.checked) {
+      const query = state.view === 'chat'
+        ? {platform: state.selected.platform, account_id: state.selected.account_id, conversation_id: state.selected.id, ...state.messageFilter, format}
+        : {platform: state.platform, q: state.filters.q || '', type: state.filters.type || '', start: state.filters.start || '', end: state.filters.end || '', format};
+      await downloadExportBundle(button, query);
+      return;
+    }
     const response = await fetch('/api/export?' + new URLSearchParams(params));
     if (!response.ok) throw new Error((await response.json()).error || '导出失败');
     const blob = await response.blob();
@@ -1552,6 +1560,37 @@ async function downloadExport(button) {
     document.body.append(link);link.click();link.remove();setTimeout(() => URL.revokeObjectURL(href), 10000);
     closeModal();toast('导出完成');
   } catch (e) {toast(e.message, true);button.disabled = false;}
+}
+async function downloadExportBundle(button, query) {
+  const status = document.querySelector('#export-bundle-status');
+  status.hidden = false;status.textContent = '正在准备会话导出…';
+  const job = await api('/api/export/bundle', null, {method: 'POST', body: JSON.stringify({query})});
+  state.exportBundleJob = job;
+  let current = job;
+  while (['queued', 'running', 'cancelling'].includes(current.state)) {
+    status.textContent = current.total ? `正在打包附件 ${fmt(current.completed)} / ${fmt(current.total)}，成功 ${fmt(current.exported)}，未取得 ${fmt(current.failed)}` : '正在生成所选格式的导出文件…';
+    await delay(500);
+    current = await api('/api/resource-jobs/' + encodeURIComponent(job.id));
+    state.exportBundleJob = current;
+  }
+  if (current.state === 'completed' && current.download_url) {
+    state.exportBundleJob = null;
+    closeModal();toast(`会话包已完成：成功 ${fmt(current.exported)} 项，未取得 ${fmt(current.failed)} 项`);
+    location.href = current.download_url;
+  } else if (current.state === 'cancelled') {
+    state.exportBundleJob = null;status.textContent = '会话包已取消';button.disabled = false;
+  } else {
+    state.exportBundleJob = null;
+    throw new Error(current.error === '会话导出附件超过单次 100 项上限，请缩小筛选范围' ? current.error : `会话包生成失败：${current.error || '请缩小筛选范围后重试'}`);
+  }
+}
+async function cancelExportBundle(silent = false) {
+  const job = state.exportBundleJob;
+  if (!job?.id) return;
+  state.exportBundleJob = {...job, state: 'cancelling'};
+  try {
+    await api('/api/resource-jobs/' + encodeURIComponent(job.id) + '/cancel', null, {method: 'POST'});
+  } catch (error) {if (!silent) toast(error.message || '取消会话包失败', true);}
 }
 function showContactExport() {
   modal('导出联系人', '<form id="contact-export-form"><div class="field"><label>文件格式</label><div class="format-options"><label class="format-option"><input type="radio" name="format" value="csv" checked>CSV</label><label class="format-option"><input type="radio" name="format" value="json">JSON</label></div><p class="muted small">导出当前平台与搜索条件下的全部匹配联系人；临时头像链接不会写入文件。</p></div></form>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="download-contact-export">' + icon('download') + '导出</button>');

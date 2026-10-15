@@ -143,12 +143,20 @@ class ResourceJobManager:
 
     def start(self, items):
         requests = self._validate_items(items)
+        return self._start(requests)
+
+    def start_bundle(self, builder):
+        if not callable(builder):
+            raise ValueError("会话导出参数无效")
+        return self._start([], builder)
+
+    def _start(self, requests, bundle_builder=None):
         job_id = uuid.uuid4().hex[:20]
         job = {"id": job_id, "state": "queued", "total": len(requests), "completed": 0,
                "exported": 0, "failed": 0, "bytes": 0, "created_at": int(time.time()),
                "download_url": None, "error": "", "cancel": threading.Event(), "thread": None,
-               "manifest": []}
-        thread = threading.Thread(target=self._run, args=(job, requests), daemon=True,
+               "manifest": [], "bundle": bundle_builder is not None}
+        thread = threading.Thread(target=self._run, args=(job, requests, bundle_builder), daemon=True,
                                   name="local-resource-export")
         job["thread"] = thread
         with self._lock:
@@ -267,23 +275,46 @@ class ResourceJobManager:
                         shutil.rmtree(path, ignore_errors=True)
                 terminal = [entry for entry in terminal if entry[1] != job_id]
 
-    def _run(self, job, requests):
+    def _run(self, job, requests, bundle_builder=None):
         job_id = job["id"]
         work = self.root / job_id
         staging = work / "files"
         archive_temp = work / ".attachments.zip.part"
+        bundle_file = None
         terminal_state = None
         try:
             work.mkdir(parents=True, exist_ok=False)
             staging.mkdir()
             self._update(job, state="running")
-            manifest, total_bytes, sequence = [], 0, 0
+            if bundle_builder is not None:
+                bundle = bundle_builder(work, job["cancel"])
+                if job["cancel"].is_set():
+                    raise InterruptedError
+                if not isinstance(bundle, dict):
+                    raise ValueError("会话导出结果无效")
+                bundle_candidate = Path(bundle.get("path") or "")
+                if bundle_candidate.is_symlink():
+                    raise ValueError("会话导出文件无效")
+                bundle_file = bundle_candidate.resolve(strict=True)
+                if (not bundle_file.is_file() or
+                        not bundle_file.is_relative_to(work.resolve())):
+                    raise ValueError("会话导出文件无效")
+                if not isinstance(bundle.get("items", []), list) or len(bundle.get("items", [])) > MAX_ITEMS:
+                    raise ValueError(f"会话导出附件超过单次 {MAX_ITEMS} 项上限，请缩小筛选范围")
+                requests = self._validate_items(bundle.get("items", [])) if bundle.get("items") else []
+                bundle_size = bundle_file.stat().st_size
+                if bundle_size > MAX_TOTAL_BYTES:
+                    raise OverflowError
+                self._update(job, total=len(requests), bytes=bundle_size)
+
+            manifest, total_bytes, sequence = [], bundle_file.stat().st_size if bundle_file else 0, 0
             for index, request in enumerate(requests, 1):
                 if job["cancel"].is_set():
                     raise InterruptedError
                 entry = dict(request)
                 try:
-                    path, suggested_name = self.resolver(request)
+                    resolve_request = {**request, "_local_only": True} if bundle_file else request
+                    path, suggested_name = self.resolver(resolve_request)
                     source = Path(path)
                     if source.is_symlink() or not source.is_file():
                         raise FileNotFoundError
@@ -326,6 +357,10 @@ class ResourceJobManager:
                                   "sha256": digest.hexdigest()})
                 except InterruptedError:
                     raise
+                except OverflowError:
+                    if bundle_file is not None:
+                        raise ValueError("会话导出附件超过单项 50 MiB 或总大小 512 MiB 限制") from None
+                    entry.update({"status": "failed", "error": "OverflowError"})
                 except Exception as exc:
                     entry.update({"status": "failed", "error": type(exc).__name__})
                 manifest.append(entry)
@@ -334,12 +369,22 @@ class ResourceJobManager:
                              failed=index - exported, bytes=total_bytes, manifest=manifest)
             if job["cancel"].is_set():
                 raise InterruptedError
-            if sequence == 0:
+            if sequence == 0 and bundle_file is None:
                 raise ValueError("no_resources")
             with zipfile.ZipFile(archive_temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                if bundle_file is not None:
+                    self._write_archive_file(archive, bundle_file, job["cancel"],
+                                             bundle["filename"])
                 for path in sorted(staging.iterdir()):
                     self._write_archive_file(archive, path, job["cancel"])
-                archive.writestr("manifest.json", json.dumps({"items": manifest}, ensure_ascii=False, indent=2))
+                archive_manifest = {"items": manifest}
+                if bundle_file is not None:
+                    for row in archive_manifest["items"]:
+                        if row.get("status") == "exported":
+                            row["file"] = "attachments/" + row["file"]
+                    archive_manifest.update({"format": bundle["format"],
+                                             "export_file": bundle["filename"]})
+                archive.writestr("manifest.json", json.dumps(archive_manifest, ensure_ascii=False, indent=2))
             if archive_temp.stat().st_size > MAX_RETAINED_ARCHIVE_BYTES:
                 raise OverflowError
             with archive_temp.open("r+b") as archive:
@@ -353,9 +398,14 @@ class ResourceJobManager:
             terminal_state = "cancelled"
         except Exception as exc:
             terminal_state = "failed"
-            self._update(job, error=type(exc).__name__)
+            message = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("会话导出") else ""
+            if bundle_file is not None and isinstance(exc, OverflowError):
+                message = "会话导出附件超过单项 50 MiB 或总大小 512 MiB 限制"
+            self._update(job, error=message or type(exc).__name__)
         finally:
             archive_temp.unlink(missing_ok=True)
+            if bundle_file is not None:
+                bundle_file.unlink(missing_ok=True)
             shutil.rmtree(staging, ignore_errors=True)
             if terminal_state:
                 shutil.rmtree(work, ignore_errors=True)
@@ -364,8 +414,8 @@ class ResourceJobManager:
                 self._prune_terminal_records(job_id)
 
     @staticmethod
-    def _write_archive_file(archive, path, cancel):
-        info = zipfile.ZipInfo("attachments/" + path.name)
+    def _write_archive_file(archive, path, cancel, archive_name=None):
+        info = zipfile.ZipInfo(archive_name or ("attachments/" + path.name))
         info.compress_type = zipfile.ZIP_DEFLATED
         with path.open("rb") as source, archive.open(info, "w") as target:
             while True:

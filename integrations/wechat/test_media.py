@@ -1171,13 +1171,16 @@ class MediaTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "fixture.silk"
+            runtime = Path(directory) / "runtime"
             pcm = b"".join(struct.pack("<h", int(2000 * math.sin(i * math.tau * 440 / 24000)))
                            for i in range(4800))
             source.write_bytes(pilk_nogil.encode(pcm, None, pcm_rate=24000, tencent=True))
-            with patch("integrations.wechat.vendor.media.MediaDownloader.download_voice", return_value=str(source)):
+            with patch.object(provider_module, "RUNTIME", runtime), \
+                    patch("integrations.wechat.vendor.media.MediaDownloader.download_voice", return_value=str(source)):
                 result = self.provider({"local_type": 34}).media("fixture", 7, "message_0.db")
             self.assertTrue(result["available"])
             self.assertTrue(result["playable"])
+            self.assertEqual(Path(result["path"]).parent, runtime / "media" / "decoded-voice")
             self.assertEqual(result["mime_type"], "audio/wav")
             self.assertEqual(result["original_path"], str(source))
             self.assertIsNone(result["reason"])

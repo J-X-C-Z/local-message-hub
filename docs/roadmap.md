@@ -343,6 +343,16 @@ delivery outcome `unknown`, even when Python would compare them equal to zero;
 only an exact nonzero integer rejection is classified as `failed`. The focused
 17-test sender suite passes. Live NapCat/QQ delivery remains unverified.
 
+**P9-02 / P13-01 isolated acceptance recheck (2026-10-15):** 110 focused QQ,
+personal WeChat, WeCom bot text/media, and durable send-service tests passed;
+9 HTTP route tests also passed for opt-in, request-bound one-time approval,
+challenge expiry, capability revocation, target resolution, rejection, and
+credential identity changes. No NapCat endpoint was probed and no client was
+started. The WeChat desktop process was present, but its window or API was not
+used. This is simulated/code-path evidence only; live NapCat/device, real
+WeChat composition/receipt, real bot delivery, and official acknowledgement
+behavior remain unverified, so P9-02 and P13-01 stay `IN_PROGRESS`.
+
 **P9 read-only key-reader bound follow-up (2026-10-14):** Windows PID
 enumeration now accommodates up to 65,536 system processes; the 256-process
 candidate cap applies only after same-user QQ executable validation, so
@@ -502,6 +512,18 @@ resolve the best tier already present in the local cache; the UI updates only
 that tile and preserves its current preview on a cache miss. Ordinary viewport
 previews remain on `mid`; full resource/decryption parity and real-cache
 acceptance remain open.
+
+P11-02 session bundle follow-up (2026-10-15): The export dialog can opt into a
+cancellable ZIP containing the selected existing message export format and
+indexed media identities resolved from the local Hub. It uses the existing
+resolver and capability gate; QQ is restricted to already cached Hub media.
+Missing resources are recorded in `manifest.json`. More than 100 attachments,
+an attachment above 50 MiB, or aggregate content above 512 MiB fails the whole
+bundle and never publishes a partial ZIP. Paths and temporary URLs are omitted
+from the manifest; the intermediate message export is deleted after ZIP creation.
+This path does not yet enumerate WeChat source-only media,
+Moments catalogs, or the QQ global gallery; full resource parity and real-cache
+acceptance remain open, so P11-02 stays `IN_PROGRESS`.
 
 P11-01 follow-up (2026-10-15): The WeChat image cache resolver classifies only
 original `_h/.h/_hd/.hd`, base `.dat`, and thumbnail `_t/.t/_thumb` suffixes,
@@ -829,7 +851,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Earlier hosted checkpoints are superseded by commit `030ca901c2847f56ff020dfb7c687d04c9515d38`: run `38748409211` on `main` and `38748409701` on `codex/roadmap-p8-p14-20261014` both passed all 846 local hub checks, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. The `main` artifact (`11981321199`) is 251,955,218 bytes, SHA-256 `ae5e72062c5ffafd79197649912dfb8333221ae39b14594c40672277bd9e14a5`; roadmap artifact (`11981770568`) is 251,950,610 bytes, SHA-256 `eaa6ff2e4d0e1aa5a6156bac4b529bca77532da4810a5751e7a2282c134ee880`. Both are retained through 2026-10-22. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Latest hosted acceptance is commit `c424fdd4a1601fa77fb43f698efe7d24aee42341`: run `38750963688` on `main` and `38750980409` on `codex/roadmap-p8-p14-20261014` both passed local hub checks, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. The `main` artifact (`11981748188`) is 251,955,476 bytes, SHA-256 `b3df9e74a670e852e9c0e71c1d8db05fac0a4f07512c9b3d20876a3014ad6ac0`; roadmap artifact (`11982382739`) is 251,955,030 bytes, SHA-256 `7d3ccb3b5a9e02bf27d5eeb54119bf20e00c48a4d0c5c0f1ac2b35b22348bac2`. Both are retained through 2026-10-22. | DONE |
 
 **P11 unindexed WeChat source media (2026-10-15):** the media library can
 optionally list media rows directly from the local read-only WeChat database
@@ -847,18 +869,16 @@ ZIP request revalidates the exact source row, extracts only its bounded emoji
 cache key server-side, and resolves within the existing account-scoped local
 cache. The list remains metadata-only; hashes and source paths are not returned.
 
-**P14 current-worktree status (2026-10-15):** the hosted Windows evidence in
-P14-01 validates commit `d61c086` only. The current source-media and
-notification changes passed the full local gate (835 Python tests, 33
-WebUI checks, five source-mutation gates, and the 25,000-message benchmark).
-The synthetic timings were 1.536 s ingest, 0.033 s first search, 1.589 s for
-50 pages, 0.096 s backup, and 0.285 s restore, with zero WAL failures. The
-9,787-file portable package (587,017,262 bytes) and 692-file sanitized source
-bundle passed isolated smoke. A `local-worktree` manifest
-verified both package inventories and bytes for commit
-`2860ce8ba87d69be1b473e4dfbfe8a39d648ad73`. Uploaded/downloaded artifact
-round-trip and hosted Windows verification for this source state remain open,
-so P14-01 remains `IN_PROGRESS`.
+**P14 current-worktree status (2026-10-15):** hosted Windows acceptance covers
+commit `c424fdd4a1601fa77fb43f698efe7d24aee42341` on both public branches (runs
+`38750963688` and `38750980409`); it does not cover the current uncommitted
+bundle changes. The current worktree passed the full local gate (852 Python
+tests, five source-mutation gates, 32 WebUI checks, package privacy/smoke/
+determinism checks, and the 25,000-message benchmark). Timings were 1.364 s
+ingest, 0.029 s first search, 1.851 s for 50 cursor pages, 0.088 s backup, and
+0.241 s restore, with zero WAL failures. Hosted CI and artifact transfer for
+the current changes remain open; P14 is complete for `c424fdd` and pending for
+the uncommitted worktree.
 
 **P12-01 desktop-notification result (2026-10-15):** the user did not see the
 isolated synthetic notification. The probe had not actually moved Edge into a
@@ -872,6 +892,13 @@ browser/Windows presentation from a foreground click without creating an SSE
 event or using chat identity/content. Synthetic checks cover enabled/disabled
 and granted/denied states; this does not replace real notification-center
 acceptance, so P12-01 remains `IN_PROGRESS`.
+
+**P12-01 local Hub toast probe (2026-10-15):** the user authorized one more
+fixed test notification. The 8765 endpoint accepted it (`submitted=true`);
+notifications were immediately restored to disabled, and an empty platform
+allowlist prevented message-event notifications during the probe. This proves
+submission only; display in Windows notification center and background-window
+acceptance remain unconfirmed, so P12-01 stays `IN_PROGRESS`.
 
 **P12-03 UI boundary update (2026-10-15):** the desktop settings view no longer
 offers install/uninstall controls without an inspectable native implementation.
@@ -1035,15 +1062,21 @@ loaded messages at 500 after 10,000 browsed; payload and markup reductions are
 fixture metrics, not whole-process RSS claims. Details and before/after
 measurements are in [`performance.md`](performance.md).
 
-P0-P8 and P10 are complete (10 of 15 phases); P9 and P11-P14 remain in progress
-or awaiting external/live acceptance. Hosted CI has not run on the current
-reviewed changes; the latest hosted run on
-the old `main` commit failed for a missing CI dependency and a path-sensitive MCP
-config assertion, both fixed locally. No changes have been pushed. The portable
-package now passes its full local EXE smoke on this host, but P14 remains
-IN_PROGRESS pending reviewed hosted CI and artifact upload, in addition to P9
-real QQ acceptance, P11 parity gaps, P12 real-account rendering/cache acceptance, and a verified
-authorized P13 sender path. These requirements do not claim
+P0-P8, P10, and P14 meet the acceptance recorded in their status rows (11 of 15
+phases); P9 and P11-P13 remain partial or await live acceptance. P14's hosted
+evidence applies to commit `030ca901c2847f56ff020dfb7c687d04c9515d38`, not the
+current modified worktree. The current P11-02 bundle changes pass six focused
+Python tests and the WebUI export contract. The full current-worktree gate has
+since passed 852 Python tests, five source-mutation gates, 32 WebUI checks,
+package privacy/smoke/determinism checks, and the 25,000-message benchmark;
+hosted CI for base commit `c424fdd4a1601fa77fb43f698efe7d24aee42341` passed on
+both public branches; it does not cover the local bundle edits. Real
+QQ/WeChat/WeCom delivery, current Windows Toast
+display, full media/cache parity, and inspectable P12 native mutation acceptance
+remain open. After this gate, the synthetic WeChat voice test was isolated to a
+temporary runtime to prevent repository cache output; its targeted test passes,
+but the full gate was not rerun for this test-only fix.
+These requirements do not claim
 zero-rescan synchronization or equal historical coverage across platforms;
 QQ roaming remains bounded by QCE/Tencent limits. WeFlow baseline and gaps are
 tracked in [`weflow-gap-matrix.md`](weflow-gap-matrix.md).
@@ -4220,6 +4253,17 @@ running 8765 process predates the source fix and needs restart; stopping its
 verified PID 41824 was rejected by tool policy (`blocked by policy`), so the
 live page still uses the previous loaded code. P11-01 remains `IN_PROGRESS`
 pending live reload and broader real-cache coverage.
+
+**P11 real indexed-media probe (2026-10-15):** the running local Hub reported
+all three sources connected with indexed records and no source errors. Through
+the existing media API, one real indexed WeChat image resolved to JPEG and one
+real indexed voice resolved to WAV; both local responses returned HTTP 200,
+non-empty content, and matching file signatures. The first bounded candidate
+for WeChat video/file and WeCom/QQ images did not resolve. The account-wide
+unindexed WeChat source-media page returned no candidates in this snapshot.
+This proves image/voice cache reads only; it does not prove those other types,
+complete cache coverage, or WeFlow parity. No message body, account identifier,
+path, or media bytes were retained. P11-01 remains `IN_PROGRESS`.
 
 **P14 hosted acceptance follow-up (2026-10-15):** commit
 `030ca901c2847f56ff020dfb7c687d04c9515d38` passed the complete hosted Windows

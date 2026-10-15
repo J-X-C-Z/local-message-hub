@@ -20,7 +20,8 @@ import zipfile
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timedelta, timezone
 
-__all__ = ["render_contact_export", "render_group_member_export", "render_export", "write_export", "FORMATS"]
+__all__ = ["render_contact_export", "render_group_member_export", "render_export", "write_export",
+           "message_resource_requests", "FORMATS"]
 
 CST = timezone(timedelta(hours=8))
 
@@ -154,6 +155,42 @@ def _message_resources(message):
             resources.extend(dict(resource) for _ in range(max(0, missing)))
             emitted[identity] = max(emitted.get(identity, 0), count)
     return resources
+
+
+def message_resource_requests(message):
+    """Return resolver identities for attachments stored on one indexed message."""
+    if not isinstance(message, dict):
+        return []
+    platform = str(message.get("platform") or "")
+    account_id = str(message.get("account_id") or "")
+    message_id = str(message.get("id") or "")
+    conversation_id = str(message.get("conversation_id") or "")
+    if platform not in {"wechat", "wecom", "qq"} or not all(
+            (account_id, message_id, conversation_id)):
+        return []
+
+    extra = message.get("extra") if isinstance(message.get("extra"), dict) else {}
+    resource_field = {"wecom": "attachments", "qq": "roaming_resources"}.get(platform)
+    entries = extra.get(resource_field) if resource_field else None
+    if not isinstance(entries, list) and resource_field:
+        entries = message.get(resource_field)
+    if platform == "qq" and not isinstance(entries, list):
+        entries = extra.get("media")
+    if platform == "qq" and not isinstance(entries, list):
+        entries = message.get("media")
+    if isinstance(entries, list) and entries:
+        return [{"platform": platform, "account_id": account_id,
+                 "message_id": message_id, "conversation_id": conversation_id,
+                 "resource_index": index}
+                for index, item in enumerate(entries) if isinstance(item, dict)]
+
+    message_type = str(message.get("type") or "").lower()
+    raw_type = str(message.get("raw_type") or "")
+    if message_type in {"image", "video", "voice", "file", "sticker"} or (
+            platform == "wechat" and raw_type in {"47", "11000"}):
+        return [{"platform": platform, "account_id": account_id,
+                 "message_id": message_id, "conversation_id": conversation_id}]
+    return []
 
 
 def _csv_safe(value: str) -> str:

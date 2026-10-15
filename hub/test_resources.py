@@ -61,6 +61,90 @@ class ResourceJobTest(unittest.TestCase):
         self.assertEqual(manifest["items"][0]["sha256"],
                          hashlib.sha256(b"synthetic image bytes").hexdigest())
 
+    def test_session_bundle_marks_missing_media_and_fails_as_a_whole_on_size_budget(self):
+        def builder(work, _cancel):
+            export = work / "messages.json"
+            export.write_text("[]", encoding="utf-8")
+            return {"path": str(export), "filename": "messages.json", "format": "json",
+                    "items": [self.item()]}
+
+        self.files["message-1"] = FileNotFoundError("not cached")
+        missing = self.wait(self.manager.start_bundle(builder)["id"])
+        self.assertEqual((missing["state"], missing["failed"], missing["exported"]),
+                         ("completed", 1, 0))
+        with ZipFile(self.manager.download_path(missing["id"])) as archive:
+            self.assertIn("messages.json", archive.namelist())
+            self.assertNotIn("attachments/001-fixture_image.png", archive.namelist())
+            manifest = json.loads(archive.read("manifest.json"))
+        self.assertFalse((self.root / missing["id"] / "messages.json").exists())
+        self.assertEqual(manifest["items"][0]["status"], "failed")
+        self.assertEqual(manifest["items"][0]["error"], "FileNotFoundError")
+
+        source = self.root / "too-large.bin"
+        source.write_bytes(b"more than three bytes")
+        self.files["message-1"] = source
+        with patch.object(resource_module, "MAX_ITEM_BYTES", 3):
+            oversized = self.wait(self.manager.start_bundle(builder)["id"])
+        self.assertEqual(oversized["state"], "failed")
+        self.assertEqual(oversized["error"], "会话导出附件超过单项 50 MiB 或总大小 512 MiB 限制")
+        self.assertIsNone(oversized["download_url"])
+        self.assertIsNone(self.manager.download_path(oversized["id"]))
+
+    def test_session_bundle_item_hard_limit_fails_without_partial_archive(self):
+        export_content = "[]"
+        def builder(work, _cancel):
+            export = work / "messages.json"
+            export.write_text(export_content, encoding="utf-8")
+            return {"path": str(export), "filename": "messages.json", "format": "json",
+                    "items": [self.item(str(index)) for index in range(MAX_ITEMS + 1)]}
+
+        state = self.wait(self.manager.start_bundle(builder)["id"])
+        self.assertEqual(state["state"], "failed")
+        self.assertIn("单次 100 项上限", state["error"])
+        self.assertIsNone(state["download_url"])
+
+    def test_cancelled_session_bundle_removes_unpublished_export(self):
+        entered = threading.Event()
+        release = threading.Event()
+        def builder(work, _cancel):
+            export = work / "messages.json"
+            export.write_text("[]", encoding="utf-8")
+            entered.set()
+            release.wait(2)
+            return {"path": str(export), "filename": "messages.json", "format": "json", "items": []}
+
+        started = self.manager.start_bundle(builder)
+        self.assertTrue(entered.wait(1))
+        cancelling = self.manager.cancel(started["id"])
+        self.assertEqual(cancelling["state"], "cancelling")
+        release.set()
+        state = self.wait(started["id"])
+        self.assertEqual(state["state"], "cancelled")
+        self.assertIsNone(state["download_url"])
+        self.assertIsNone(self.manager.download_path(started["id"]))
+
+    def test_empty_session_bundle_is_valid_and_job_setup_failure_stays_readable(self):
+        def empty_builder(work, _cancel):
+            export = work / "messages.json"
+            export.write_text("[]", encoding="utf-8")
+            return {"path": str(export), "filename": "messages.json", "format": "json", "items": []}
+
+        empty = self.wait(self.manager.start_bundle(empty_builder)["id"])
+        self.assertEqual((empty["state"], empty["total"], empty["failed"]),
+                         ("completed", 0, 0))
+        with ZipFile(self.manager.download_path(empty["id"])) as archive:
+            self.assertEqual(archive.read("messages.json"), b"[]")
+
+        original_mkdir = Path.mkdir
+        def fail_job_directory(path, *args, **kwargs):
+            if path.parent == self.manager.root and len(path.name) == 20:
+                raise OSError("synthetic work directory failure")
+            return original_mkdir(path, *args, **kwargs)
+        with patch.object(Path, "mkdir", fail_job_directory):
+            failed = self.wait(self.manager.start_bundle(empty_builder)["id"])
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["error"], "OSError")
+
     def test_moments_identity_is_strict_and_manifest_never_contains_cache_paths(self):
         moment = {"resource_kind": "moment", "platform": "wechat", "account_id": "synthetic",
                   "post_id": "post-1", "media_index": 2, "variant": "live"}
