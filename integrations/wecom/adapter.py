@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import hashlib
 import heapq
 from itertools import islice
 import ntpath
@@ -115,6 +116,18 @@ class WeComAdapter:
         ]
         conversations.sort(key=lambda item: item["last_time"] or 0, reverse=True)
         return conversations[:max(0, limit)]
+
+    def conversation_avatar_buffers(self, conversation_ids) -> dict[str, bytes]:
+        if not self._loaded:
+            self.refresh()
+        reader = getattr(self.engine, "conversation_avatar_buffers", None)
+        return reader(conversation_ids) if callable(reader) else {}
+
+    @staticmethod
+    def local_avatar_url(conversation_id: str) -> str:
+        identity = "wecom\0local\0" + str(conversation_id)
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        return "hub-avatar://wecom/" + digest
 
     def contacts(self) -> list[dict[str, Any]]:
         """Return unique senders, keyed by provider sender ID."""

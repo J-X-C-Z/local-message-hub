@@ -601,6 +601,8 @@ an already-present, signature-checked local cache entry; it does not fetch
 avatars. Synthetic UI/cache tests cover these URLs and reject lookalike hosts.
 Real QQ avatar cache availability remains unverified.
 
+**P11 WeCom local conversation avatars follow-up (2026-10-15):** the sync engine now reads only the exact decrypted `Data/avatar_store_v3.db` schema from its current snapshot, requests exact `conversation_id` matches, and bounds each image to 2 MiB and each sync batch to 32 MiB. Supported image bytes are signature-checked and copied to Hub-owned storage under a local `wecom` avatar handle; no URL fetch or source write occurs. Synthetic reader, sync/cache and WebUI regressions pass. This closes local conversation-avatar acquisition for the observed schema; WeCom contact/member photo bytes, other client schemas, and real rendered UI acceptance remain open, so P11 remains `IN_PROGRESS`.
+
 ## Phase 12 - Advanced Optional Modules
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |

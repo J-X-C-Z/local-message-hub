@@ -31,6 +31,7 @@ if WORK not in sys.path:
 from .config import CONFIG_LOCK, load_local_config, local_data_dir  # noqa: E402
 from .decrypt_all import decrypt_db, PAGE_CONST          # noqa: E402
 from .extract_chat2 import best_text, CTYPE, parse_fields  # noqa: E402
+from .avatar_store import read_conversation_avatars  # noqa: E402
 
 SETTINGS = load_local_config()
 K16 = bytes.fromhex(SETTINGS['key_hex'])
@@ -864,6 +865,7 @@ class SyncEngine:
         self.content_stamp = None
         self._released_notices = None
         self._released_summary = None
+        self.decrypted_files = {}
 
     # ---- 订阅 ----
     def subscribe(self, cb):
@@ -900,6 +902,7 @@ class SyncEngine:
         t0 = time.time()
         n, snap = snapshot_live()
         decs = decrypt_snapshot(snap)
+        self.decrypted_files = decs
         if not decs:
             self.error = '未找到可解密的库（客户端可能未运行过）'
             self._emit({'type': 'status', 'error': self.error, 'ts': _now()})
@@ -1105,6 +1108,9 @@ class SyncEngine:
             self.content_cache = data
             self.content_stamp = _now()
         return data
+
+    def conversation_avatar_buffers(self, conversation_ids):
+        return read_conversation_avatars(self.decrypted_files, conversation_ids)
 
     # ---- 查询 ----
     def snapshot_messages(self):

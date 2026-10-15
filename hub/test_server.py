@@ -2458,6 +2458,12 @@ class ServerTest(unittest.TestCase):
                 return [{'conversation_id': 'room', 'name': 'Fixture',
                          'participants': 3, 'last_time': 1}]
 
+            def conversation_avatar_buffers(self, conversation_ids):
+                return {'room': b'\x89PNG\r\n\x1a\nfixture'} if 'room' in conversation_ids else {}
+
+            def local_avatar_url(self, conversation_id):
+                return 'hub-avatar://wecom/' + ('c' * 64)
+
             def iter_message_batches(self, _batch_size):
                 rows = [{'message_id': 'stable-id', 'conversation_id': 'room',
                          'sender_id': 'member', 'sender': 'Member', 'send_time': 1,
@@ -2483,6 +2489,10 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.hub.store.search('retained after source omission', platform='wecom')['total'], 1)
         message = self.hub.store.search('updated snapshot', platform='wecom')['items'][0]
         self.assertEqual(message['sender_avatar_url'], 'https://wework.qpic.cn/member.png')
+        conversation = self.hub.store.conversations('wecom')['items'][0]
+        self.assertEqual(conversation['avatar_url'], 'hub-avatar://wecom/' + ('c' * 64))
+        self.assertEqual(self.hub.fetch_avatar(conversation['avatar_url']),
+                         (b'\x89PNG\r\n\x1a\nfixture', 'image/png'))
         self.assertEqual(message['file_name'], 'picture.png')
         self.assertEqual(message['extra']['attachments'][0]['name'], 'picture.png')
         self.assertEqual(self.hub.store.contacts('wecom')['items'][0]['avatar_url'],
@@ -5347,6 +5357,15 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(self.hub._cache_local_avatar(url, payload))
         self.assertEqual(self.hub.fetch_avatar(url), (payload, 'image/png'))
         self.assertFalse(self.hub._cache_local_avatar(url, b'not an image'))
+
+    def test_local_wecom_avatar_bmp_is_cached_without_network(self):
+        url = 'hub-avatar://wecom/' + ('c' * 64)
+        payload = b'BM' + bytes.fromhex('1b000000000000001a0000000c0000000100010001000100') + b'\x00'
+        self.assertTrue(self.hub._cache_local_avatar(url, payload))
+        self.assertEqual(self.hub.fetch_avatar(url), (payload, 'image/bmp'))
+        png = b'\x89PNG\r\n\x1a\nfixture'
+        self.assertTrue(self.hub._cache_local_avatar(url, png))
+        self.assertEqual(self.hub.fetch_avatar(url), (png, 'image/png'))
 
     def test_media_range(self):
         payload = Path(self.temp.name) / 'voice.wav'

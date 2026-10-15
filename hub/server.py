@@ -56,6 +56,23 @@ MAX_SYNC_CONVERSATION_ID_LENGTH = 512
 MCP_MEDIA_MAX_BYTES = 8 * 1024 * 1024
 
 
+def _avatar_format(payload):
+    if payload.startswith(b'\xff\xd8\xff'):
+        return '.jpg', 'image/jpeg'
+    if payload.startswith(b'\x89PNG\r\n\x1a\n'):
+        return '.png', 'image/png'
+    if payload.startswith((b'GIF87a', b'GIF89a')):
+        return '.gif', 'image/gif'
+    if payload.startswith(b'RIFF') and payload[8:12] == b'WEBP':
+        return '.webp', 'image/webp'
+    if len(payload) >= 26 and payload.startswith(b'BM'):
+        pixel_offset = int.from_bytes(payload[10:14], 'little')
+        header_size = int.from_bytes(payload[14:18], 'little')
+        if header_size >= 12 and 14 + header_size <= pixel_offset <= len(payload):
+            return '.bmp', 'image/bmp'
+    return None
+
+
 def _read_cached_snapshot(path, limit, limit_error='附件超过 MCP 单次读取的 8 MiB 限制'):
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode):
@@ -1014,6 +1031,15 @@ class Hub:
         convs = [{'id': c['conversation_id'], 'title': c['name'],
                   'kind': 'group' if c['participants'] > 2 else 'direct',
                   'last_timestamp': c['last_time']} for c in provider.list_conversations(100000)]
+        avatar_buffers = getattr(provider, 'conversation_avatar_buffers', None)
+        local_avatar_url = getattr(provider, 'local_avatar_url', None)
+        if callable(avatar_buffers) and callable(local_avatar_url):
+            buffers = avatar_buffers([str(conv['id']) for conv in convs])
+            for conv in convs:
+                payload = buffers.get(str(conv['id'])) if isinstance(buffers, dict) else None
+                url = local_avatar_url(conv['id'])
+                if self._cache_local_avatar(url, payload):
+                    conv['avatar_url'] = url
         if self._sync_cancelled(cancel):
             return
         if not self._sync_ingest(cancel, 'wecom', account, convs, []):
@@ -2334,7 +2360,7 @@ class Hub:
             raise ValueError('头像地址无效')
         parsed = urlsplit(raw_url)
         allowed_hosts = {'q.qlogo.cn', 'q1.qlogo.cn', 'p.qlogo.cn', 'thirdqq.qlogo.cn', 'wx.qlogo.cn', 'wework.qpic.cn'}
-        local_avatar = (parsed.scheme == 'hub-avatar' and parsed.netloc in ('wechat', 'qq') and
+        local_avatar = (parsed.scheme == 'hub-avatar' and parsed.netloc in ('wechat', 'wecom', 'qq') and
                         re.fullmatch(r'/[a-f0-9]{64}', parsed.path) and
                         not parsed.query and not parsed.fragment)
         remote_avatar = (parsed.scheme == 'https' and parsed.hostname in allowed_hosts and
@@ -2350,20 +2376,15 @@ class Hub:
         if not cache_dir.resolve().is_relative_to(self.storage.resolve()):
             raise ValueError('头像缓存目录超出本机存储范围')
         for ext, mime in (('.jpg', 'image/jpeg'), ('.png', 'image/png'),
-                          ('.gif', 'image/gif'), ('.webp', 'image/webp')):
+                          ('.bmp', 'image/bmp'), ('.gif', 'image/gif'),
+                          ('.webp', 'image/webp')):
             path = cache_dir / (digest + ext)
             if path.is_file() and not path.is_symlink():
                 with path.open('rb') as source:
                     payload = source.read(2 * 1024 * 1024 + 1)
                 if len(payload) > 2 * 1024 * 1024:
                     raise ValueError('本机头像缓存超过 2 MiB 限制')
-                signatures = {
-                    'image/jpeg': payload.startswith(b'\xff\xd8\xff'),
-                    'image/png': payload.startswith(b'\x89PNG\r\n\x1a\n'),
-                    'image/gif': payload.startswith((b'GIF87a', b'GIF89a')),
-                    'image/webp': payload.startswith(b'RIFF') and payload[8:12] == b'WEBP',
-                }
-                if not signatures.get(mime):
+                if _avatar_format(payload) != (ext, mime):
                     raise ValueError('本机头像缓存内容校验失败')
                 return payload, mime
         raise ValueError('头像不在本机缓存中')
@@ -2376,18 +2397,15 @@ class Hub:
 
     def _cache_local_avatar(self, raw_url, payload):
         parsed = urlsplit(raw_url) if isinstance(raw_url, str) else None
-        if (parsed is None or parsed.scheme != 'hub-avatar' or parsed.netloc not in ('wechat', 'qq') or
+        if (parsed is None or parsed.scheme != 'hub-avatar' or parsed.netloc not in ('wechat', 'wecom', 'qq') or
                 not re.fullmatch(r'/[a-f0-9]{64}', parsed.path) or parsed.query or parsed.fragment or
                 not isinstance(payload, bytes) or
                 len(payload) > 2 * 1024 * 1024):
             return False
-        extension = next((ext for ext, valid in (
-            ('.jpg', payload.startswith(b'\xff\xd8\xff')),
-            ('.png', payload.startswith(b'\x89PNG\r\n\x1a\n')),
-            ('.gif', payload.startswith((b'GIF87a', b'GIF89a'))),
-            ('.webp', payload.startswith(b'RIFF') and payload[8:12] == b'WEBP')) if valid), None)
-        if extension is None:
+        image_format = _avatar_format(payload)
+        if image_format is None:
             return False
+        extension, _mime = image_format
         cache_dir = self.storage / 'avatars'
         temporary = None
         try:
@@ -2402,6 +2420,13 @@ class Hub:
             with temporary.open('xb') as target:
                 target.write(payload)
             os.replace(temporary, destination)
+            for stale_extension in ('.jpg', '.png', '.bmp', '.gif', '.webp'):
+                stale = cache_dir / (digest + stale_extension)
+                if stale_extension != extension:
+                    try:
+                        stale.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             return True
         except OSError:
             if temporary is not None:

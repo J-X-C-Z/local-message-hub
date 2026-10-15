@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-10-15 - P11 WeCom Local Conversation Avatars
+
+- Added read-only extraction of WeCom conversation avatar blobs from the exact
+  `Data/avatar_store_v3.db` snapshot schema and exact `conversation_id` matches.
+  Reads are capped at 2 MiB per image and 32 MiB per sync; the Hub validates
+  image signatures and stores accepted bytes in its own local avatar cache.
+- The WebUI now accepts the local WeCom avatar handle. No remote image request
+  is made, and WeCom source databases remain read-only. Focused schema, sync,
+  cache, offline-serving, and render regressions pass.
+- Other client schemas, contact/member photo bytes, and real visual acceptance
+  remain open.
+
 ## 2026-10-15 - P14 Package Refresh After P11 Media Changes
 
 - Rebuilt the Windows portable package (9,783 files; 586,789,162 bytes) and

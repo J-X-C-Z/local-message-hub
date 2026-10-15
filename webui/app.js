@@ -48,7 +48,7 @@ const avatarCacheUrl = value => {
   const raw = String(value || '');
   if (/^\/api\/avatar(?:\?|$)/.test(raw)) return raw;
   if (!raw || raw.length > 2048 || raw !== raw.trim()) return '';
-  if (/^hub-avatar:\/\/(?:wechat|qq)\/[a-f0-9]{64}$/.test(raw)) {
+  if (/^hub-avatar:\/\/(?:wechat|wecom|qq)\/[a-f0-9]{64}$/.test(raw)) {
     return '/api/avatar?url=' + encodeURIComponent(raw);
   }
   try {
