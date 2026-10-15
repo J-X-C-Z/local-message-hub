@@ -8209,6 +8209,30 @@ key is absent.
   (roadmap branch). These runs predate the `.thumb.dat` source change above;
   P14 remains in progress for the current worktree.
 
+## 2026-10-15 - P14 Verification for Small Cached Originals
+
+- Application commit `13597f1b0061380d2d383d99d0e18e689e5fd27e` passed the full
+  hosted Windows workflow on `main` (run `38666599984`) and the roadmap branch
+  (run `38666600073`). Both completed Hub checks, portable/source package builds
+  and smokes, provenance checks, artifact upload/download, and downloaded-byte
+  verification.
+- The uploaded artifact digests matched the downloaded bytes. Artifacts
+  `11942167003` (`main`, 251,816,391 bytes, SHA-256
+  `95c4cf0de487a851aadf3b9210fb6b704bb9a378f90d59465d6c1f285f1ee51a`) and
+  `11942112349` (roadmap branch, 251,814,248 bytes, SHA-256
+  `52434498ee70dd6f9b68d7d5cc203cc0094de9d51a6a0dd8aff5b249a943b769`) are
+  retained through 2026-10-22.
+
+## 2026-10-15 - P11 Unindexed WeChat Media Gap
+
+- The unified media library currently indexes Hub messages and cannot list
+  source-database media that has not been synced. The source bulk lookup only
+  returns local IDs; completing list, preview, and ZIP export requires a stable
+  account/conversation/shard/local-ID identity and consistent deduplication and
+  pagination across those paths. No partial API or UI was added.
+- P11 remains open for this gap, full WeFlow media/decryption parity, and
+  real-account cache acceptance.
+
 **2026-10-15 P11 small original cache selection:** WeFlow classifies `_h`,
 `.h`, `_hd`, and `.hd` files as HD image tiers without a minimum file-size
 rule. Hub cached selection now structurally validates decrypted originals
