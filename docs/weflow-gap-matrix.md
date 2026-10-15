@@ -23,6 +23,12 @@ P11 本机头像读取补充：微信 `head_image` 表存在同一 username 的�
 同日，QQ 全局缓存图库的可见图片卡片加入账号绑定的不透明资源 ID 懒加载预览，
 复用现有并发限制、同源缓存 token 和翻页取消。真实 QQ 缓存格式与设备覆盖仍待验收。
 
+2026-10-15 更新：会话导出现在可选把所选消息格式与已索引且能从本机解析的媒体
+放入同一个可取消 ZIP；受 100 项、单项 50 MiB、总量 512 MiB 限制，清单记录缺失媒体，
+不包含缓存路径或临时 URL。QQ 只读 Hub 已有缓存。此功能不扩展到未索引源资源、朋友圈
+目录或 QQ 全局图库，完整 WeFlow 资源 parity 仍未完成。代码修订 `899ba14` 的本地与双分支
+Windows 门禁、打包及 artifact 往返验收均通过。
+
 | 功能 | WeFlow 上游入口 | Hub 当前实现与状态 | 复用/适配方向 | 验收方法 |
 |---|---|---|---|---|
 | 会话、消息浏览与条件搜索 | `src/pages/ChatPage.tsx`、`electron/services/chatService.ts` | `hub/store.py`、`hub/server.py`、`webui/app.js`；三平台统一索引、分页、过滤及跨平台搜索；搜索结果的会话头像优先使用会话行字段，缺失时按精确平台/账号/会话 ID 回退到联系人头像；微信引用消息可用精确来源 `server_id` 跳转到同账号、同会话内唯一匹配的原消息，并在对应本地媒体缓存存在时以内联预览呈现图片/视频/语音；跨账号、歧义、缺失缓存保持占位，**已实现** | 保持 Hub 规范模型和三平台适配器，不接入 WeFlow 主进程；头像仍只经本机已有缓存提供 | 合成数据覆盖三平台、同 ID 碰撞、分页/筛选/上下文和 UI API；搜索头像覆盖联系人回退、会话头像优先级与跨账号隔离；微信引用跳转覆盖来源 ID 精确匹配、同账号/会话隔离与歧义拒绝；引用媒体覆盖唯一来源匹配、缓存缺失占位及本地同源 URL |
@@ -34,7 +40,7 @@ P11 本机头像读取补充：微信 `head_image` 表存在同一 username 的�
 | 群聊统计与成员画像 | `src/pages/AnalyticsPage.tsx`、`electron/services/chatService.ts` | `/api/analytics/groups`、WebUI 成员排行；区分 roster 人数与索引中观察人数，**已实现** | 当前观察到的消息发送者画像；不推断缺失成员活动 | `hub.test_analytics` 覆盖排序、联系人显示名与自发消息 |
 | 年度报告 | `src/pages/AnnualReportPage.tsx`、`electron/services/annualReportService.ts` | `/api/reports/annual`、WebUI 年度标签；含月/时/类型、星期×小时活跃热图、最长连续活跃日期及年度边界；CSV 包含界面报告数据，**本机索引子集已实现** | 统一索引、UTC+08 日历边界，允许平台/账号/会话范围；全时间报表仅聚合已活跃日期 | `hub.test_analytics` 覆盖范围/时区/连续日，HTTP API、热图/连续日 CSV 与 WebUI 渲染断言 |
 | 双人报告 | `src/pages/DualReportPage.tsx`、`electron/services/dualReportService.ts` | `/api/reports/pair` 与会话画像入口；按平台/账号/会话隔离，**已实现** | 不跨平台或账号合并身份；缺少接收者 ID 的历史数据以消息发送者派生对象 | 合成双向对话、日期范围与不存在会话 HTTP 404 测试 |
-| 聊天记录多格式导出 | `electron/services/export/` 下 `ExportOrchestrator.ts`、`formatters/`；UI `src/pages/Export/` | `hub/exports.py` 和统一 API/UI 支持 JSON、CSV、Markdown、TXT、HTML、XLSX、SQL、ChatLab JSON/JSONL，**格式覆盖已实现** | Hub 自有标准库 renderer；ChatLab envelope 参考上游语义，不复制 WeFlow formatter 源码 | `hub.test_store` 覆盖 Unicode、来源身份、公式注入、HTML 转义与 SQL 隔离 |
+| 聊天记录多格式导出 | `electron/services/export/` 下 `ExportOrchestrator.ts`、`formatters/`；UI `src/pages/Export/` | `hub/exports.py` 和统一 API/UI 支持 JSON、CSV、Markdown、TXT、HTML、XLSX、SQL、ChatLab JSON/JSONL；导出对话时可选把所选格式和本机已解析的 indexed 媒体一起打包，**格式覆盖已实现，本机解析媒体随会话导出已实现** | Hub 自有标准库 renderer；ChatLab envelope 参考上游语义，不复制 WeFlow formatter 源码；媒体仍走各平台本机 resolver，QQ 只用 Hub 已缓存文件 | `hub.test_store` 覆盖 Unicode、来源身份、公式注入、HTML 转义与 SQL 隔离；bundle 测试覆盖身份清单、缺失项、能力关闭、100 项/大小限制、取消和不发布部分压缩包；完整资源 parity 与真实缓存仍待验收 |
 | 自动化/批量导出 | `src/pages/Export/components/Automation/`、`src/pages/Export/hooks/useAutomation.ts`、`electron/exportWorker.ts` | `hub/auto_export.py`、设置页与受 capability 保护的 API；支持本机目录、间隔/平台/格式、立即运行、取消、原子输出、重启恢复和单次 250,000 条上限，**本地合成范围已实现** | 使用 Hub 统一索引和现有导出 renderer；关闭模块会停止任务，不接触源平台数据库 | `hub.test_auto_export` 与 `hub.test_server` 覆盖持久化、gate、格式、取消、大小限制及本机输出 |
 | 朋友圈浏览、搜索、导出 | `src/pages/SnsPage.tsx`、`electron/services/snsService.ts` | `integrations/wechat/moments.py` 对识别的本机 `SnsTimeLine` schema 做有界只读解析；独立 capability 控制 HTTP、MCP 和 WebUI，支持作者/正文/评论/日期筛选、分页及全量筛选 JSON/CSV/Markdown/TXT/HTML 导出，搜索不匹配用户名或媒体 URL，**部分实现**。作者头像仅从精确匹配的 `wechat + account_id + username` 联系人索引读取，再经同源缓存代理显示；不从 Moments XML 猜 URL，也不请求网络。WeFlow 兼容缓存 resolver 只读已有文件，校验图片/视频签名和缓存目录边界，包含 Live Photo；UI 通过同源短期 token 显示/播放，MCP 只在显式调用时返回 <=8 MiB 的缓存图片或 MP4/WebM 视频（视频以嵌入式 resource 返回）；不抓取远程媒体。评论 `refCommentId` 对应关系显示为转义的回复作者标签；悬空引用按普通评论渲染。合成账号隔离及 UI 测试通过；真实账号 schema、头像和真实缓存仍未验收 | 保留 Moments 独立模型，不伪装成聊天消息；头像仅复用已索引、同账号联系人并走本机代理；不抓取远程媒体 | 合成 SQLite/XML 覆盖筛选、多格式全量导出、互动/地点保留、评论回复及缺失引用、HTML 转义、CSV/HTML 注入防护、媒体凭证剥离、缓存 URL 规范化、签名/符号链接拒绝、MCP 显式图片/视频回传和 capability gate、Live Photo UI；头像覆盖同账号命中/跨账号与缺失回退；另需真实 schema 与缓存的用户验收 |
 | 朋友圈防删/隐藏拦截 | `src/pages/SnsPage.tsx`、`electron/main.ts` `sns:installBlockDeleteTrigger` IPC | Hub 无对应功能，**不适合直接移植** | 属于源客户端行为拦截与数据库副作用；需单独安全、合规、备份审查，不能跟普通浏览开关捆绑 | 不进入常规对齐验收；只有独立批准和隔离数据库测试后再决定 |
