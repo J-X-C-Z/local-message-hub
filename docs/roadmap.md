@@ -770,7 +770,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Source commit `30250bf3edd9273f7b21c1e734ba2313c3cce18b` passed both hosted Windows runs: `38661876945` on `main` and `38661876852` on the roadmap branch. Both passed Hub checks, Windows portable/source builds and smokes, deterministic manifest checks, artifact upload/download, and downloaded-byte/provenance verification. Artifacts `11939054856` (251,813,951 bytes, SHA-256 `bba03131297e5931a3f30debe8009d736904b7a56cbfe25a6b979d886532f98f`) and `11939950904` (251,813,602 bytes, SHA-256 `a8abfce4f7014c3467223a977b1e9917a4fde8677e9e1fd93873bed6d70533a0`) expire 2026-10-22. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Documentation commit `49a2fc6791fd52ea40ebac493d20c6206b43ba6b` passed both hosted Windows runs: `38663589850` on `main` and `38663612455` on the roadmap branch. Both completed Hub checks, portable/source builds and smokes, deterministic manifest checks, artifact upload/download, and downloaded-byte/provenance verification. Artifacts `LocalMessageHub-windows-release` have SHA-256 `9570968be452e1844d59e8a023319426d4f7e09493e652b884d8c872e7507fd1` (`main`) and `3e2410bbce8b4becba84deb1f0b759e3715e40896e15afdfca5c1931441f80de` (roadmap branch). This verifies commit `49a2fc6`, not subsequent uncommitted source changes. | IN_PROGRESS |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects
@@ -3920,3 +3920,9 @@ granted. Minimizing the automated Edge window still left the app page reporting
 `document.hidden == false`, so the notification creation path was not exercised.
 No Windows toast or operating-system click is claimed; P12-01 remains
 `IN_PROGRESS` pending a genuine background-window acceptance.
+
+**P11 WeChat cached thumbnail suffix (2026-10-15):** the image cache resolver
+now recognizes `.thumb.dat` as a thumbnail, matching the pinned WeFlow image
+cache tier logic. This affects only local cache selection; unknown `_b/.b/_w/.w/_c/.c`
+variants remain unclassified. Focused synthetic verification is recorded in
+the development log; real-cache coverage remains open.

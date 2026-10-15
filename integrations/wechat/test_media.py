@@ -186,7 +186,7 @@ class MediaTests(unittest.TestCase):
             image_dir.mkdir(parents=True)
             variants = {
                 "original": ("_h.dat", ".h.dat", "_hd.dat", ".hd.dat"),
-                "thumb": ("_t.dat", ".t.dat", "_thumb.dat"),
+                "thumb": ("_t.dat", ".t.dat", "_thumb.dat", ".thumb.dat"),
             }
             for tier, suffixes in variants.items():
                 for suffix in suffixes:
@@ -199,7 +199,7 @@ class MediaTests(unittest.TestCase):
             for candidate in image_dir.glob(f"{md5}*"):
                 candidate.unlink()
             for tier, suffixes in variants.items():
-                sizes = (2046, 2045, 2048, 2047) if tier == "original" else (100, 102, 101)
+                sizes = (2046, 2045, 2048, 2047) if tier == "original" else (100, 102, 101, 99)
                 for suffix, size in zip(suffixes, sizes):
                     (image_dir / f"{md5}{suffix}").write_bytes(b"x" * size)
             (image_dir / f"{md5}.dat").write_bytes(b"mid")
@@ -220,6 +220,18 @@ class MediaTests(unittest.TestCase):
                 thumb = downloader.download_image("fixture", 7, tier="thumb")
                 decrypt.assert_called_with(str((image_dir / f"{md5}.t.dat").resolve()), None, None)
             self.assertTrue(best.endswith("fixture_7_h.jpg"))
+            self.assertTrue(thumb.endswith("fixture_7_thumb.jpg"))
+
+            for candidate in image_dir.glob(f"{md5}*"):
+                candidate.unlink()
+            thumb_variant = image_dir / f"{md5}.thumb.dat"
+            thumb_variant.write_bytes(b"synthetic-thumb")
+            with patch.object(downloader, "decrypt_image", return_value=decoded) as decrypt:
+                best = downloader.download_image("fixture", 7, tier="best")
+                self.assertEqual(decrypt.call_args.args[0], str(thumb_variant.resolve()))
+                thumb = downloader.download_image("fixture", 7, tier="thumb")
+                self.assertEqual(decrypt.call_args.args[0], str(thumb_variant.resolve()))
+            self.assertTrue(best.endswith("fixture_7_thumb.jpg"))
             self.assertTrue(thumb.endswith("fixture_7_thumb.jpg"))
 
             for candidate in image_dir.glob(f"{md5}*"):

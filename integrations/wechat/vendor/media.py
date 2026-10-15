@@ -551,7 +551,7 @@ class MediaDownloader:
             for tier, suffixes in (
                 ("original", ("_h.dat", ".h.dat", "_hd.dat", ".hd.dat")),
                 ("mid", (".dat",)),
-                ("thumb", ("_t.dat", ".t.dat", "_thumb.dat")),
+                ("thumb", ("_t.dat", ".t.dat", "_thumb.dat", ".thumb.dat")),
                 ("candidate", candidate_suffixes),
             )
             for suffix in suffixes

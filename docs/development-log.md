@@ -8186,3 +8186,25 @@ key is absent.
 - Minimizing the automated Edge window still reported the app page as visible,
   so no event was injected and no Windows toast or operating-system click is
   claimed. P12-01 remains open for genuine background-window acceptance.
+
+## 2026-10-15 - WeChat Cached Thumbnail Variant
+
+- The WeChat image resolver now recognizes `.thumb.dat` as a thumbnail, in
+  line with the repository's pinned WeFlow `ImageDecryptService` tier mapping.
+  It remains a read-only candidate under the existing account-root and symlink
+  checks. Unknown `_b/.b/_w/.w/_c/.c` variants remain unclassified.
+- The existing synthetic resolver test now checks this suffix, explicit
+  thumbnail selection, and `best` fallback. Real-account cache acceptance
+  remains open; hosted package checks on the subsequent source revision are
+  required for P14.
+
+## 2026-10-15 - P14 Documentation Commit Verification
+
+- Documentation commit `49a2fc6791fd52ea40ebac493d20c6206b43ba6b` passed the
+  full hosted Windows gate on `main` (run `38663589850`) and the roadmap branch
+  (run `38663612455`). Both workflows report success and show the portable
+  release artifact digest after upload and downloaded-byte verification.
+- Artifact SHA-256 values are `9570968be452e1844d59e8a023319426d4f7e09493e652b884d8c872e7507fd1`
+  (`main`) and `3e2410bbce8b4becba84deb1f0b759e3715e40896e15afdfca5c1931441f80de`
+  (roadmap branch). These runs predate the `.thumb.dat` source change above;
+  P14 remains in progress for the current worktree.
