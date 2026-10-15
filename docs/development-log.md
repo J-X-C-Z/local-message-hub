@@ -8273,3 +8273,17 @@ passed (1 test); the full WeChat media module passed 61 tests and
 - Focused regressions passed (2 tests), including simulated post-stat growth;
   `git diff --check` passed. No real media cache was accessed. Full resource and
   decryption parity remains open.
+
+## 2026-10-15 - P14 Hosted Acceptance for d61c086
+
+- Commit `d61c08696fcc41bb333343068ae3ed30f0f98a3a` passed both full hosted
+  Windows workflows: `38671025839` on `main` and `38671026098` on the roadmap
+  branch. Hub checks, portable/source package builds, provenance manifests,
+  artifact download, and downloaded-byte/provenance verification all passed.
+- The `main` release artifact is 251,849,201 bytes with SHA-256
+  `183bac524c1247cd3328bf903d279d7f949d2f66a4901cf0e8845018f2871f4d`; the
+  roadmap artifact is 251,847,714 bytes with SHA-256
+  `618ead63b359bd92d0938329bd6b3571e6ad1b4ad8446687ded18bfe6daa8d36`.
+  Both expire 2026-10-22. This verifies application commit `d61c086`; the
+  documentation update is followed by a package run so the source artifact
+  contains this acceptance record.
