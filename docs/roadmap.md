@@ -851,7 +851,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Latest hosted acceptance is commit `c424fdd4a1601fa77fb43f698efe7d24aee42341`: run `38750963688` on `main` and `38750980409` on `codex/roadmap-p8-p14-20261014` both passed local hub checks, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. The `main` artifact (`11981748188`) is 251,955,476 bytes, SHA-256 `b3df9e74a670e852e9c0e71c1d8db05fac0a4f07512c9b3d20876a3014ad6ac0`; roadmap artifact (`11982382739`) is 251,955,030 bytes, SHA-256 `7d3ccb3b5a9e02bf27d5eeb54119bf20e00c48a4d0c5c0f1ac2b35b22348bac2`. Both are retained through 2026-10-22. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Latest hosted acceptance is commit `899ba14f42ad70cc5b097c4b42d10a90faa9d35d`: run `38759795335` on `main` and `38759795133` on `codex/roadmap-p8-p14-20261014` both passed local hub checks, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. The `main` artifact (`11986561145`) is 251,958,893 bytes, SHA-256 `5f47a8da29f040d1a66e9c5c3198d9750df86eb9ade2b2cb876666e9d3f9c09d`; roadmap artifact (`11986111205`) is 251,957,719 bytes, SHA-256 `cf72ec9e5ffa0e6b947133b98d4bf8ff3f43c70f9f233d9ea549bbcd448a97b1`. Both are retained through 2026-10-22. | DONE |
 
 **P11 unindexed WeChat source media (2026-10-15):** the media library can
 optionally list media rows directly from the local read-only WeChat database
@@ -869,16 +869,15 @@ ZIP request revalidates the exact source row, extracts only its bounded emoji
 cache key server-side, and resolves within the existing account-scoped local
 cache. The list remains metadata-only; hashes and source paths are not returned.
 
-**P14 current-worktree status (2026-10-15):** hosted Windows acceptance covers
-commit `c424fdd4a1601fa77fb43f698efe7d24aee42341` on both public branches (runs
-`38750963688` and `38750980409`); it does not cover the current uncommitted
-bundle changes. The current worktree passed the full local gate (852 Python
-tests, five source-mutation gates, 32 WebUI checks, package privacy/smoke/
-determinism checks, and the 25,000-message benchmark). Timings were 1.364 s
-ingest, 0.029 s first search, 1.851 s for 50 cursor pages, 0.088 s backup, and
-0.241 s restore, with zero WAL failures. Hosted CI and artifact transfer for
-the current changes remain open; P14 is complete for `c424fdd` and pending for
-the uncommitted worktree.
+**P14 current-worktree status (2026-10-15):** commit
+`899ba14f42ad70cc5b097c4b42d10a90faa9d35d` passed hosted Windows acceptance on
+both public branches (runs `38759795335` and `38759795133`), including the P11-02
+session media bundle. The local full gate passed 852 Python tests, five
+source-mutation gates, 32 WebUI checks, package privacy/smoke/determinism checks,
+and the 25,000-message benchmark. Timings were 1.364 s ingest, 0.029 s first
+search, 1.851 s for 50 cursor pages, 0.088 s backup, and 0.241 s restore, with
+zero WAL failures. Both uploaded artifacts passed downloaded-byte and
+provenance verification; P14 is `DONE` for this code revision.
 
 **P12-01 desktop-notification result (2026-10-15):** the user did not see the
 isolated synthetic notification. The probe had not actually moved Edge into a
@@ -1069,9 +1068,9 @@ current modified worktree. The current P11-02 bundle changes pass six focused
 Python tests and the WebUI export contract. The full current-worktree gate has
 since passed 852 Python tests, five source-mutation gates, 32 WebUI checks,
 package privacy/smoke/determinism checks, and the 25,000-message benchmark;
-hosted CI for base commit `c424fdd4a1601fa77fb43f698efe7d24aee42341` passed on
-both public branches; it does not cover the local bundle edits. Real
-QQ/WeChat/WeCom delivery, current Windows Toast
+hosted CI for commit `899ba14f42ad70cc5b097c4b42d10a90faa9d35d` passed on both
+public branches, including the local bundle edits. Real QQ/WeChat/WeCom
+delivery, current Windows Toast
 display, full media/cache parity, and inspectable P12 native mutation acceptance
 remain open. After this gate, the synthetic WeChat voice test was isolated to a
 temporary runtime to prevent repository cache output; its targeted test passes,

@@ -8761,3 +8761,19 @@ passed (1 test); the full WeChat media module passed 61 tests and
   `7d3ccb3b5a9e02bf27d5eeb54119bf20e00c48a4d0c5c0f1ac2b35b22348bac2`.
   Both are retained through 2026-10-22.
 - These hosted runs do not include the current uncommitted P11-02 bundle work.
+
+## 2026-10-15 - P11-02 Bundle Hosted Acceptance
+
+- Commit `899ba14f42ad70cc5b097c4b42d10a90faa9d35d` passed hosted Windows
+  workflows on `main` (`38759795335`) and
+  `codex/roadmap-p8-p14-20261014` (`38759795133`). Both completed the full
+  local check gate, portable/source builds, privacy and deterministic-manifest
+  checks, artifact upload/download, and downloaded-byte/provenance verification.
+- The `main` artifact (`11986561145`) is 251,958,893 bytes with SHA-256
+  `5f47a8da29f040d1a66e9c5c3198d9750df86eb9ade2b2cb876666e9d3f9c09d`;
+  the roadmap artifact (`11986111205`) is 251,957,719 bytes with SHA-256
+  `cf72ec9e5ffa0e6b947133b98d4bf8ff3f43c70f9f233d9ea549bbcd448a97b1`.
+  Both are retained through 2026-10-22.
+- This verifies P14 for the P11-02 bundle code revision. P9/P13 real sends,
+  P11 real-cache breadth, P12-01 visible toast delivery, and P12-03/04 native
+  mutation remain open.
