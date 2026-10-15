@@ -8162,3 +8162,27 @@ key is absent.
   test, and `git diff --check` pass. No credentials or deliveries were used.
 - The remote Windows runs for commit `247970d4433939c7a12daccd03421afe12175dde`
   predate this local change and do not validate it.
+
+## 2026-10-15 - P14 Verification for Credential Revocation Commit
+
+- Commit `30250bf3edd9273f7b21c1e734ba2313c3cce18b` passed the full hosted
+  Windows workflow on both branches: run `38661876945` (`main`) and run
+  `38661876852` (`codex/roadmap-p8-p14-20261014`). Both completed Hub checks,
+  portable/source package builds and smokes, manifest verification, artifact
+  upload/download, and downloaded-byte/provenance verification.
+- Artifacts `11939054856` (251,813,951 bytes, SHA-256
+  `bba03131297e5931a3f30debe8009d736904b7a56cbfe25a6b979d886532f98f`) and
+  `11939950904` (251,813,602 bytes, SHA-256
+  `a8abfce4f7014c3467223a977b1e9917a4fde8677e9e1fd93873bed6d70533a0`)
+  are retained through 2026-10-22.
+- P14 is verified for this application source commit. Real P9/P13 delivery,
+  P11 full cache/resource parity, P12 live desktop notifications, and P12-03/04
+  inspectable native source and isolated mutation acceptance remain open.
+
+## 2026-10-15 - P12 Desktop Notification Probe
+
+- An isolated Hub and Edge profile used only synthetic records; the browser
+  permission was granted and the notification capability was enabled.
+- Minimizing the automated Edge window still reported the app page as visible,
+  so no event was injected and no Windows toast or operating-system click is
+  claimed. P12-01 remains open for genuine background-window acceptance.

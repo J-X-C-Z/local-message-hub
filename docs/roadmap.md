@@ -770,7 +770,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Current source commit `4cc78d84df63332671e236924ae0faaaa4787bd4` passed both hosted Windows runs: `38653812597` on `main` and `38653812391` on the roadmap branch. Their release artifacts (`11936560661`, `11936965667`) passed upload/download byte and provenance verification; sizes were 251,796,135 and 251,795,526 bytes. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Source commit `30250bf3edd9273f7b21c1e734ba2313c3cce18b` passed both hosted Windows runs: `38661876945` on `main` and `38661876852` on the roadmap branch. Both passed Hub checks, Windows portable/source builds and smokes, deterministic manifest checks, artifact upload/download, and downloaded-byte/provenance verification. Artifacts `11939054856` (251,813,951 bytes, SHA-256 `bba03131297e5931a3f30debe8009d736904b7a56cbfe25a6b979d886532f98f`) and `11939950904` (251,813,602 bytes, SHA-256 `a8abfce4f7014c3467223a977b1e9917a4fde8677e9e1fd93873bed6d70533a0`) expire 2026-10-22. | DONE |
 
 **Hosted P14 checkpoint (2026-10-14):** Run 38544901625 passed the GCC
 installation step and failed at `npm ci` because strict peer resolution rejects
@@ -3913,3 +3913,10 @@ credential read/write and all send APIs behind the send capability, preserves
 the account-lock gate, and invalidates only WeCom approval challenges. Focused
 HTTP and WebUI regressions pass. Real bot authorization and delivery remain
 open; P13-01 stays `IN_PROGRESS`.
+
+**P12-01 desktop notification probe (2026-10-15):** an isolated Hub and Edge
+profile used only synthetic records, and browser notification permission was
+granted. Minimizing the automated Edge window still left the app page reporting
+`document.hidden == false`, so the notification creation path was not exercised.
+No Windows toast or operating-system click is claimed; P12-01 remains
+`IN_PROGRESS` pending a genuine background-window acceptance.
