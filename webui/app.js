@@ -1745,7 +1745,7 @@ function syncNotificationStream() {
     if (!document.hidden) return;
     const notification = new Notification('本地消息整合中枢', {
       body: `${platforms[message.platform]?.name || '聊天平台'} · 收到一条新消息`,
-      tag: `lmh-${message.platform}-${message.account_id}-${message.conversation_id}`,
+      tag: notificationTag(message),
       silent: notificationFilters().style === 'silent'
     });
     notification.onclick = () => {
@@ -1759,6 +1759,12 @@ function syncNotificationStream() {
       renderShell();loadView();
     };
   });
+}
+const notificationTags = new Map();
+function notificationTag(message) {
+  const identity = JSON.stringify([message.platform, message.account_id, message.conversation_id]);
+  if (!notificationTags.has(identity)) notificationTags.set(identity, crypto.randomUUID());
+  return `lmh-${notificationTags.get(identity)}`;
 }
 function notificationAllowsMessage(message) {
   if (!message || !platforms[message.platform] ||

@@ -16,6 +16,7 @@ const dispatch = (target, name) => {
   for (const callback of target.get(name) || []) callback();
 };
 const notifications = [];
+let generatedTag = 0;
 let eventSource;
 let focused = false;
 let rendered = false;
@@ -33,6 +34,7 @@ class NotificationMock {
 }
 const context = {
   URL,
+  crypto: {randomUUID: () => `opaque-notification-tag-${++generatedTag}`},
   Notification: NotificationMock,
   localStorage: {getItem: () => 'light'},
   document: {hidden: true, addEventListener: (name, callback) => rememberListener(documentListeners, name, callback),
@@ -82,7 +84,10 @@ deliverEvent();
 
 assert.equal(notifications.length, 1);
 assert.equal(notifications[0].options.body, '企业微信 · 收到一条新消息');
+assert.match(notifications[0].options.tag, /^lmh-opaque-notification-tag-/);
+assert.doesNotMatch(notifications[0].options.tag, /account-42|room-7/);
 assert.doesNotMatch(JSON.stringify([notifications[0].title, notifications[0].options]), /PRIVATE_MESSAGE_BODY_MUST_NOT_APPEAR/);
+const firstTag = notifications[0].options.tag;
 notifications[0].onclick();
 assert.equal(state.view, 'chat');
 assert.equal(state.platform, 'wecom');
@@ -97,6 +102,7 @@ assert.equal(notifications[0].closed, true);
 
 deliverEvent();
 assert.equal(notifications.length, 2);
+assert.equal(notifications[1].options.tag, firstTag, 'the same conversation reuses its opaque OS notification tag');
 state.view = 'contacts';
 const selectedBeforeLock = JSON.parse(JSON.stringify(state.selected));
 let lockReloads = 0;

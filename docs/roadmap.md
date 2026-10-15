@@ -3891,3 +3891,17 @@ roadmap branch (run `38648954782`, artifact `11933702889`, 251,795,340 bytes,
 SHA-256 `53a5e8f07325c4d3d055931570c3cb2f25570642f85d89c24a14d9b3d409fe57`).
 Both artifacts expire 2026-10-21. The final documentation correction below is
 followed by one more package run so the source bundle contains this record.
+
+**P12-01 notification metadata follow-up (2026-10-15):** operating-system
+notification tags now use an opaque random ID retained in page memory for each
+exact platform/account/conversation tuple. This keeps same-page notification
+grouping and click routing while keeping raw account and conversation IDs out
+of OS notification metadata. The focused WebUI notification regression passes;
+real desktop delivery and native acceptance remain open, so P12-01 stays
+`IN_PROGRESS`.
+
+**P14 current source checkpoint (2026-10-15):** previous hosted success applies
+to its recorded commit only. The sanitized source commit
+`f5ffedcca788c2bc7e0256b75b19d5b7264475b1` has Windows runs `38658744084`
+(`main`) and `38658743704` (roadmap branch) in progress; P14 remains
+`IN_PROGRESS` until both package/artifact gates complete.

@@ -8136,3 +8136,17 @@ key is absent.
   real-account delivery, P11 complete real-cache/media parity, P12 visible
   desktop notification acceptance, and P12-03/04 inspectable native
   implementation and isolated mutation/rollback acceptance remain open.
+
+## 2026-10-15 - Opaque Desktop Notification Tags
+
+- Browser notifications now receive an opaque random tag keyed to the exact
+  platform/account/conversation tuple in page memory. Repeated messages from a
+  conversation retain OS notification grouping, while account and conversation
+  IDs remain available only to the in-page click handler.
+- `node webui/test-notification-click-target.cjs` and `git diff --check` pass.
+  The check verifies tag opacity, reuse for the same conversation, click
+  routing, and body-free notification content. Real desktop delivery remains
+  unverified.
+- The current source commit `f5ffedcca788c2bc7e0256b75b19d5b7264475b1` has
+  Windows runs `38658744084` (`main`) and `38658743704` (roadmap branch) in
+  progress. They predate this local change and do not validate it.
