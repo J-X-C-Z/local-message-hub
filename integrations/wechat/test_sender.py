@@ -23,11 +23,12 @@ class FakeGrab:
 class FakeWin32:
     """Stand-in for the Win32 layer that records every input it was asked to send."""
 
-    def __init__(self, windows=(), grab=None, locked=False):
+    def __init__(self, windows=(), grab=None, locked=False, login_handle=None):
         self.windows = list(windows)
         self.sizes = {9: (760, 560), 10: (760, 560), 11: (760, 560)}
         self.grab_object = grab or FakeGrab()
         self.locked = locked
+        self.login_handle = login_handle
         self.clipboard = None
         self.unicode_inputs = []
         self.keys = []
@@ -42,6 +43,10 @@ class FakeWin32:
             if _cls == WINDOW_CLASS and title in MAIN_WINDOW_TITLES:
                 return handle
         return None
+
+    def login_window(self, handles):
+        """Synthetic stand-in for the read-only UI Automation login probe."""
+        return self.login_handle if self.login_handle in handles else None
 
     def size_of(self, handle):
         return self.sizes.get(handle, (0, 0))
@@ -418,6 +423,15 @@ class WeChatSenderTest(unittest.TestCase):
         self.assertEqual(result["state"], "ready")
         self.win32.windows = []
         self.assertEqual(self.sender.readiness()["state"], "window_not_found")
+
+    def test_readiness_fails_closed_while_the_client_is_signed_out(self):
+        """A signed-out client keeps its window and cached keys, so cached
+        account identity must not be reported as a usable send client."""
+        self.win32.login_handle = 7
+        result = self.sender.readiness()
+        self.assertEqual(result["state"], "client_logged_out")
+        self.assertTrue(result["window_found"])
+        self.assertIsNone(result["account_id"])
 
     def test_locked_desktop_reports_not_ready(self):
         self.win32.locked = True

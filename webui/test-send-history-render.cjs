@@ -213,6 +213,8 @@ for (const [platform, label] of [['qq', '准备 QQ 文本发送'], ['wecom', '�
   assert.match(settingsHtml, /发送前需打开并唯一识别目标会话/);
   context.__state.wechatSendReadiness = {state: 'window_not_found', input_available: true};
   assert.match(context.__renderSettingsBase(), /未找到微信窗口/);
+  context.__state.wechatSendReadiness = {state: 'client_logged_out', input_available: true};
+  assert.match(context.__renderSettingsBase(), /微信客户端未登录，请先在这台电脑上登录/);
   context.__state.wechatSendReadiness = null;
   context.__state.settings.capabilities.wechat_send = {available: true, enabled: false};
   assert.match(context.__renderSettingsBase(), /发送功能已关闭/);

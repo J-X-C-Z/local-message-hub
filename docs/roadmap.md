@@ -4287,3 +4287,22 @@ achievements now exclude WeChat sticker codes 47/11000 while preserving legacy
 NULL-type images and WeCom/QQ attachment counts. Five focused synthetic checks
 passed. Real-cache breadth and complete WeFlow media parity remain open, so
 P11-01 stays `IN_PROGRESS`.
+
+**P13 WeChat signed-out readiness follow-up (2026-10-16):** readiness now
+checks the visible Weixin UI Automation class before trusting the cached local
+account key; `mmui::LoginWindow` reports `client_logged_out`. The read-only
+probe was exercised against the current signed-out Weixin window and returned
+that class without exposing an account identifier. COM initialization and
+VARIANT cleanup are paired. Focused sender (28) and WebUI (1) tests passed.
+This does not wire the manual UI Automation send into the prepared-send adapter
+or prove automatic delivery; P13-01 remains `IN_PROGRESS`.
+
+**P14 hosted acceptance for current code (2026-10-16):** commit
+`f98f05e1474cb2d3c67a9f300d53412883420f89` passed the complete hosted Windows
+workflow on both public branches: run `38767296744` on `main` and
+`38767296636` on `codex/roadmap-p8-p14-20261014`. Both passed the local Hub
+gate, portable/source builds, isolated smokes, privacy and manifest checks, and
+artifact upload/download byte and provenance verification. Artifacts
+`11991200021` (251,964,460 bytes) and `11989613988` (251,963,435 bytes) are
+retained through 2026-10-22. P14-01 remains `DONE` for this code revision;
+real-cache and live-device acceptance for P9/P11/P12/P13 remain open.

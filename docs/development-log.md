@@ -8798,3 +8798,43 @@ passed (1 test); the full WeChat media module passed 61 tests and
   attachment-derived counts are unchanged.
 - Five focused synthetic store/analytics regressions passed. Real-cache breadth
   and full WeFlow media parity remain unverified; P11-01 stays `IN_PROGRESS`.
+
+## 2026-10-16 - P14 Hosted Acceptance For Media Fixes
+
+- Commit `f98f05e1474cb2d3c67a9f300d53412883420f89` passed hosted Windows CI
+  on `main` (`38767296744`) and
+  `codex/roadmap-p8-p14-20261014` (`38767296636`). Both completed the full
+  local gate, portable/source builds, isolated smokes, privacy and manifest
+  checks, and uploaded/downloaded artifact byte and provenance verification.
+- Artifacts `11991200021` (251,964,460 bytes) and `11989613988`
+  (251,963,435 bytes) are retained through 2026-10-22. Live-device and
+  real-cache acceptance remains open for P9/P11/P12/P13.
+
+## 2026-10-16 - P13-01 Wordless UIA Delivery And Signed-Out Readiness
+
+- A user-approved text message was delivered from the logged-in personal account
+  to the File Transfer Assistant by driving the live UI Automation tree only:
+  the search field and the conversation were selected through automation
+  patterns, the composer's `chat_input_field` value was written directly, and
+  the message was committed with a posted Enter key. No mouse or keyboard input
+  queue entries were injected. The cached message rows then held one new row
+  sent by the local account with exactly that text, so the delivery receipt is
+  read-back evidence rather than a UI claim.
+- The message text, account identifier and conversation remain out of this log.
+  The client was signed out twice during the session by the same account signing
+  in on another device, which is a normal single-session outcome and is why the
+  readiness defect below mattered.
+- `WeChatGUISender.readiness()` no longer reports `ready` while the client is
+  signed out. A signed-out Weixin keeps its window title and its cached database
+  keys, so the previous check that only looked at window presence plus cached
+  account identity returned `ready` for a client that could not send anything.
+  Readiness now also reads the UI Automation class name of each candidate window
+  through a read-only COM probe; `mmui::LoginWindow` yields the new
+  `client_logged_out` state and no account identity. The probe writes nothing
+  into the WeChat process, so an unavailable or unmaterialised tree is treated as
+  unknown instead of signed out.
+- Synthetic sender regressions cover the new state, and the WebUI settings view
+  renders it. The trigger-started delivery above remains a manual acceptance run:
+  the UIA path is not wired into the automatic sender, `PrintWindow`-based
+  composer confirmation and coordinate fallback are untouched, and P13-01 stays
+  `IN_PROGRESS`.

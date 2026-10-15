@@ -31,9 +31,93 @@ _WXID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _RECEIPT_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
 _RHYTHM = None
 
+# Read-only UI Automation probe. The class name comes from Weixin's own Qt
+# accessibility tree, so it says which window is on screen right now. The two
+# CLSIDs are CUIAutomation8 and the older CUIAutomation; the IID is IUIAutomation.
+LOGIN_WINDOW_UIA_CLASS = "mmui::LoginWindow"
+_UIA_CLASS_NAME_PROPERTY = 30012
+_UIA_CLSIDS = ("{e22ad333-b25f-460c-83d0-0581107395c9}",
+               "{ff48dba4-60ef-4201-aa87-54103eef5947}")
+_UIA_IID = "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}"
+
 # Composer box as a share of the client rect. Weixin keeps the composer and the
 # tool bar above the bottom edge; only the message area changes height.
 _INPUT_RATIO = (0.30, 0.78, 0.80, 0.94)
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("data1", wintypes.DWORD), ("data2", wintypes.WORD),
+                ("data3", wintypes.WORD), ("data4", ctypes.c_ubyte * 8)]
+
+
+class _VARIANT(ctypes.Structure):
+    _fields_ = [("vt", ctypes.c_ushort), ("reserved", ctypes.c_ushort * 3),
+                ("value", ctypes.c_void_p * 2)]
+
+
+def _guid(text):
+    value = _GUID()
+    ctypes.windll.ole32.CLSIDFromString(text, ctypes.byref(value))
+    return value
+
+
+def _com_slot(pointer, index, *argtypes):
+    """Factory for one vtable entry of a COM interface (this + argtypes)."""
+    table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    return ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *argtypes)(table[index])
+
+
+def _uia_window_class(handle):
+    """UI Automation class name of one window, or None when it cannot be read.
+
+    Weixin materialises its ``mmui::*`` accessibility tree only after the Qt
+    accessibility gate byte inside Weixin.dll is written; the Hub never writes
+    it. So None means "unknown", never "signed out".
+    """
+    ole32 = ctypes.windll.ole32
+    automation = None
+    initialized = False
+    try:
+        result = ole32.CoInitializeEx(None, 2)
+        if result not in (0, 1):
+            return None
+        initialized = True
+        for clsid_text in _UIA_CLSIDS:
+            clsid, iid = _guid(clsid_text), _guid(_UIA_IID)
+            root = ctypes.c_void_p()
+            if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1,
+                                      ctypes.byref(iid), ctypes.byref(root)) == 0 and root.value:
+                automation = root
+                break
+        if not automation:
+            return None
+        element = ctypes.c_void_p()
+        from_handle = _com_slot(automation, 6, wintypes.HWND,
+                                ctypes.POINTER(ctypes.c_void_p))
+        if from_handle(automation, wintypes.HWND(handle), ctypes.byref(element)) != 0:
+            return None
+        try:
+            value = _VARIANT()
+            get_property = _com_slot(element, 10, ctypes.c_int,
+                                     ctypes.POINTER(_VARIANT))
+            if get_property(element, ctypes.c_int(_UIA_CLASS_NAME_PROPERTY),
+                            ctypes.byref(value)) != 0:
+                return None
+            if value.vt != 8 or not value.value[0]:
+                return None
+            try:
+                return ctypes.wstring_at(value.value[0])
+            finally:
+                ctypes.windll.oleaut32.VariantClear(ctypes.byref(value))
+        finally:
+            _com_slot(element, 2)(element)
+    except Exception:
+        return None
+    finally:
+        if automation:
+            _com_slot(automation, 2)(automation)
+        if initialized:
+            ole32.CoUninitialize()
 
 
 class WeChatSendError(RuntimeError):
@@ -185,6 +269,17 @@ class _Win32:
         if not candidates:
             return None
         return max(candidates, key=lambda item: self.size_of(item[0])[0])[0]
+
+    def login_window(self, handles):
+        """First handle whose live UI Automation class is Weixin's login window.
+
+        Signed-out clients keep the same Qt window title and cached account keys,
+        so only the accessibility class distinguishes "ready" from "signed out".
+        """
+        for handle in handles:
+            if _uia_window_class(handle) == LOGIN_WINDOW_UIA_CLASS:
+                return handle
+        return None
 
     def rect_of(self, handle):
         rect = wintypes.RECT()
@@ -520,13 +615,20 @@ class WeChatGUISender:
         if not capability_enabled:
             result["state"] = "capability_disabled"
             return result
-        handle = self.win32.main_window()
-        if not handle:
+        handles = [item[0] for item in self.win32.enumerate_visible()
+                   if item[1] == WINDOW_CLASS and item[2] in MAIN_WINDOW_TITLES]
+        if not handles:
             result["state"] = "window_not_found"
             return result
         result["window_found"] = True
-        result["window_foreground"] = bool(self.win32.is_foreground(handle))
         result["input_available"] = not self.win32.input_desktop_locked()
+        # Fail closed: cached account keys survive a sign-out, so a login window
+        # on screen must never be reported as a ready client.
+        if self.win32.login_window(handles):
+            result["state"] = "client_logged_out"
+            return result
+        handle = max(handles, key=lambda item: self.win32.size_of(item)[0])
+        result["window_foreground"] = bool(self.win32.is_foreground(handle))
         try:
             result["account_id"] = str(getattr(self.reader(), "wxid", "") or
                                        getattr(self.reader(), "account", "") or "") or None

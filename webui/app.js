@@ -973,6 +973,7 @@ function renderSettingsBase() {
   const wechatReady = state.wechatSendReadiness;
   const wechatReadyText = !wechatReady ? (wechatSendEnabled ? '尚未检查' : '发送功能已关闭')
     : ({capability_disabled: '发送功能已关闭', window_not_found: '未找到微信窗口',
+      client_logged_out: '微信客户端未登录，请先在这台电脑上登录',
       account_unavailable: '找到窗口，但无法确认本机登录账号', unavailable: '本机环境不可用'}[wechatReady.state]
       || (wechatReady.state === 'ready' ? `客户端与账号已就绪 · 本机微信 ${esc(wechatReady.account_id || '')}` : '状态未知'));
   const wechatSendReadinessSettings = `<section class="settings-group"><h2>个人微信发送通道</h2><p class="muted small">检查只读取微信窗口与本机登录账号，不会发送消息；此检查不会自动运行。发送前需打开并唯一识别目标会话。发送时会真实操作微信客户端界面，风控风险由使用者承担。</p><div class="setting-row"><div><strong>${wechatReadyText}</strong><p>${wechatReady?.input_available ? '输入桌面可用' : '输入桌面可能已锁定'}${wechatReady?.checked_at ? ` · ${dt(wechatReady.checked_at)}` : ''}</p></div><button class="btn" data-action="wechat-send-readiness">${icon('activity')}检查本机状态</button></div></section>`;
