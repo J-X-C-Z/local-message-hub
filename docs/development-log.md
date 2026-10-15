@@ -8653,3 +8653,17 @@ passed (1 test); the full WeChat media module passed 61 tests and
   plus Hub source identity and local PNG cache/signature resolution (2 tests).
   No real chat content/cache was read and Hub was not started. Real-account
   attachment-byte acceptance and full P11 WeFlow media parity remain open.
+
+## 2026-10-15 - P14 Hosted Windows Acceptance
+
+- Commit `030ca901c2847f56ff020dfb7c687d04c9515d38` passed full hosted Windows
+  workflows on `main` (`38748409211`) and
+  `codex/roadmap-p8-p14-20261014` (`38748409701`). Both runs passed 846 local
+  checks, portable/source package builds and smoke, privacy and manifest checks,
+  artifact upload/download, and downloaded byte/provenance verification.
+- `main` artifact `11981321199`: 251,955,218 bytes,
+  SHA-256 `ae5e72062c5ffafd79197649912dfb8333221ae39b14594c40672277bd9e14a5`.
+  Roadmap artifact `11981770568`: 251,950,610 bytes,
+  SHA-256 `eaa6ff2e4d0e1aa5a6156bac4b529bca77532da4810a5751e7a2282c134ee880`.
+  Both are retained through 2026-10-22. P14-01 is complete for this revision;
+  real-device delivery, current Toast display, and real-cache parity remain open.

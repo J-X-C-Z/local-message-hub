@@ -829,7 +829,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Application commit `13597f1b0061380d2d383d99d0e18e689e5fd27e` passed both full hosted Windows runs (`38666599984` on `main`, `38666600073` on the roadmap branch). The XLSX exporter now fixes ZIP entry timestamps. Application commit `d61c08696fcc41bb333343068ae3ed30f0f98a3a` passed full Windows runs `38671025839` (`main`) and `38671026098` (roadmap branch), including source/portable builds, isolated Hub/MCP/source smokes, provenance checks, artifact download, and byte/provenance verification. The `main` artifact (`11944920205`) is 251,849,201 bytes, SHA-256 `183bac524c1247cd3328bf903d279d7f949d2f66a4901cf0e8845018f2871f4d`; the roadmap artifact (`11945205168`) is 251,847,714 bytes, SHA-256 `618ead63b359bd92d0938329bd6b3571e6ad1b4ad8446687ded18bfe6daa8d36`. Both are retained through 2026-10-22. | IN_PROGRESS |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Earlier hosted checkpoints are superseded by commit `030ca901c2847f56ff020dfb7c687d04c9515d38`: run `38748409211` on `main` and `38748409701` on `codex/roadmap-p8-p14-20261014` both passed all 846 local hub checks, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. The `main` artifact (`11981321199`) is 251,955,218 bytes, SHA-256 `ae5e72062c5ffafd79197649912dfb8333221ae39b14594c40672277bd9e14a5`; roadmap artifact (`11981770568`) is 251,950,610 bytes, SHA-256 `eaa6ff2e4d0e1aa5a6156bac4b529bca77532da4810a5751e7a2282c134ee880`. Both are retained through 2026-10-22. | DONE |
 
 **P11 unindexed WeChat source media (2026-10-15):** the media library can
 optionally list media rows directly from the local read-only WeChat database
@@ -4220,3 +4220,12 @@ running 8765 process predates the source fix and needs restart; stopping its
 verified PID 41824 was rejected by tool policy (`blocked by policy`), so the
 live page still uses the previous loaded code. P11-01 remains `IN_PROGRESS`
 pending live reload and broader real-cache coverage.
+
+**P14 hosted acceptance follow-up (2026-10-15):** commit
+`030ca901c2847f56ff020dfb7c687d04c9515d38` passed the complete hosted Windows
+workflow on both public branches, including all 846 local checks, portable and
+source bundle builds, isolated smoke, privacy scan, manifest validation, and
+artifact upload/download byte and provenance verification. Artifacts and SHA-256
+digests are recorded in the P14-01 row above; both are retained through
+2026-10-22. P14-01 is `DONE` for this revision. P9/P11/P12/P13 live-device,
+real-cache, and desktop acceptance remains open as recorded above.
