@@ -1205,7 +1205,9 @@ class MCPServerTest(unittest.TestCase):
             output = io.BytesIO()
             serve(io.BytesIO(("\n".join(json.dumps(item) for item in requests) + "\n").encode()), output, storage)
             tools = json.loads(output.getvalue().splitlines()[0])["result"]["tools"]
-            self.assertEqual(len(tools), 24)
+            tool_names = {tool["name"] for tool in tools}
+            self.assertEqual(len(tools), 26)
+            self.assertTrue({"list_wechat_source_media", "get_wechat_source_media"} <= tool_names)
 
     def test_stdio_queries_coexist_with_concurrent_wal_writes(self):
         with tempfile.TemporaryDirectory() as storage:
@@ -1309,7 +1311,23 @@ class MCPServerTest(unittest.TestCase):
             self.assertNotIn("hello MCP", process.stderr.decode(errors="replace"))
             output = [json.loads(line) for line in process.stdout.splitlines()]
             self.assertEqual(output[0]["result"]["protocolVersion"], "2024-11-05")
-            self.assertEqual(len(output[1]["result"]["tools"]), 21)
+            tools = output[1]["result"]["tools"]
+            tool_names = {tool["name"] for tool in tools}
+            self.assertEqual(len(tools), 23)
+            self.assertTrue({"list_wechat_source_media", "get_wechat_source_media"} <= tool_names)
+
+            gated_store = ChatStore(":memory:")
+            media_disabled = MCPServer(
+                gated_store, capabilities={"media": False},
+                wechat_source_media_lister=lambda **filters: {"items": []},
+                wechat_source_media_reader=lambda identity: (b"", "application/octet-stream"),
+            )
+            gated_names = {tool["name"] for tool in media_disabled.tools()}
+            self.assertFalse({"list_wechat_source_media", "get_wechat_source_media"} & gated_names)
+            for tool_name in ("list_wechat_source_media", "get_wechat_source_media"):
+                with self.assertRaisesRegex(ValueError, "已在设置中关闭"):
+                    media_disabled.call_tool(tool_name, {})
+            gated_store.close()
             result = output[2]["result"]
             self.assertFalse(result["isError"])
             payload = json.loads(result["content"][0]["text"])

@@ -273,7 +273,7 @@ class ServerTest(unittest.TestCase):
             'message_id': 'synthetic', 'conversation_id': 'room',
             'send_time': 100, 'text': 'synthetic'}]]
         module = types.ModuleType('integrations.wecom.adapter')
-        module.WeComAdapter = lambda: provider
+        module.WeComAdapter = lambda **_kwargs: provider
         with patch.dict(sys.modules, {'integrations.wecom.adapter': module}):
             self.hub.sync_wecom()
         provider.release_message_cache.assert_called_once_with()
@@ -2479,7 +2479,8 @@ class ServerTest(unittest.TestCase):
         source = {'text': 'first snapshot', 'include_absent_row': True}
 
         class Provider:
-            def __init__(self):
+            def __init__(self, voice_cache_dir=None):
+                self.voice_cache_dir = voice_cache_dir
                 self.engine = type('Engine', (), {
                     'get_content': lambda _self: {'members': [
                         {'user_id': 'member', 'avatar': 'https://wework.qpic.cn/member.png'}]}
@@ -2536,21 +2537,21 @@ class ServerTest(unittest.TestCase):
         import sys
         import types
 
-        class WeComSnapshotError(RuntimeError):
-            safe_message = '无法解密本机企业微信数据库；请核对密钥、账号槽位和客户端版本'
-
         class Provider:
+            def __init__(self, voice_cache_dir=None):
+                self.voice_cache_dir = voice_cache_dir
+
             def refresh(self):
-                raise WeComSnapshotError('secret path and SQL detail')
+                raise RuntimeError('secret path and SQL detail')
 
         module = types.ModuleType('integrations.wecom.adapter')
         module.WeComAdapter = Provider
-        module.WeComSnapshotError = WeComSnapshotError
         with patch.dict(sys.modules, {'integrations.wecom.adapter': module}):
             self.hub.sync('wecom', threading.Event())
 
         self.assertEqual(self.hub.sources['wecom']['state'], 'error')
-        self.assertEqual(self.hub.sources['wecom']['error'], WeComSnapshotError.safe_message)
+        self.assertEqual(self.hub.sources['wecom']['error'],
+                         '企业微信快照读取失败，请检查本机目录和密钥')
         self.assertNotIn('secret path', str(self.hub.sources['wecom']))
         self.assertNotIn('SQL detail', str(self.hub.sources['wecom']))
 
@@ -4657,6 +4658,9 @@ class ServerTest(unittest.TestCase):
         ingests = []
 
         class BlockingProvider:
+            def __init__(self, voice_cache_dir=None):
+                self.voice_cache_dir = voice_cache_dir
+
             def refresh(self):
                 entered_refresh.set()
                 self_outer.assertTrue(release_refresh.wait(3))
