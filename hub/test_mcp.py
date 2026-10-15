@@ -396,6 +396,66 @@ class MCPServerTest(unittest.TestCase):
                 server.call_tool("list_media", args)
         store.close()
 
+    def test_wechat_source_media_mcp_is_conversation_scoped_and_reads_exact_cached_item(self):
+        store = ChatStore(":memory:")
+        png = b"\x89PNG\r\n\x1a\nsynthetic-image"
+        list_calls, read_calls = [], []
+
+        def list_source(params):
+            list_calls.append(params)
+            return {"items": [
+                {"id": "room-a:message_0.db:7", "platform": "wechat",
+                 "account_id": "acct-a", "conversation_id": "room-a", "timestamp": 12,
+                 "sender_name": "Synthetic sender", "type": "image", "raw_type": "3",
+                 "text": "PRIVATE BODY MUST NOT ESCAPE", "extra": {
+                     "shard": "message_0.db", "local_id": 7}},
+                {"id": "room-b:message_0.db:8", "platform": "wechat",
+                 "account_id": "acct-a", "conversation_id": "room-b", "type": "image",
+                 "extra": {"shard": "message_0.db", "local_id": 8}},
+            ], "total": 1, "limit": 1, "next_cursor": "next-page"}
+
+        def read_source(identity):
+            read_calls.append(identity)
+            return png, "image/png"
+
+        server = MCPServer(store, capabilities={"media": True},
+                           wechat_source_media_lister=list_source,
+                           wechat_source_media_reader=read_source)
+        names = {tool["name"] for tool in server.tools()}
+        self.assertIn("list_wechat_source_media", names)
+        self.assertIn("get_wechat_source_media", names)
+
+        listing = server.call_tool("list_wechat_source_media", {
+            "platform": "wechat", "account_id": "acct-a", "conversation_id": "room-a",
+            "limit": 1, "cursor": "prior-page", "type": "image",
+        })
+        self.assertEqual(list_calls[0]["cursor"], "prior-page")
+        self.assertEqual(list_calls[0]["conversation_id"], "room-a")
+        self.assertEqual(listing["next_cursor"], "next-page")
+        self.assertEqual(len(listing["items"]), 1)
+        item = listing["items"][0]
+        self.assertEqual((item["account_id"], item["conversation_id"], item["shard"],
+                          item["local_id"]),
+                         ("acct-a", "room-a", "message_0.db", "7"))
+        self.assertNotIn("text", item)
+        self.assertNotIn("PRIVATE BODY", json.dumps(listing))
+        self.assertNotIn("path", json.dumps(listing))
+
+        request = {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
+            "name": "get_wechat_source_media", "arguments": {
+                "platform": "wechat", "account_id": "acct-a", "conversation_id": "room-a",
+                "shard": "message_0.db", "local_id": "7", "type": "image",
+            }}}
+        response = server.handle(request)["result"]
+        self.assertFalse(response["isError"])
+        self.assertEqual(response["content"][1], {
+            "type": "image", "data": __import__("base64").b64encode(png).decode("ascii"),
+            "mimeType": "image/png"})
+        self.assertEqual(read_calls, [{"platform": "wechat", "account_id": "acct-a",
+                                       "conversation_id": "room-a", "shard": "message_0.db",
+                                       "local_id": "7", "type": "image"}])
+        store.close()
+
     def test_list_media_expands_wecom_and_qq_text_attachments(self):
         store = ChatStore(":memory:")
         store.ingest("wecom", "wecom-account", [{"id": "team", "title": "Team"}], [{
@@ -827,6 +887,12 @@ class MCPServerTest(unittest.TestCase):
             self.assertEqual(prepared["status"], "pending_approval")
             self.assertEqual(prepared["platform"], "wechat")
             self.assertIn("GUI 拟人操作", prepared["identity_label"])
+            with self.assertRaisesRegex(ValueError, "currently logged-in WeChat account"):
+                server.call_tool("prepare_wechat_send", {
+                    "account_id": "wxid_other0001", "conversation_type": "private",
+                    "conversation_id": "wxid_friend01", "text": "synthetic mismatch",
+                    "request_id": "test_wechat_mismatch"})
+            self.assertIsNone(service.repository.get("test_wechat_mismatch"))
             self.assertEqual(deliveries, [])
             status = server.call_tool("get_wechat_send_status", {"request_id": "test_wechat_01"})
             self.assertEqual(status["status"], "pending_approval")
@@ -845,7 +911,7 @@ class MCPServerTest(unittest.TestCase):
             store = ChatStore(f"{storage}/hub.sqlite3")
             service = SendService(SendRepository(f"{storage}/hub.sqlite3"), object())
             state = {"wechat_send": False}
-            readiness = {"state": "ready"}
+            readiness = {"state": "ready", "account_id": "wxid_self0001"}
             server = MCPServer(store, send_service=service,
                                capability_reader=lambda: state,
                                wechat_readiness_reader=lambda: readiness)
@@ -861,6 +927,38 @@ class MCPServerTest(unittest.TestCase):
             service.repository.close()
             store.close()
 
+    def test_wechat_mcp_status_remains_available_when_client_is_offline(self):
+        from hub.sending import SendRepository, SendService
+
+        with tempfile.TemporaryDirectory() as storage:
+            store = ChatStore(f"{storage}/hub.sqlite3")
+            deliveries = []
+
+            class Adapter:
+                def deliver(self, request):
+                    deliveries.append(request)
+                    return {"message_id": "should-not-run"}
+
+            service = SendService(SendRepository(f"{storage}/hub.sqlite3"), {"wechat": Adapter()})
+            readiness = {"state": "ready", "account_id": "wxid_self0001"}
+            server = MCPServer(store, send_service=service,
+                               capabilities={"wechat_send": True},
+                               wechat_readiness_reader=lambda: readiness)
+            service.prepare({"platform": "wechat", "account_id": "wxid_self0001",
+                             "conversation_type": "private", "conversation_id": "wxid_friend01",
+                             "text": "synthetic", "request_id": "offline_status_01"})
+
+            readiness["state"] = "window_not_found"
+            names = {tool["name"] for tool in server.tools()}
+            self.assertIn("get_wechat_send_status", names)
+            self.assertNotIn("prepare_wechat_send", names)
+            status = server.call_tool("get_wechat_send_status", {
+                "request_id": "offline_status_01"})
+            self.assertEqual(status["status"], "pending_approval")
+            self.assertEqual(deliveries, [])
+            service.repository.close()
+            store.close()
+
     def test_wechat_mcp_validates_conversation_type_and_ids(self):
         from hub.sending import SendRepository, SendService
 
@@ -868,7 +966,8 @@ class MCPServerTest(unittest.TestCase):
             store = ChatStore(f"{storage}/hub.sqlite3")
             service = SendService(SendRepository(f"{storage}/hub.sqlite3"), object())
             server = MCPServer(store, send_service=service, capabilities={"wechat_send": True},
-                               wechat_readiness_reader=lambda: {"state": "ready"})
+                               wechat_readiness_reader=lambda: {
+                                   "state": "ready", "account_id": "wxid_self0001"})
             valid = {"account_id": "wxid_self0001", "conversation_type": "private",
                      "conversation_id": "wxid_friend01", "text": "synthetic",
                      "request_id": "test_wechat_02"}

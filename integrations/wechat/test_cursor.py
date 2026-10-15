@@ -1,5 +1,6 @@
 """Synthetic keyset-cursor tests; never open a user's WeChat databases."""
 
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -120,6 +121,120 @@ class CursorTests(unittest.TestCase):
         self.assertNotIn("content", first["items"][0])
         self.assertNotIn("SECRET MESSAGE BODY", repr(first))
 
+    def test_source_media_keyset_cursor_preserves_cross_shard_ties_and_null_sequences(self):
+        for path in self.paths:
+            conn = sqlite3.connect(path)
+            conn.executemany(
+                f"INSERT INTO {self.table} VALUES (?, 3, 44, ?, 'secret', NULL, NULL, NULL, NULL, ?)",
+                [(80, 30, 30), (81, 0, 0), (82, 0, None)],
+            )
+            conn.commit()
+            conn.close()
+
+        cursor, received, total = None, [], None
+        while True:
+            page = self.reader.get_media_rows(
+                "synthetic-room", {3}, limit=1, after_cursor=cursor)
+            total = page["total"] if total is None else total
+            if not page["items"]:
+                break
+            row = page["items"][0]
+            received.append((row["shard"], row["local_id"], row["sort_seq_is_null"]))
+            cursor = page["next_cursor"]
+
+        self.assertEqual(total, 6)
+        self.assertEqual(received, [
+            ("message_0.db", 80, False), ("message_1.db", 80, False),
+            ("message_0.db", 81, False), ("message_0.db", 82, True),
+            ("message_1.db", 81, False), ("message_1.db", 82, True),
+        ])
+
+    def test_source_media_continuation_can_skip_recounting_all_shards(self):
+        first = self.reader.get_media_rows("synthetic-room", {1}, limit=1)
+        traces = []
+        original_open = self.reader._msg_conns
+
+        def open_with_trace(user):
+            connections = original_open(user)
+            for conn, _table in connections:
+                conn.set_trace_callback(traces.append)
+            return connections
+
+        self.reader._msg_conns = open_with_trace
+        page = self.reader.get_media_rows(
+            "synthetic-room", {1}, limit=1, after_cursor=first["next_cursor"],
+            include_total=False)
+        self.assertIsNone(page["total"])
+        self.assertFalse(any("count(*)" in sql.lower() for sql in traces))
+
+    def test_source_media_global_sort_threshold_keeps_equal_and_excludes_prior_ties(self):
+        for path in self.paths:
+            conn = sqlite3.connect(path)
+            conn.executemany(
+                f"INSERT INTO {self.table} VALUES (?, 3, 44, ?, 'secret', NULL, NULL, NULL, NULL, ?)",
+                [(80, 30, 30), (81, 0, 0), (82, 0, None)],
+            )
+            conn.commit()
+            conn.close()
+
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in self.paths}
+        inclusive = self.reader.get_media_rows(
+            "synthetic-room", {3}, limit=20, after_sort_seq=30,
+            after_sort_seq_inclusive=True, include_total=False)
+        exclusive = self.reader.get_media_rows(
+            "synthetic-room", {3}, limit=20, after_sort_seq=30,
+            after_sort_seq_inclusive=False, include_total=False)
+        self.assertEqual(inclusive["total"], None)
+        self.assertEqual([(row["shard"], row["local_id"]) for row in inclusive["items"]], [
+            ("message_0.db", 80), ("message_1.db", 80),
+            ("message_0.db", 81), ("message_0.db", 82),
+            ("message_1.db", 81), ("message_1.db", 82),
+        ])
+        self.assertEqual([(row["shard"], row["local_id"]) for row in exclusive["items"]], [
+            ("message_0.db", 81), ("message_0.db", 82),
+            ("message_1.db", 81), ("message_1.db", 82),
+        ])
+        self.assertEqual({path: hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in self.paths}, before)
+        with self.assertRaisesRegex(ValueError, "page"):
+            self.reader.get_media_rows(
+                "synthetic-room", {3}, after_sort_seq=True)
+
+    def test_source_media_keyset_cursor_orders_null_before_negative_sequences(self):
+        for path in self.paths:
+            conn = sqlite3.connect(path)
+            conn.executemany(
+                f"INSERT INTO {self.table} VALUES (?, 3, 44, ?, 'secret', NULL, NULL, NULL, NULL, ?)",
+                [(81, 0, 0), (82, 0, None), (83, -1, -1), (84, 0, None)],
+            )
+            conn.commit()
+            conn.close()
+
+        cursor, received = None, []
+        while True:
+            page = self.reader.get_media_rows(
+                "synthetic-room", {3}, limit=1, after_cursor=cursor)
+            if not page["items"]:
+                break
+            row = page["items"][0]
+            received.append((row["shard"], row["local_id"], row["sort_seq_is_null"]))
+            cursor = page["next_cursor"]
+
+        self.assertEqual(received, [
+            ("message_0.db", 81, False),
+            ("message_0.db", 82, True), ("message_0.db", 84, True),
+            ("message_1.db", 81, False),
+            ("message_1.db", 82, True), ("message_1.db", 84, True),
+            ("message_0.db", 83, False), ("message_1.db", 83, False),
+        ])
+
+    def test_source_media_cursor_rejects_non_boolean_null_flag(self):
+        with self.assertRaisesRegex(ValueError, "cursor"):
+            self.reader.get_media_rows("synthetic-room", {3}, after_cursor={
+                "sort_seq": 0, "sort_seq_is_null": "false",
+                "shard": "message_0.db", "local_id": 1,
+            })
+
     def test_provider_cursor_is_scoped_to_conversation_and_maps_rows(self):
         provider = WeChatProvider.__new__(WeChatProvider)
         provider.reader = Mock()
@@ -147,7 +262,7 @@ class CursorTests(unittest.TestCase):
             "local_id": 9, "local_type": 3, "sender_id": 4, "create_time": 12,
             "sort_seq": 12, "shard": "message_2.db",
         }]}
-        provider._sender_names = Mock(return_value={4: "Synthetic sender"})
+        provider.reader._sender_names = Mock(return_value={4: "Synthetic sender"})
 
         page = provider.source_media("synthetic-room", media_type="image")
 
@@ -158,9 +273,32 @@ class CursorTests(unittest.TestCase):
             "local_id": 9, "local_type": 3,
         })
         self.assertEqual(page["items"][0]["sender_name"], "Synthetic sender")
+        provider.reader._sender_names.assert_called_once_with("message_2.db")
         self.assertNotIn("content", page["items"][0])
+        self.assertEqual(page["items"][0]["_source_cursor"], {
+            "sort_seq": 12, "sort_seq_is_null": False,
+            "shard": "message_2.db", "local_id": 9,
+        })
         provider.reader.get_media_rows.assert_called_once()
         self.assertEqual(provider.reader.get_media_rows.call_args.args[1], {3})
+
+    def test_provider_source_media_maps_all_supported_file_variants(self):
+        provider = WeChatProvider.__new__(WeChatProvider)
+        provider.reader = Mock()
+        provider.reader._sender_names = Mock(return_value={})
+
+        for local_type in WeChatProvider._SOURCE_MEDIA_TYPES["file"] | {47, 11000}:
+            with self.subTest(local_type=local_type):
+                provider.reader.get_media_rows.side_effect = lambda _room, _types, **kwargs: {
+                    "total": 1,
+                    "items": [{"local_id": 9, "local_type": local_type,
+                               "sender_id": None, "create_time": 12, "sort_seq": 12,
+                               "sort_seq_is_null": False, "shard": "message_2.db"}],
+                    "next_cursor": None,
+                }
+                media_type = "sticker" if local_type in (47, 11000) else "file"
+                page = provider.source_media("synthetic-room", media_type=media_type)
+                self.assertEqual(page["items"][0]["type"], media_type)
 
 
 if __name__ == "__main__":

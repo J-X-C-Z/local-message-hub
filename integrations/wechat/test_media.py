@@ -1147,6 +1147,25 @@ class MediaTests(unittest.TestCase):
             self.assertFalse(Path(directory, "fixture.wav").exists())
             self.assertFalse(Path(directory, "fixture.wav.tmp").exists())
 
+    def test_decoded_voice_is_written_to_hub_cache_without_touching_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            output_dir = root / "hub" / "voice"
+            source_dir.mkdir()
+            source = source_dir / "voice.silk"
+            payload = b"synthetic silk"
+            source.write_bytes(payload)
+            decoder = types.SimpleNamespace(decode=Mock(return_value=b"1234"))
+            with patch.dict(sys.modules, {"pilk_nogil": decoder}):
+                result = voice_media_result(str(source), output_dir)
+
+            self.assertTrue(result["playable"])
+            self.assertEqual(Path(result["path"]).parent, output_dir)
+            self.assertEqual(source.read_bytes(), payload)
+            self.assertEqual([path.name for path in source_dir.iterdir()], ["voice.silk"])
+            self.assertEqual(list(output_dir.glob("*.wav.tmp")), [])
+
     def test_voice_becomes_valid_wav(self):
         import pilk_nogil
 

@@ -78,6 +78,31 @@ class LocalProviderTests(unittest.TestCase):
         self.assertEqual(self.source.read_bytes(), before)
         self.assertEqual(self.provider.messages(conv, offset=1), [])
 
+    def test_messages_page_keyset_covers_tied_and_null_timestamps(self):
+        self.fixture()
+        body = field(40800, field(45002, 1) + field(45101, 'synthetic page'))
+        with closing(sqlite3.connect(self.source)) as conn:
+            conn.executemany('INSERT INTO c2c_msg_table VALUES (?,?,?,?,?,?)', [
+                (2, 'peer', 'peer', '10001', 100, body),
+                (3, 'peer', 'peer', '10001', 100, body),
+                (4, 'peer', 'peer', '10001', None, body),
+            ])
+            conn.commit()
+
+        conversation = self.provider.conversations()[0]
+        expected = [row['id'] for row in self.provider.messages(conversation, limit=10)]
+        cursor, actual = None, []
+        while True:
+            page = self.provider.messages_page(conversation, limit=2, cursor=cursor)
+            actual.extend(row['id'] for row in page['items'])
+            cursor = page['next_cursor']
+            if not page['has_more']:
+                break
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(len(actual), len(set(actual)))
+        self.assertIsNone(cursor['timestamp'])
+
     def test_missing_or_zero_source_ids_fall_back_to_unique_snapshot_rowids(self):
         self.fixture()
         body = field(40800, field(45002, 1) + field(45101, 'duplicate-safe'))

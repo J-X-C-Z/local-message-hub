@@ -2,6 +2,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hub.sending import SendRepository, SendService
 from integrations.qq.sender import QQDeliveryUnknown
@@ -54,6 +55,16 @@ class SendServiceTest(unittest.TestCase):
         self.assertEqual(prepared["audit"][0]["action"], "prepared")
         self.assertEqual(self.adapter.calls, 0)
         self.assertEqual(self.service.status(prepared["request_id"])["text"], self.payload["text"])
+
+    def test_list_orders_same_second_requests_by_insertion_before_limit(self):
+        with patch("hub.sending.time.time", return_value=1700000000):
+            for index in range(105):
+                self.service.prepare({**self.payload, "request_id": f"same-second-{index:03d}"})
+
+        items = self.service.list(status="all", limit=100)["items"]
+        self.assertEqual([item["request_id"] for item in items],
+                         [f"same-second-{index:03d}" for index in reversed(range(5, 105))])
+        self.assertEqual(self.adapter.calls, 0)
 
     def test_same_request_id_is_idempotent_and_conflicting_payload_is_rejected(self):
         first = self.service.prepare(self.payload)

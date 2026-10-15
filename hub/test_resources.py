@@ -101,6 +101,14 @@ class ResourceJobTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.manager._validate_items([invalid])
 
+    def test_wechat_source_sticker_identity_is_canonical_and_rejects_image_tier(self):
+        sticker = {"resource_kind": "wechat_source", "platform": "wechat",
+                   "account_id": "synthetic", "conversation_id": "room",
+                   "shard": "message_1.db", "local_id": 7, "media_type": "sticker"}
+        self.assertEqual(self.manager._validate_items([sticker]), [sticker])
+        with self.assertRaises(ValueError):
+            self.manager._validate_items([{**sticker, "image_tier": "best"}])
+
     def test_job_reports_partial_resolver_failures_without_private_error_text(self):
         source = self.root / "good.bin"
         source.write_bytes(b"ok")

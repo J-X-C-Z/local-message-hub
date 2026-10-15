@@ -1,14 +1,16 @@
 """Decode cached Tencent SILK into a browser-playable local WAV."""
 
 from pathlib import Path
+import hashlib
 import os
+import tempfile
 import wave
 
 MAX_SILK_BYTES = 16 * 1024 * 1024
 MAX_PCM_BYTES = 64 * 1024 * 1024
 
 
-def voice_media_result(silk_path: str) -> dict:
+def voice_media_result(silk_path: str, output_dir: str | Path | None = None) -> dict:
     source = Path(silk_path)
     try:
         import pilk_nogil
@@ -16,8 +18,7 @@ def voice_media_result(silk_path: str) -> dict:
         return {"available": True, "path": str(source), "original_path": str(source),
                 "playable": False, "mime_type": "application/octet-stream",
                 "reason": "voice_decoder_unavailable"}
-    destination = source.with_suffix(".wav")
-    temporary = destination.with_suffix(".wav.tmp")
+    temporary = None
     try:
         if source.stat().st_size > MAX_SILK_BYTES:
             raise OverflowError("SILK input exceeds decode limit")
@@ -30,6 +31,13 @@ def voice_media_result(silk_path: str) -> dict:
             raise ValueError("Invalid decoded PCM")
         if len(pcm) > MAX_PCM_BYTES:
             raise OverflowError("decoded PCM exceeds decode limit")
+        directory = Path(output_dir) if output_dir is not None else (
+            Path(os.environ.get("LMH_STORAGE_DIR", Path(__file__).resolve().parents[2] / ".local"))
+            / "media" / "voice")
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / (hashlib.sha256(silk).hexdigest() + ".wav")
+        with tempfile.NamedTemporaryFile(dir=directory, suffix=".wav.tmp", delete=False) as temp_file:
+            temporary = Path(temp_file.name)
         with wave.open(str(temporary), "wb") as output:
             output.setnchannels(1)
             output.setsampwidth(2)
@@ -37,12 +45,14 @@ def voice_media_result(silk_path: str) -> dict:
             output.writeframes(pcm)
         os.replace(temporary, destination)
     except OverflowError:
-        temporary.unlink(missing_ok=True)
+        if temporary:
+            temporary.unlink(missing_ok=True)
         return {"available": True, "path": str(source), "original_path": str(source),
                 "playable": False, "mime_type": "application/octet-stream",
                 "reason": "voice_decode_limit_exceeded"}
     except Exception:
-        temporary.unlink(missing_ok=True)
+        if temporary:
+            temporary.unlink(missing_ok=True)
         return {"available": True, "path": str(source), "original_path": str(source),
                 "playable": False, "mime_type": "application/octet-stream",
                 "reason": "voice_decode_failed"}

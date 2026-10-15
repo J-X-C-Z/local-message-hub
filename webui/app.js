@@ -106,7 +106,7 @@ function invalidateSendCompose() {
   sendComposeController = null;
 }
 const typeOptions = selected => {
-  const mediaTypes = ['qq-cache', 'wechat-source'].includes(state.filters.source)
+  const mediaTypes = state.filters.source === 'qq-cache'
     ? ['image', 'video', 'voice', 'file']
     : ['image', 'sticker', 'video', 'voice', 'file'];
   const types = Object.entries(typeNames).filter(([key]) => state.view !== 'media' || mediaTypes.includes(key));
@@ -623,9 +623,9 @@ function renderListing() {
   const momentsEnabled = state.settings.capabilities?.moments?.enabled === true;
   const qqCacheView = state.view === 'media' && f.source === 'qq-cache';
   const accountScope = selectedAccountScope();
-  const sourceConversationReady = accountScope?.platform === 'wechat' && Boolean(f.conversation_id);
+  const sourceAccountReady = accountScope?.platform === 'wechat';
   const accountFilter = ['contacts', 'media'].includes(state.view) ? `<select name="account_scope" aria-label="${state.view === 'media' ? '媒体账号' : '联系人账号'}"><option value="">全部账号</option>${state.accountScopes.map(account => {const key = JSON.stringify([account.platform, account.account_id]);return `<option value="${esc(key)}" ${accountScope?.platform === account.platform && accountScope?.account_id === account.account_id ? 'selected' : ''}>${esc(platforms[account.platform]?.name || account.platform)} · ${esc(account.account_id)}</option>`;}).join('')}</select>` : '';
-  const filter = `<form id="listing-search" class="filter-row">${f.source === 'wechat-source' && state.view === 'media' ? '' : `<div class="search-field">${icon('search')}<input name="q" aria-label="${isSearch ? '搜索所有聊天记录' : '搜索' + views[state.view].name}" placeholder="${isSearch ? '搜索所有聊天记录…' : '搜索' + views[state.view].name + (qqCacheView ? '文件名' : '')}" value="${esc(f.q)}" autocomplete="off"></div>`}${accountFilter}${state.view === 'contacts' ? `<select name="kind" aria-label="联系人类型"><option value="" ${!f.kind ? 'selected' : ''}>全部联系人类型</option><option value="official" ${f.kind === 'official' ? 'selected' : ''}>公众号</option></select>` : ''}${state.view === 'media' ? `<select name="source" aria-label="媒体来源"><option value="all" ${f.source === 'all' ? 'selected' : ''}>全部媒体</option><option value="chat" ${f.source === 'chat' ? 'selected' : ''}>聊天附件</option><option value="wechat-source" ${f.source === 'wechat-source' ? 'selected' : ''} ${sourceConversationReady ? '' : 'disabled'}>微信数据库媒体 ${sourceConversationReady ? '' : '（需选微信账号和会话）'}</option><option value="moments" ${f.source === 'moments' ? 'selected' : ''} ${momentsEnabled ? '' : 'disabled'}>朋友圈</option><option value="qq-cache" ${f.source === 'qq-cache' ? 'selected' : ''}>QQ 缓存文件</option></select>${!qqCacheView ? `<input name="conversation_id" aria-label="精确会话 ID" placeholder="会话 ID（精确筛选）" value="${esc(f.conversation_id || '')}">` : ''}` : ''}${state.view !== 'contacts' ? `<select name="type" aria-label="消息类型">${typeOptions(f.type)}</select>` : ''}${(isSearch || state.view === 'media') ? `<label>日期</label><input type="date" name="start" aria-label="开始日期" value="${esc(f.start)}"><input type="date" name="end" aria-label="结束日期" value="${esc(f.end)}">` : ''}<button class="btn primary" type="submit">${icon('search')}查询</button></form>`;
+  const filter = `<form id="listing-search" class="filter-row">${f.source === 'wechat-source' && state.view === 'media' ? '' : `<div class="search-field">${icon('search')}<input name="q" aria-label="${isSearch ? '搜索所有聊天记录' : '搜索' + views[state.view].name}" placeholder="${isSearch ? '搜索所有聊天记录…' : '搜索' + views[state.view].name + (qqCacheView ? '文件名' : '')}" value="${esc(f.q)}" autocomplete="off"></div>`}${accountFilter}${state.view === 'contacts' ? `<select name="kind" aria-label="联系人类型"><option value="" ${!f.kind ? 'selected' : ''}>全部联系人类型</option><option value="official" ${f.kind === 'official' ? 'selected' : ''}>公众号</option></select>` : ''}${state.view === 'media' ? `<select name="source" aria-label="媒体来源"><option value="all" ${f.source === 'all' ? 'selected' : ''}>全部媒体</option><option value="chat" ${f.source === 'chat' ? 'selected' : ''}>聊天附件</option><option value="wechat-source" ${f.source === 'wechat-source' ? 'selected' : ''} ${sourceAccountReady ? '' : 'disabled'}>微信数据库媒体 ${sourceAccountReady ? '' : '（需选微信账号）'}</option><option value="moments" ${f.source === 'moments' ? 'selected' : ''} ${momentsEnabled ? '' : 'disabled'}>朋友圈</option><option value="qq-cache" ${f.source === 'qq-cache' ? 'selected' : ''}>QQ 缓存文件</option></select>${!qqCacheView ? `<input name="conversation_id" aria-label="精确会话 ID" placeholder="会话 ID（留空浏览全部微信会话）" value="${esc(f.conversation_id || '')}">` : ''}` : ''}${state.view !== 'contacts' ? `<select name="type" aria-label="消息类型">${typeOptions(f.type)}</select>` : ''}${(isSearch || state.view === 'media') ? `<label>日期</label><input type="date" name="start" aria-label="开始日期" value="${esc(f.start)}"><input type="date" name="end" aria-label="结束日期" value="${esc(f.end)}">` : ''}<button class="btn primary" type="submit">${icon('search')}查询</button></form>`;
   let body;
   if (state.loading) body = loading();
   else if (!state.items.length) body = empty(isSearch && !f.q ? '搜索你的聊天档案' : '没有匹配的记录', state.error || (isSearch && !f.q ? '关键词、时间与消息类型' : '可调整筛选条件或查看数据源连接状态'), '', isSearch ? 'search' : views[state.view].icon);
@@ -694,21 +694,18 @@ function mediaEntryAvailable(entry) {
 function renderMediaTile(entry, i) {
   const message = entry.message;
   const resource = entry.resource;
+  const cachedEmoji = message.platform === 'wechat' && ['47', '11000'].includes(String(message.raw_type || ''));
   const imageUrl = safeUrl(entry.type === 'video'
     ? message.media_poster_url : resource?.media_url || message.media_url);
-  const image = ['image', 'video'].includes(entry.type) && imageUrl;
+  const image = (['image', 'video'].includes(entry.type) || cachedEmoji) && imageUrl;
   const key = mediaEntryKey(entry);
   const available = mediaEntryAvailable(entry);
-  const cachedEmoji = message.platform === 'wechat' && ['47', '11000'].includes(String(message.raw_type || ''));
   const size = Number(resource?.size ?? message.extra?.size);
   const sizeLabel = entry.resourceKind === 'qq_cache' && Number.isFinite(size) && size > 0
     ? `<small>${esc(fmtBytes(size))}</small>` : '';
   const canOpenChat = message.conversation_id && message.id != null && !['moment', 'qq_cache', 'wechat_source'].includes(entry.resourceKind);
   const mimeType = resource?.mime_type || message.extra?.mime_type || message.media_mime_type;
-  const unsupportedImagePreview = entry.type === 'image' && ['image/heic', 'image/tiff'].includes(String(mimeType || '').toLowerCase());
-  const preview = unsupportedImagePreview
-    ? `<span class="media-format-fallback">${icon('image')}<span>浏览器不支持预览</span><small>可打开并下载原件</small></span>`
-    : image ? `<img src="${esc(imageUrl)}" alt="${esc(entry.name)}" loading="lazy">`
+  const preview = image ? `<img src="${esc(localMediaPreviewUrl(imageUrl, mimeType))}" alt="${esc(entry.name)}" loading="lazy">`
     : icon(cachedEmoji ? 'smile' : {video: 'video', voice: 'audio-lines', file: 'file-text', image: 'image'}[entry.type] || 'file');
   const hint = entry.resourceIndex !== null || ['moment', 'qq_cache'].includes(entry.resourceKind)
     ? '<span class="media-hint">本机附件 · 点击预览</span>' : '';
@@ -734,7 +731,7 @@ async function startMediaPreviews(request = state.request) {
   cancelMediaPreviews();
   if (state.view !== 'media' || state.loading || request !== state.request) return;
   const pending = mediaEntries().map((entry, index) => ({entry, index})).filter(({entry}) =>
-    (entry.resourceKind === 'wechat_source' && entry.message.platform === 'wechat' && ['image', 'video'].includes(entry.type) ||
+    (entry.resourceKind === 'wechat_source' && entry.message.platform === 'wechat' && ['image', 'video', 'sticker'].includes(entry.type) ||
       entry.resourceKind === 'qq_cache' && entry.message.platform === 'qq' && entry.type === 'image' ||
       entry.message.platform === 'wechat' && ['image', 'video'].includes(entry.type) &&
       (entry.resourceKind || 'message') === 'message' && entry.resourceIndex === null &&
@@ -760,7 +757,8 @@ async function startMediaPreviews(request = state.request) {
           ? {resource_kind: 'wechat_source', platform: 'wechat', account_id: message.account_id,
             conversation_id: message.conversation_id, shard: message.extra.shard,
             local_id: String(message.extra.local_id),
-            ...(entry.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})}
+            ...(entry.type === 'sticker' ? {media_type: 'sticker'}
+              : entry.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})}
           : entry.resourceKind === 'qq_cache'
           ? {resource_kind: 'qq_cache', platform: 'qq', account_id: message.account_id,
             resource_id: message.extra?.resource_id || message.id}
@@ -782,9 +780,7 @@ async function startMediaPreviews(request = state.request) {
             message.media_mime_type = result.mime_type || message.media_mime_type;
           }
           const preview = document.querySelector(`.media-tile[data-media-preview-tile="${index}"] .media-preview`);
-          if (preview) preview.innerHTML = ['image/heic', 'image/tiff'].includes(String(result.mime_type || '').toLowerCase())
-            ? `<span class="media-format-fallback">${icon('image')}<span>浏览器不支持预览</span><small>可打开并下载原件</small></span>`
-            : `<img src="${esc(url)}" alt="${esc(entry.name)}" loading="lazy">`;
+          if (preview) preview.innerHTML = `<img src="${esc(localMediaPreviewUrl(url, result.mime_type))}" alt="${esc(entry.name)}" loading="lazy">`;
         } else if (entry.type !== 'video') {
           message.media_available = false;
           const tile = document.querySelector(`.media-tile[data-media-preview-tile="${index}"]`);
@@ -850,9 +846,7 @@ async function loadBestWechatImage(index) {
     entry.message.media_url = url;
     entry.message.media_mime_type = result.mime_type || entry.message.media_mime_type;
     const preview = document.querySelector(`.media-tile[data-media-preview-tile="${index}"] .media-preview`);
-    if (preview) preview.innerHTML = ['image/heic', 'image/tiff'].includes(String(result.mime_type || '').toLowerCase())
-      ? `<span class="media-format-fallback">${icon('image')}<span>浏览器不支持预览</span><small>可打开并下载原件</small></span>`
-      : `<img src="${esc(url)}" alt="${esc(entry.name)}" loading="lazy">`;
+    if (preview) preview.innerHTML = `<img src="${esc(localMediaPreviewUrl(url, result.mime_type))}" alt="${esc(entry.name)}" loading="lazy">`;
   } catch (error) {toast(error.message || '无法读取本机最佳画质', true);}
 }
 function resourceExportItems(entries) {
@@ -863,7 +857,8 @@ function resourceExportItems(entries) {
     if (entry.resourceKind === 'wechat_source') return {resource_kind: 'wechat_source', platform: 'wechat',
       account_id: message.account_id, conversation_id: message.conversation_id,
       shard: message.extra.shard, local_id: Number(message.extra.local_id),
-      image_tier: entry.type === 'image' ? state.imageExportTier : 'best'};
+      ...(entry.type === 'sticker' ? {media_type: 'sticker'}
+        : {image_tier: entry.type === 'image' ? state.imageExportTier : 'best'})};
     if (entry.resourceKind === 'qq_cache') return {resource_kind: 'qq_cache', platform: 'qq',
       account_id: message.account_id, resource_id: message.extra?.resource_id || message.id};
     const item = {platform: message.platform, account_id: message.account_id, message_id: message.id,
@@ -893,7 +888,8 @@ function refreshResourceToolbar() {
   const toolbar = document.querySelector('.resource-toolbar');
   if (toolbar) {toolbar.outerHTML = renderResourceToolbar();icons();}
 }
-function pager() {const hasNext = state.view === 'search' ? !!state.pageCursors[state.page + 1] : (state.page + 1) * 60 < state.total;return `<div class="pager">${iconButton('chevron-left', 'page-prev', '上一页', state.page === 0 ? 'disabled' : '')}<span>${state.page + 1} / ${Math.ceil(state.total / 60)}</span>${iconButton('chevron-right', 'page-next', '下一页', hasNext ? '' : 'disabled')}</div>`;}
+function usesCursorPaging() {return state.view === 'search' || (state.view === 'media' && state.filters.source === 'wechat-source');}
+function pager() {const hasNext = usesCursorPaging() ? !!state.pageCursors[state.page + 1] : (state.page + 1) * 60 < state.total;return `<div class="pager">${iconButton('chevron-left', 'page-prev', '上一页', state.page === 0 ? 'disabled' : '')}<span>${state.page + 1} / ${Math.ceil(state.total / 60)}</span>${iconButton('chevron-right', 'page-next', '下一页', hasNext ? '' : 'disabled')}</div>`;}
 function renderSources() {
   const syncEnabled = state.settings.capabilities?.sync?.enabled !== false;
   return `${head('<button class="btn" data-action="sync" ' + (syncEnabled ? '' : 'disabled aria-disabled="true"') + '>' + icon('refresh-cw') + '同步全部</button>')}<div class="view-scroll view-enter"><div class="section-title"><h2>已集成的数据源</h2><span class="label">3 PLATFORMS</span></div><div class="source-list">${['wechat', 'wecom', 'qq'].map(id => {
@@ -984,7 +980,7 @@ function renderSettingsBase() {
   const botSettings = `<section class="settings-group"><h2>企业微信机器人身份</h2><p class="muted small">这是机器人账号，不是当前登录员工。每条消息都须在本机单独审核。密钥由 Windows 当前用户 DPAPI 加密保存，不会回显。</p>${botEnabled ? `<div class="setting-row"><div><strong>${esc(bot.identity || '企业微信智能机器人（非当前员工身份）')}</strong><p>${bot.configured ? `已配置 · ID ${esc(bot.bot_id)}` : '尚未配置'}</p></div><span class="pill ${bot.configured ? 'connected' : ''}">${bot.configured ? '本机凭据' : '未配置'}</span></div><form id="wecom-bot-credentials-form" class="account-lock-form"><label>机器人 ID<input name="bot_id" maxlength="128" value="${esc(bot.bot_id || '')}" autocomplete="off" required></label><label>机器人密钥<input name="secret" type="password" minlength="8" maxlength="512" autocomplete="new-password" required></label><button class="btn primary" type="submit">${icon('lock-keyhole')}加密保存机器人凭据</button>${bot.configured ? `<button class="btn danger" type="button" data-action="remove-wecom-bot-credentials">${icon('trash-2')}移除凭据</button>` : ''}</form>` : '<p class="muted small">先在上方启用“企业微信机器人消息发送”，再配置凭据。模块关闭时，机器人身份信息与配置接口均不可访问。</p><button class="btn danger" type="button" data-action="remove-wecom-bot-credentials">移除本机保存的凭据</button>'}</section>`;
   const accountSafetySettings = botSettings + (accountSafety?.enabled ? `<section class="settings-group"><h2>账号安全</h2>${lockSetup}<p class="muted small">锁定本机 WebUI 与 HTTP API。独立配置的 MCP stdio 客户端不受此锁控制。</p></section>` : '');
   const notificationsEnabled = state.settings.capabilities?.notifications?.enabled === true;
-  const notificationSettings = notificationAvailable ? `<section class="settings-group"><h2>桌面通知</h2><p class="muted small">仅通知平台与“收到一条新消息”，不显示正文；首次连接会忽略已有记录。</p><div class="notification-settings"><label>接收范围<select id="notification-mode" aria-label="通知接收范围" ${notificationsEnabled ? '' : 'disabled'}><option value="all" ${filters.mode !== 'allowlist' ? 'selected' : ''}>全部所选平台（静音项除外）</option><option value="allowlist" ${filters.mode === 'allowlist' ? 'selected' : ''}>仅白名单会话（静音项仍排除）</option></select></label><label>提示样式<select id="notification-style" aria-label="桌面通知提示样式" ${notificationsEnabled ? '' : 'disabled'}><option value="normal" ${filters.style !== 'silent' ? 'selected' : ''}>标准提示</option><option value="silent" ${filters.style === 'silent' ? 'selected' : ''}>静音提示</option></select></label><div class="notification-platforms">${[['wechat','微信'],['wecom','企业微信'],['qq','QQ']].map(([id,name]) => `<label class="check-label"><input type="checkbox" data-action="notification-platform:${id}" ${(filters.platforms || []).includes(id) ? 'checked' : ''} ${notificationsEnabled ? '' : 'disabled'}>${name}</label>`).join('')}</div><p class="muted small">白名单可在会话详情中管理；静音名单始终优先。</p></div></section>` : '';
+  const notificationSettings = notificationAvailable ? `<section class="settings-group"><h2>桌面通知</h2><p class="muted small">仅通知平台与“收到一条新消息”，不显示正文；首次连接会忽略已有记录。</p><div class="notification-settings"><label>接收范围<select id="notification-mode" aria-label="通知接收范围" ${notificationsEnabled ? '' : 'disabled'}><option value="all" ${filters.mode !== 'allowlist' ? 'selected' : ''}>全部所选平台（静音项除外）</option><option value="allowlist" ${filters.mode === 'allowlist' ? 'selected' : ''}>仅白名单会话（静音项仍排除）</option></select></label><label>提示样式<select id="notification-style" aria-label="桌面通知提示样式" ${notificationsEnabled ? '' : 'disabled'}><option value="normal" ${filters.style !== 'silent' ? 'selected' : ''}>标准提示</option><option value="silent" ${filters.style === 'silent' ? 'selected' : ''}>静音提示</option></select></label><div class="notification-platforms">${[['wechat','微信'],['wecom','企业微信'],['qq','QQ']].map(([id,name]) => `<label class="check-label"><input type="checkbox" data-action="notification-platform:${id}" ${(filters.platforms || []).includes(id) ? 'checked' : ''} ${notificationsEnabled ? '' : 'disabled'}>${name}</label>`).join('')}</div><p class="muted small">白名单可在会话详情中管理；静音名单始终优先。</p><button class="btn" type="button" data-action="notification-test" ${notificationsEnabled ? '' : 'disabled'}>${icon('bell')}发送测试通知</button></div></section>` : '';
   return `${head()}<div class="view-scroll view-enter"><section class="settings-group"><h2>功能模块</h2>${capabilities}</section>${qqReadinessSettings}${state.settings.capabilities?.wechat_send?.available ? wechatSendReadinessSettings : ''}${accountSafetySettings}${notificationSettings}<section class="settings-group"><h2>外观</h2><div class="setting-row"><div><strong>主题</strong><p>工作区配色</p></div><div class="segmented">${[['light', '浅色'], ['dark', '深色'], ['system', '系统']].map(([id, name]) => `<button data-theme-value="${id}" class="${state.theme === id ? 'active' : ''}">${name}</button>`).join('')}</div></div></section><section class="settings-group"><h2>同步</h2><div class="setting-row"><div><strong>自动增量同步</strong><p>读取已连接平台的新消息</p></div><button class="toggle ${state.settings.auto_sync !== false ? 'on' : ''}" role="switch" aria-label="自动增量同步" aria-checked="${state.settings.auto_sync !== false}" data-action="toggle-sync"></button></div><div class="setting-row"><div><strong>同步间隔</strong><p>分钟</p></div><select id="sync-interval" aria-label="同步间隔">${[1, 3, 5, 10, 30].map(v => `<option value="${v}" ${Number(state.settings.sync_interval || 5) === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div></section><section class="settings-group"><h2>数据与隐私</h2><div class="setting-row"><div><strong>存储位置</strong><p class="mono">${esc(state.settings.storage_dir || '.local')}</p></div><span class="pill">${icon('hard-drive')}本机</span></div><div class="setting-row"><div><strong>访问地址</strong><p class="mono">${esc(location.origin)}</p></div><span class="pill">仅本机</span></div><div class="setting-row"><div><strong>搜索索引</strong><p>长关键词使用本地三元字符索引，短词回退字面搜索</p></div><span class="pill">${state.settings.fts_enabled ? 'FTS5 trigram' : 'LIKE 回退'}</span></div><div class="setting-row"><div><strong>原始聊天数据库</strong><p>查询与导出使用本地副本</p></div><span class="pill">只读</span></div></section><section class="settings-group"><h2>已集成项目</h2>${[['WeFlow', '5.0.0 / CC BY-NC-SA 4.0'], ['QQ Chat Exporter', '6.3.2 / GPL-3.0'], ['企业微信本地读取器', '只读 / 本地快照'], ['统一索引与导出', '本地 SQLite / MCP']].map(([name, value]) => `<div class="setting-row"><strong>${name}</strong><span class="small muted mono">${value}</span></div>`).join('')}</section></div>`;
 }
 function renderSettings() {
@@ -1232,8 +1228,9 @@ async function loadView() {
       if (request !== state.request) return;
       state.moments = result;
     } else if (['contacts', 'media', 'search'].includes(state.view)) {
+      const cursorPaging = usesCursorPaging();
       const params = {...state.filters, platform: state.platform, limit: 60,
-        ...(state.view === 'search' ? {cursor: state.pageCursors[state.page] || undefined} : {offset: state.page * 60})};
+        ...(cursorPaging ? {cursor: state.pageCursors[state.page] || undefined} : {offset: state.page * 60})};
       if (['contacts', 'media'].includes(state.view)) {
         delete params.account_scope;
         const scope = selectedAccountScope();
@@ -1248,7 +1245,7 @@ async function loadView() {
       if (request !== state.request) return;
       state.items = result.items; state.total = result.total;
       if (state.view === 'contacts') state.accountScopes = result.accounts || [];
-      if (state.view === 'search') state.pageCursors[state.page + 1] = result.next_cursor || null;
+      if (cursorPaging) state.pageCursors[state.page + 1] = result.next_cursor || null;
       if (state.view === 'media' && state.filters.source === 'qq-cache' && !result.available) {
         state.error = '此缓存目录暂不可用；本地数据库附件可在“聊天附件”中浏览';
       }
@@ -1657,13 +1654,17 @@ async function discoverQQKey() {
     toast(error.message || 'QQ 只读密钥发现失败', true);
   }
 }
+function localMediaPreviewUrl(url, mimeType) {
+  return url.startsWith('/local-media/') && ['image/heic', 'image/heif', 'image/tiff'].includes(String(mimeType || '').toLowerCase())
+    ? `${url}?preview=jpeg` : url;
+}
 function previewMedia(url, type, name = '', mimeType = '') {
   if (!safeUrl(url)) {toast('本机未缓存此媒体');return;}
   const kind = type === 'audio' ? 'voice' : type;
   const wma = kind === 'voice' && /\.wma$/i.test(String(name || ''));
   const silk = kind === 'voice' && /\.silk$/i.test(String(name || ''));
-  const unsupportedImage = kind === 'image' && ['image/heic', 'image/tiff'].includes(String(mimeType).toLowerCase());
-  const markup = kind === 'image' && unsupportedImage ? `<div class="media-format-fallback"><p>当前浏览器无法预览 ${esc(mimeType === 'image/heic' ? 'HEIC' : 'TIFF')} 图片。</p><a class="btn" href="${esc(url)}" download="${esc(name || 'image')}">${icon('download')}下载原件</a></div>` : kind === 'image' ? `<img class="preview-media" src="${esc(url)}" alt="${esc(name || '聊天图片')}">` : kind === 'video' ? `<video class="preview-media" src="${esc(url)}" controls autoplay></video>` : silk ? `<a class="btn" href="${esc(url)}" download>${icon('download')}下载 ${esc(name)}</a>` : kind === 'voice' ? `<audio src="${esc(url)}" controls autoplay></audio>${wma ? `<a class="btn" href="${esc(url)}" download>${icon('download')}下载 ${esc(name || 'WMA 音频')}</a>` : ''}` : `<a class="btn" href="${esc(url)}" download>${icon('download')}下载 ${esc(name || '文件')}</a>`;
+  const convertedImage = kind === 'image' && ['image/heic', 'image/heif', 'image/tiff'].includes(String(mimeType).toLowerCase());
+  const markup = kind === 'image' ? `<img class="preview-media" src="${esc(localMediaPreviewUrl(url, mimeType))}" alt="${esc(name || '聊天图片')}">${convertedImage ? `<a class="btn" href="${esc(url)}" download="${esc(name || 'image')}">${icon('download')}下载原件</a>` : ''}` : kind === 'video' ? `<video class="preview-media" src="${esc(url)}" controls autoplay></video>` : silk ? `<a class="btn" href="${esc(url)}" download>${icon('download')}下载 ${esc(name)}</a>` : kind === 'voice' ? `<audio src="${esc(url)}" controls autoplay></audio>${wma ? `<a class="btn" href="${esc(url)}" download>${icon('download')}下载 ${esc(name || 'WMA 音频')}</a>` : ''}` : `<a class="btn" href="${esc(url)}" download>${icon('download')}下载 ${esc(name || '文件')}</a>`;
   modal(name || typeNames[kind] || '媒体', markup, '', true);
 }
 async function resolveMedia(message, resourceIndex = null) {
@@ -1674,7 +1675,8 @@ async function resolveMedia(message, resourceIndex = null) {
       ? {resource_kind: 'wechat_source', platform: 'wechat', account_id: message.account_id,
         conversation_id: message.conversation_id, shard: message.extra.shard,
         local_id: String(message.extra.local_id),
-        ...(message.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})}
+        ...(message.type === 'sticker' ? {media_type: 'sticker'}
+          : message.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})}
       : qqCache
       ? {resource_kind: 'qq_cache', platform: 'qq', account_id: message.account_id,
         resource_id: message.extra?.resource_id || message.id}
@@ -1746,7 +1748,7 @@ async function disableAccountLock(form) {
 }
 function syncNotificationStream() {
   const enabled = state.settings.capabilities?.notifications?.enabled === true;
-  if (!enabled || !('Notification' in window) || Notification.permission !== 'granted') {
+  if (!enabled) {
     notificationStream?.close();notificationStream = null;return;
   }
   if (notificationStream) return;
@@ -1761,33 +1763,13 @@ function syncNotificationStream() {
   });
   stream.addEventListener('message', event => {
     if (accountLockTransition || notificationStream !== stream) return;
-    if (Notification.permission !== 'granted') {syncNotificationStream();return;}
     let message;
     try {message = JSON.parse(event.data);} catch {return;}
     if (!notificationAllowsMessage(message)) return;
     if (!document.hidden) return;
-    const notification = new Notification('本地消息整合中枢', {
-      body: `${platforms[message.platform]?.name || '聊天平台'} · 收到一条新消息`,
-      tag: notificationTag(message),
-      silent: notificationFilters().style === 'silent'
-    });
-    notification.onclick = () => {
-      if (accountLockTransition) {notification.close();return;}
-      notification.close();window.focus();
-      state.view = 'chat';state.platform = message.platform;state.cq = '';
-      state.selected = {id: message.conversation_id, platform: message.platform,
-        account_id: message.account_id, title: message.conversation_title || message.conversation_id,
-        kind: message.conversation_kind || 'private', message_count: 0};
-      state.contextMessage = null;state.contextMode = false;
-      renderShell();loadView();
-    };
+    api('/api/notifications/message', null, {method: 'POST',
+      body: JSON.stringify({event_id: Number(event.lastEventId)})}).catch(() => {});
   });
-}
-const notificationTags = new Map();
-function notificationTag(message) {
-  const identity = JSON.stringify([message.platform, message.account_id, message.conversation_id]);
-  if (!notificationTags.has(identity)) notificationTags.set(identity, crypto.randomUUID());
-  return `lmh-${notificationTags.get(identity)}`;
 }
 function notificationAllowsMessage(message) {
   if (!message || !platforms[message.platform] ||
@@ -1803,12 +1785,15 @@ function refreshNotificationPermission() {
 }
 document.addEventListener('visibilitychange', refreshNotificationPermission);
 window.addEventListener('focus', refreshNotificationPermission);
-async function toggleNotificationCapability(enabled) {
-  if (enabled) {
-    if (!('Notification' in window)) {toast('当前浏览器不支持桌面通知', true);return;}
-    const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
-    if (permission !== 'granted') {toast('浏览器未授权桌面通知，功能保持关闭', true);return;}
+function sendTestNotification() {
+  if (state.settings.capabilities?.notifications?.enabled !== true) {
+    toast('先启用桌面通知再发送测试', true);return;
   }
+  api('/api/notifications/test', null, {method: 'POST', body: '{}'})
+    .then(() => toast('测试通知已提交给 Windows，是否显示请查看桌面'))
+    .catch(error => toast(error.message, true));
+}
+async function toggleNotificationCapability(enabled) {
   await saveSettings({capabilities: {notifications: enabled}});
   renderShell();
 }
@@ -2007,7 +1992,7 @@ document.addEventListener('click', async event => {
   else if (action === 'wechat-send-readiness') await checkWeChatSendReadiness();
   else if (action.startsWith('resolve-media:')) {const encoded = action.slice('resolve-media:'.length);const split = encoded.lastIndexOf(':');const resourceIndex = split < 0 ? null : Number(encoded.slice(split + 1));const id = decodeURIComponent(split < 0 ? encoded : encoded.slice(0, split));const message = state.messages.find(m => m.id === id);if (message) await resolveMedia(message, Number.isInteger(resourceIndex) ? resourceIndex : null);}
   else if (action === 'page-prev' && state.page > 0) {state.page--;await loadView();}
-  else if (action === 'page-next' && (state.view === 'search' ? !!state.pageCursors[state.page + 1] : (state.page + 1) * 60 < state.total)) {state.page++;await loadView();}
+  else if (action === 'page-next' && (usesCursorPaging() ? !!state.pageCursors[state.page + 1] : (state.page + 1) * 60 < state.total)) {state.page++;await loadView();}
   else if (action === 'toggle-sync') await saveSettings({auto_sync: state.settings.auto_sync === false});
   else if (action === 'account-lock-now') await lockAccountNow();
   else if (action === 'remove-wecom-bot-credentials') await removeWeComBotCredentials();
@@ -2015,6 +2000,7 @@ document.addEventListener('click', async event => {
   else if (action === 'notification-allow' && state.selected) await toggleConversationAllowlist(state.selected);
   else if (action === 'notification-mute' && state.selected) await toggleConversationNotifications(state.selected);
   else if (action.startsWith('notification-platform:')) await toggleNotificationPlatform(action.slice('notification-platform:'.length), target.checked);
+  else if (action === 'notification-test') sendTestNotification();
   else if (action === 'capability:notifications') {await toggleNotificationCapability(state.settings.capabilities?.notifications?.enabled !== true);if (state.view === 'settings') await loadView();}
   else if (action.startsWith('capability:')) {const id = action.slice('capability:'.length);await saveSettings({capabilities: {[id]: !state.settings.capabilities?.[id]?.enabled}});renderShell();if (state.view === 'settings') await loadView();}
   else if (action === 'auto-export-run') await autoExportAction('run');
@@ -2120,7 +2106,7 @@ document.addEventListener('submit', async event => {
     try {await api('/api/contact-identities', null, {method: 'POST', body: JSON.stringify({platform: state.managedContact.platform, account_id: state.managedContact.account_id, contact_id: state.managedContact.id, identity_id: new FormData(form).get('identity_id')})});closeModal();toast('统一身份已关联');await loadView();}
     catch (e) {toast(e.message, true);}
   }
-  else if (form.id === 'listing-search') {clearMediaSelection();state.filters = {...state.filters, ...Object.fromEntries(new FormData(form))};if (state.filters.source === 'wechat-source') {state.filters.q = '';if (selectedAccountScope()?.platform !== 'wechat' || !state.filters.conversation_id) {state.filters.source = 'chat';toast('微信源媒体需要准确的微信账号和会话', true);}if (!['', 'image', 'video', 'voice', 'file'].includes(state.filters.type)) state.filters.type = '';}state.page = 0;state.pageCursors = [null];await loadView();}
+  else if (form.id === 'listing-search') {clearMediaSelection();state.filters = {...state.filters, ...Object.fromEntries(new FormData(form))};if (state.filters.source === 'wechat-source') {state.filters.q = '';if (selectedAccountScope()?.platform !== 'wechat') {state.filters.source = 'chat';toast('微信源媒体需要先选择一个微信账号', true);}if (!['', 'image', 'sticker', 'video', 'voice', 'file'].includes(state.filters.type)) state.filters.type = '';}state.page = 0;state.pageCursors = [null];await loadView();}
   else if (form.id === 'moments-search') {state.momentFilter = Object.fromEntries(new FormData(form));state.momentOffset = 0;await loadView();}
   else if (form.id === 'message-search') {
     const request = ++state.request;

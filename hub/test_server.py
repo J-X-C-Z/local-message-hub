@@ -192,7 +192,7 @@ class ServerTest(unittest.TestCase):
         readiness.assert_called_once_with(False)
 
     def test_qq_forward_resource_route_uses_exact_indexed_message_scope(self):
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
         self.hub.store.ingest('qq', '10001', [{'id': 'peer', 'title': 'Peer'}], [{
             'id': 'peer:parent', 'conversation_id': 'peer', 'timestamp': 1000,
             'type': 'text', 'text': 'forward',
@@ -1052,6 +1052,13 @@ class ServerTest(unittest.TestCase):
             pending = json.load(response)
         self.assertEqual(pending['status'], 'pending_approval')
         self.assertEqual(pending['identity_label'], '当前登录的本机微信账号（GUI 拟人操作）')
+        mismatch = {**payload, 'account_id': 'wxid_other0001',
+                    'request_id': 'wechat-send-mismatch-01'}
+        with self.assertRaises(HTTPError) as wrong_account:
+            self.request('/api/wechat-sends/prepare', headers,
+                         json.dumps(mismatch).encode())
+        self.assertEqual(wrong_account.exception.code, 400)
+        self.assertIsNone(self.hub.send_repository.get(mismatch['request_id']))
         self.assertEqual(wx.calls, [])
         with self.request('/api/wechat-send-readiness') as response:
             readiness = json.load(response)
@@ -2260,12 +2267,14 @@ class ServerTest(unittest.TestCase):
             self.hub.sync('qq')
         self.assertEqual(self.hub.sources['qq']['state'], 'connected')
 
-    def test_qq_sync_resumes_offset_after_hub_restart(self):
-        from types import SimpleNamespace
-
+    def test_qq_sync_resumes_keyset_cursor_after_hub_restart(self):
         storage = Path(self.temp.name) / 'qq-resume'
         first = Hub(storage)
         calls = []
+        interrupted = []
+        rows = [{'id': f'peer:{index}', 'conversation_id': 'peer',
+                 'timestamp': 2000 - index, 'text': 'fixture', '_rowid': index}
+                for index in range(1, 1002)]
 
         class Provider:
             def status(self):
@@ -2277,15 +2286,20 @@ class ServerTest(unittest.TestCase):
             def contacts(self):
                 return []
 
-            def messages(self, _conversation, limit, offset):
-                calls.append(offset)
-                if offset == 0:
-                    return [{'id': f'peer:{index}', 'conversation_id': 'peer',
-                             'timestamp': index, 'text': 'fixture'} for index in range(limit)]
-                if len(calls) == 2:
+            def messages_page(self, _conversation, limit, cursor=None):
+                after = cursor['rowid'] if cursor else 0
+                calls.append(after)
+                if after == 500 and not interrupted:
+                    interrupted.append(True)
                     raise RuntimeError('simulated interruption')
-                return [{'id': 'peer:last', 'conversation_id': 'peer',
-                         'timestamp': 1000, 'text': 'fixture'}]
+                remaining = [row for row in rows if row['_rowid'] > after]
+                selected = remaining[:limit]
+                public_items = [{key: value for key, value in row.items() if key != '_rowid'}
+                                for row in selected]
+                next_cursor = ({'timestamp': selected[-1]['timestamp'],
+                                'rowid': selected[-1]['_rowid']} if selected else cursor)
+                return {'items': public_items, 'next_cursor': next_cursor,
+                        'has_more': len(remaining) > limit}
 
         try:
             with patch.object(first, 'qq_local_provider', return_value=Provider()):
@@ -2293,14 +2307,15 @@ class ServerTest(unittest.TestCase):
                     first.sync_qq()
             checkpoint = first.store.sync_checkpoint('qq', 'qq-account', 'peer')
             self.assertEqual(checkpoint['next_offset'], 500)
+            self.assertEqual(checkpoint['cursor']['rowid'], 500)
             self.assertFalse(checkpoint['complete'])
             first.close()
 
             restarted = Hub(storage)
             with patch.object(restarted, 'qq_local_provider', return_value=Provider()):
                 restarted.sync_qq()
-            self.assertEqual(calls, [0, 500, 0, 500])
-            self.assertEqual(restarted.store.count('qq'), 501)
+            self.assertEqual(calls, [0, 500, 500, 1000])
+            self.assertEqual(restarted.store.count('qq'), 1001)
             self.assertTrue(restarted.store.sync_checkpoint(
                 'qq', 'qq-account', 'peer')['complete'])
             restarted.close()
@@ -3204,7 +3219,7 @@ class ServerTest(unittest.TestCase):
                 'available': True, 'playable': True, 'path': str(wav)}) as decoder:
             result = self.hub.resolve_media({'platform': 'qq', 'account_id': 'account',
                                              'conversation_id': 'peer', 'message_id': 'peer:voice'})
-        decoder.assert_called_once_with(str(silk))
+        decoder.assert_called_once_with(str(silk), self.hub.storage / 'media' / 'decoded-voice')
         self.assertEqual(self.hub.media_paths[result['media_url'].rsplit('/', 1)[1]], wav.resolve())
 
     def test_voice_decoder_fallback_downloads_message_bound_silk(self):
@@ -3589,6 +3604,22 @@ class ServerTest(unittest.TestCase):
             disabled = json.load(response)['config_text']
         self.assertNotIn('- list_group_members', disabled)
 
+    def test_mcp_client_config_keeps_wechat_send_status_when_client_is_offline(self):
+        self.hub.set_capabilities({'mcp': True, 'wechat_send': True})
+        with patch.object(self.hub.wechat_sender, 'readiness', return_value={
+                'state': 'window_not_found'}):
+            with self.request('/api/mcp') as response:
+                offline = json.load(response)['config_text']
+        self.assertIn('- get_wechat_send_status', offline)
+        self.assertNotIn('- prepare_wechat_send', offline)
+
+        with patch.object(self.hub.wechat_sender, 'readiness', return_value={
+                'state': 'ready', 'account_id': 'synthetic-account'}):
+            with self.request('/api/mcp') as response:
+                ready = json.load(response)['config_text']
+        self.assertIn('- get_wechat_send_status', ready)
+        self.assertIn('- prepare_wechat_send', ready)
+
     def test_message_event_stream_is_gated_filtered_and_body_free(self):
         with self.assertRaises(HTTPError) as denied:
             self.request('/api/events/messages')
@@ -3756,6 +3787,46 @@ class ServerTest(unittest.TestCase):
             self.request('/api/settings', headers,
                          b'{"notification_filters":{"style":"html"}}')
         self.assertEqual(invalid_style.exception.code, 400)
+
+    def test_native_notification_requires_recent_filtered_event_and_deduplicates_tabs(self):
+        from unittest.mock import patch
+
+        self.hub.set_capabilities({'notifications': True})
+        event = self.hub.store.incoming_message_events(0, 1)[0]
+        self.hub.queue_notification_event(event['event_id'])
+        with patch('hub.server.show_notification') as show:
+            with self.request('/api/notifications/test', {'Content-Type': 'application/json'},
+                              b'{}') as response:
+                self.assertEqual(json.load(response), {'submitted': True})
+            show.assert_called_once_with('这是一条测试通知，不含聊天内容。')
+            show.reset_mock()
+            with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
+                              json.dumps({'event_id': event['event_id']}).encode()) as response:
+                self.assertEqual(json.load(response), {'submitted': True})
+            show.assert_called_once_with('微信 · 收到一条新消息')
+            with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
+                              json.dumps({'event_id': event['event_id']}).encode()) as response:
+                self.assertEqual(json.load(response), {'submitted': False, 'duplicate': True})
+            show.assert_called_once()
+
+            with self.assertRaises(HTTPError) as stale:
+                self.request('/api/notifications/message', {'Content-Type': 'application/json'},
+                             b'{"event_id":999999}')
+            self.assertEqual(stale.exception.code, 400)
+
+            with self.request('/api/settings', {'Content-Type': 'application/json'},
+                              b'{"notification_filters":{"mode":"allowlist",'
+                              b'"allowed_conversations":[],"muted_conversations":[]}}'):
+                pass
+            self.hub.store.ingest('qq', 'account', [{'id': 'muted-room', 'title': 'Private'}], [
+                {'id': 'muted-event', 'conversation_id': 'muted-room', 'timestamp': 300,
+                 'text': 'private fixture'}])
+            actual_event = self.hub.store.message_rowid()
+            self.hub.queue_notification_event(actual_event)
+            with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
+                              json.dumps({'event_id': actual_event}).encode()) as response:
+                self.assertEqual(json.load(response), {'submitted': False, 'filtered': True})
+            show.assert_called_once()
 
     def test_auto_export_is_gated_configurable_and_runs_against_local_index(self):
         headers = {'Content-Type': 'application/json'}
@@ -3946,7 +4017,7 @@ class ServerTest(unittest.TestCase):
     def test_unindexed_wechat_source_media_lists_previews_and_exports_by_shard_identity(self):
         from types import SimpleNamespace
         from urllib.parse import urlencode
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
 
         account, room = 'account', 'room'
         self.hub.store.ingest('wechat', account, [{'id': room, 'title': 'Synthetic room'}], [{
@@ -3956,29 +4027,64 @@ class ServerTest(unittest.TestCase):
         source_rows = [
             {'id': f'{room}:message_0.db:7', 'platform': 'wechat', 'conversation_id': room,
              'timestamp': 30, 'type': 'image', 'raw_type': '3', 'text': '',
+             '_source_cursor': {'sort_seq': 30, 'sort_seq_is_null': False,
+                                'shard': 'message_0.db', 'local_id': 7},
              'extra': {'resource_kind': 'wechat_source', 'shard': 'message_0.db',
                        'local_id': 7, 'local_type': 3}},
             {'id': f'{room}:message_1.db:7', 'platform': 'wechat', 'conversation_id': room,
              'timestamp': 20, 'type': 'image', 'raw_type': '3', 'text': '',
+             '_source_cursor': {'sort_seq': 20, 'sort_seq_is_null': False,
+                                'shard': 'message_1.db', 'local_id': 7},
              'extra': {'resource_kind': 'wechat_source', 'shard': 'message_1.db',
                        'local_id': 7, 'local_type': 3}},
             {'id': f'{room}:message_2.db:8', 'platform': 'wechat', 'conversation_id': room,
              'timestamp': 10, 'type': 'file', 'raw_type': '49', 'text': '',
+             '_source_cursor': {'sort_seq': 10, 'sort_seq_is_null': False,
+                                'shard': 'message_2.db', 'local_id': 8},
              'extra': {'resource_kind': 'wechat_source', 'shard': 'message_2.db',
                        'local_id': 8, 'local_type': 49}},
+            {'id': f'{room}:message_3.db:9', 'platform': 'wechat', 'conversation_id': room,
+             'timestamp': 9, 'type': 'sticker', 'raw_type': '47', 'text': '',
+             '_source_cursor': {'sort_seq': 9, 'sort_seq_is_null': False,
+                                'shard': 'message_3.db', 'local_id': 9},
+             'extra': {'resource_kind': 'wechat_source', 'shard': 'message_3.db',
+                       'local_id': 9, 'local_type': 47}},
         ]
         payload = b'local source image'
         media_path = Path(self.temp.name) / 'private-source-name.png'
         media_path.write_bytes(payload)
+        sticker_path = Path(self.temp.name) / 'private-sticker.png'
+        sticker_path.write_bytes(b'local cached sticker')
         provider = __import__('integrations.wechat.provider', fromlist=['WeChatProvider']).WeChatProvider.__new__(
             __import__('integrations.wechat.provider', fromlist=['WeChatProvider']).WeChatProvider)
-        provider.reader = SimpleNamespace(wxid=account, account='', get_nickname=lambda _room: 'Synthetic room')
+        emoji_hash = 'a' * 32
+        source_message = {'local_type': 47,
+                          'content': f'<msg><emoji md5="{emoji_hash}"/></msg>'}
+        provider.reader = SimpleNamespace(
+            wxid=account, account='', get_nickname=lambda _room: 'Synthetic room',
+            get_message_row=lambda _room, local_id, shard: source_message
+            if (local_id, shard) == (9, 'message_3.db') else None)
+        provider.resolve_cached_emoji = Mock(return_value=sticker_path)
+        source_media_calls = []
 
-        def source_media(_room, *, media_type='', start_time=None, end_time=None, offset=0, limit=60):
+        def source_media(_room, *, media_type='', start_time=None, end_time=None,
+                         offset=0, limit=60, after_cursor=None, include_total=True):
+            source_media_calls.append({'after_cursor': after_cursor,
+                                       'include_total': include_total})
             rows = [row for row in source_rows if not media_type or row['type'] == media_type]
             rows = [row for row in rows if (start_time is None or row['timestamp'] >= start_time)
                     and (end_time is None or row['timestamp'] <= end_time)]
-            return {'items': rows[offset:offset + limit], 'total': len(rows)}
+            rows = [dict(row, _source_cursor=row.get('_source_cursor') or {
+                'sort_seq': row['timestamp'], 'sort_seq_is_null': False,
+                'shard': row['extra']['shard'], 'local_id': row['extra']['local_id'],
+            }) for row in rows]
+            if after_cursor is not None:
+                matching = next((index for index, row in enumerate(rows)
+                                 if row['_source_cursor'] == after_cursor), None)
+                offset = matching + 1 if matching is not None else len(rows)
+            items = [dict(row) for row in rows[offset:offset + limit]]
+            next_cursor = items[-1]['_source_cursor'] if offset + len(items) < len(rows) else None
+            return {'items': items, 'total': len(rows), 'next_cursor': next_cursor}
 
         provider.source_media = source_media
         provider.media = Mock(return_value={'available': True, 'path': str(media_path)})
@@ -3989,12 +4095,41 @@ class ServerTest(unittest.TestCase):
                 'source': 'wechat-source', 'platform': 'wechat', 'account_id': account,
                 'conversation_id': room, 'limit': '60'})) as response:
             listing = json.load(response)
-        self.assertEqual(listing['total'], 2)
+        self.assertEqual(listing['total'], 3)
         self.assertEqual([item['id'] for item in listing['items']],
-                         [f'{room}:message_1.db:7', f'{room}:message_2.db:8'])
+                         [f'{room}:message_1.db:7', f'{room}:message_2.db:8',
+                          f'{room}:message_3.db:9'])
+        with self.request('/api/media?' + urlencode({
+                'source': 'wechat-source', 'platform': 'wechat', 'account_id': account,
+                'conversation_id': room, 'type': 'sticker'})) as response:
+            sticker_listing = json.load(response)
+        self.assertEqual([item['type'] for item in sticker_listing['items']], ['sticker'])
         serialized = json.dumps(listing)
         self.assertNotIn('SECRET MESSAGE BODY', serialized)
         self.assertNotIn(str(media_path), serialized)
+
+        with patch.object(self.hub.store, 'wechat_indexed_source_media_count',
+                          wraps=self.hub.store.wechat_indexed_source_media_count) as count_indexed:
+            first_page = self.hub.list_wechat_source_media({
+                'platform': 'wechat', 'account_id': account, 'conversation_id': room,
+                'limit': 1,
+            })
+            second_page = self.hub.list_wechat_source_media({
+                'platform': 'wechat', 'account_id': account, 'conversation_id': room,
+                'limit': 1, 'cursor': first_page['next_cursor'],
+            })
+        count_indexed.assert_called_once()
+        self.assertEqual(first_page['items'][0]['id'], f'{room}:message_1.db:7')
+        self.assertTrue(first_page['next_cursor'])
+        self.assertEqual(second_page['items'][0]['id'], f'{room}:message_2.db:8')
+        self.assertFalse(any('_source_cursor' in item for item in first_page['items']))
+        self.assertEqual(source_media_calls[-1]['include_total'], False)
+        self.assertNotEqual(first_page['items'][0]['id'], second_page['items'][0]['id'])
+        with self.assertRaisesRegex(ValueError, '游标'):
+            self.hub.list_wechat_source_media({
+                'platform': 'wechat', 'account_id': account, 'conversation_id': 'other-room',
+                'limit': 1, 'cursor': first_page['next_cursor'],
+            })
 
         image = listing['items'][0]
         identity = {'resource_kind': 'wechat_source', 'platform': 'wechat',
@@ -4007,6 +4142,41 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(response.read(), payload)
         provider.media.assert_called_with(room, 7, 'message_1.db',
                                           image_tier='mid', video_variant=None)
+
+        sticker_identity = {'resource_kind': 'wechat_source', 'platform': 'wechat',
+                            'account_id': account, 'conversation_id': room,
+                            'shard': 'message_3.db', 'local_id': '9',
+                            'media_type': 'sticker'}
+        with self.request('/api/media/resolve?' + urlencode(sticker_identity)) as response:
+            sticker = json.load(response)
+        self.assertTrue(sticker['available'])
+        self.assertNotIn(emoji_hash, json.dumps(sticker))
+        self.assertNotIn(str(sticker_path), json.dumps(sticker))
+        provider.resolve_cached_emoji.assert_called_once_with(emoji_hash)
+        with self.request(sticker['media_url']) as response:
+            self.assertEqual(response.read(), b'local cached sticker')
+        source_message['local_type'] = 49
+        with self.assertRaisesRegex(ValueError, '类型已变化'):
+            self.hub.resolve_media(sticker_identity)
+        source_message['local_type'] = 47
+
+        headers = {'Content-Type': 'application/json'}
+        with self.request('/api/resource-jobs', headers,
+                          json.dumps({'items': [sticker_identity]}).encode()) as response:
+            sticker_job = json.load(response)
+        deadline = time.monotonic() + 3
+        sticker_state = sticker_job
+        while (sticker_state['state'] not in ('completed', 'failed', 'cancelled')
+               and time.monotonic() < deadline):
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + sticker_job['id']) as response:
+                sticker_state = json.load(response)
+        self.assertEqual(sticker_state['state'], 'completed')
+        with self.request(sticker_state['download_url']) as response:
+            with ZipFile(io.BytesIO(response.read())) as archive:
+                self.assertEqual(archive.read('attachments/001-wechat-sticker.png'),
+                                 b'local cached sticker')
+        source_rows[:] = [row for row in source_rows if row['type'] != 'sticker']
 
         identity['image_tier'] = 'best'
         headers = {'Content-Type': 'application/json'}
@@ -4053,6 +4223,216 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(page['total'], 64)
         self.assertEqual([item['id'] for item in page['items']], [
             f'{room}:message_3.db:160', f'{room}:message_4.db:160'])
+
+        for local_id in range(1000, 11010):
+            source_rows.append({
+                'id': f'{room}:message_5.db:{local_id}', 'platform': 'wechat',
+                'conversation_id': room, 'timestamp': local_id, 'type': 'image',
+                'raw_type': '3', 'text': '',
+                'extra': {'resource_kind': 'wechat_source', 'shard': 'message_5.db',
+                          'local_id': local_id, 'local_type': 3},
+            })
+        with self.request('/api/media?' + urlencode({
+                'source': 'wechat-source', 'platform': 'wechat', 'account_id': account,
+                'conversation_id': room, 'limit': '2', 'offset': '10000'})) as response:
+            deep_page = json.load(response)
+        visible_ids = [row['id'] for row in source_rows
+                       if row['id'] != f'{room}:message_0.db:7']
+        self.assertEqual(deep_page['total'], len(visible_ids))
+        self.assertEqual([item['id'] for item in deep_page['items']],
+                         visible_ids[10000:10002])
+
+    def test_mcp_wechat_source_media_resolves_exact_account_conversation_shard_and_type(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+
+        account, room = 'synthetic-account', 'synthetic-room'
+        cache = Path(self.temp.name) / 'synthetic-wechat-runtime'
+        media_dir = cache / 'media'
+        media_dir.mkdir(parents=True)
+        image_path = media_dir / 'fixture.png'
+        image_payload = b'\x89PNG\r\n\x1a\nfixture-image'
+        image_path.write_bytes(image_payload)
+        provider = SimpleNamespace(reader=SimpleNamespace(
+            wxid=account, account='',
+            get_message_row=lambda conversation_id, local_id, shard: {
+                'local_type': 3,
+            } if (conversation_id, local_id, shard) == (room, 7, 'message_0.db') else None),
+            emoji_cache_account_dir=lambda: cache / 'emoji')
+        self.hub.providers['wechat'] = provider
+        identity = {'platform': 'wechat', 'account_id': account, 'conversation_id': room,
+                    'shard': 'message_0.db', 'local_id': '7', 'type': 'image'}
+        with patch('integrations.wechat.provider.RUNTIME', cache), patch.object(
+                self.hub, 'resolve_media', return_value={
+                    'media_url': '/local-media/fixture-token'}
+                ) as resolve:
+            self.hub.media_paths['fixture-token'] = image_path
+            payload, mime = self.hub.read_wechat_source_media(identity)
+        self.assertEqual((mime, payload), ('image/png', image_payload))
+        resolve.assert_called_once_with({
+            'resource_kind': 'wechat_source', 'platform': 'wechat',
+            'account_id': account, 'conversation_id': room,
+            'shard': 'message_0.db', 'local_id': '7',
+        })
+        with self.assertRaisesRegex(ValueError, '类型'):
+            self.hub.read_wechat_source_media({
+                'platform': 'wechat', 'account_id': account, 'conversation_id': room,
+                'shard': 'message_0.db', 'local_id': '7', 'type': 'video',
+            })
+        with self.assertRaisesRegex(ValueError, '账号'):
+            self.hub.read_wechat_source_media({
+                'platform': 'wechat', 'account_id': 'other-account', 'conversation_id': room,
+                'shard': 'message_0.db', 'local_id': '7', 'type': 'image',
+            })
+
+    def test_wechat_account_source_media_paginates_over_more_than_100_sessions(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        account = 'wechat-account-wide-fixture'
+        sessions = [{'username': f'room-{index:03d}'} for index in range(105)]
+        rows_by_room = {}
+        for index, session in enumerate(sessions):
+            room = session['username']
+            rows_by_room[room] = [{
+                'id': f'{room}:message_0.db:1', 'platform': 'wechat',
+                'conversation_id': room, 'timestamp': 100, 'sort_seq': 100,
+                'type': 'image', 'raw_type': '3', 'text': '',
+                '_source_cursor': {'sort_seq': 100, 'sort_seq_is_null': False,
+                                   'shard': 'message_0.db', 'local_id': 1},
+                'extra': {'resource_kind': 'wechat_source', 'shard': 'message_0.db',
+                          'local_id': 1, 'local_type': 3},
+            }]
+        rows_by_room['room-000'].append({
+            'id': 'room-000:message_1.db:2', 'platform': 'wechat',
+            'conversation_id': 'room-000', 'timestamp': 100, 'sort_seq': 100,
+            'type': 'image', 'raw_type': '3', 'text': '',
+            '_source_cursor': {'sort_seq': 100, 'sort_seq_is_null': False,
+                               'shard': 'message_1.db', 'local_id': 2},
+            'extra': {'resource_kind': 'wechat_source', 'shard': 'message_1.db',
+                      'local_id': 2, 'local_type': 3},
+        })
+        self.hub.store.ingest('wechat', account, [{'id': 'room-000'}], [{
+            'id': 'room-000:message_0.db:1', 'conversation_id': 'room-000',
+            'timestamp': 100, 'type': 'image', 'raw_type': '3', 'text': '',
+        }])
+        self.assertEqual(self.hub.store.wechat_source_media_ids(
+            account, 'room-000', ['room-000:message_0.db:1']),
+            {'room-000:message_0.db:1'})
+
+        def source_media(room, *, media_type='', start_time=None, end_time=None,
+                         offset=0, limit=60, after_cursor=None, after_sort_seq=None,
+                         after_sort_seq_inclusive=False, include_total=True):
+            rows = list(rows_by_room[room])
+            if media_type:
+                rows = [row for row in rows if row['type'] == media_type]
+            if start_time is not None:
+                rows = [row for row in rows if row['timestamp'] >= start_time]
+            if end_time is not None:
+                rows = [row for row in rows if row['timestamp'] <= end_time]
+            if after_sort_seq is not None:
+                rows = [row for row in rows if row['sort_seq'] < after_sort_seq or
+                        (after_sort_seq_inclusive and row['sort_seq'] == after_sort_seq)]
+            if after_cursor is not None:
+                found = next((index for index, row in enumerate(rows)
+                              if row['_source_cursor'] == after_cursor), None)
+                rows = rows[found + 1:] if found is not None else []
+            page = [dict(row, _source_cursor=dict(row['_source_cursor']))
+                    for row in rows[offset:offset + limit]]
+            next_cursor = (page[-1]['_source_cursor']
+                           if offset + len(page) < len(rows) else None)
+            return {'items': page, 'total': len(rows) if include_total else None,
+                    'next_cursor': next_cursor}
+
+        image_path = Path(self.temp.name) / 'account-wide-source-image.png'
+        image_path.write_bytes(b'\x89PNG\r\n\x1a\nsynthetic')
+        provider = SimpleNamespace(
+            reader=SimpleNamespace(wxid=account, account='',
+                                   get_sessions=lambda limit: sessions[:limit],
+                                   get_nickname=lambda room: 'Synthetic ' + room,
+                                   get_message_row=lambda room, local_id, shard: {
+                                       'local_type': 3, 'content': 'PRIVATE MESSAGE BODY'}
+                                   if (room, local_id, shard) ==
+                                   ('room-000', 2, 'message_1.db') else None),
+            _SOURCE_MEDIA_TYPES=__import__(
+                'integrations.wechat.provider', fromlist=['WeChatProvider']).WeChatProvider._SOURCE_MEDIA_TYPES,
+            source_media=source_media,
+            media=Mock(return_value={'available': True, 'path': str(image_path),
+                                     'type': 'image'}),
+        )
+        self.hub.providers['wechat'] = provider
+        self.hub.set_capabilities({'media': True})
+
+        query = {'source': 'wechat-source', 'platform': 'wechat',
+                 'account_id': account, 'limit': '60'}
+        with patch.object(self.hub.store, 'wechat_indexed_source_media_count', return_value=0):
+            with self.request('/api/media?' + urlencode(query)) as response:
+                first = json.load(response)
+        self.assertNotIn(account, first['next_cursor'])
+        self.assertNotIn('room-', first['next_cursor'])
+        query['cursor'] = first['next_cursor']
+        with self.request('/api/media?' + urlencode(query)) as response:
+            second = json.load(response)
+
+        all_items = first['items'] + second['items']
+        ids = [item['id'] for item in all_items]
+        self.assertNotIn('room-000:message_0.db:1', ids)
+        self.assertEqual(first['total'], 105)
+        self.assertEqual(second['total'], 105)
+        self.assertEqual(len(ids), 105, ids)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(ids[0], 'room-000:message_1.db:2')
+        self.assertEqual(ids[1], 'room-001:message_0.db:1')
+        self.assertEqual(ids[-1], 'room-104:message_0.db:1')
+        self.assertEqual(all_items[0]['extra']['shard'], 'message_1.db')
+        self.assertEqual(all_items[0]['extra']['local_id'], 2)
+        self.assertEqual((all_items[0]['account_id'], all_items[0]['conversation_id']),
+                         (account, 'room-000'))
+        self.assertNotIn('_source_cursor', all_items[0])
+        serialized = json.dumps(all_items)
+        self.assertNotIn('PRIVATE MESSAGE BODY', serialized)
+        self.assertNotIn(str(image_path), serialized)
+        resolve_identity = urlencode({
+            'resource_kind': 'wechat_source', 'platform': 'wechat',
+            'account_id': account, 'conversation_id': all_items[0]['conversation_id'],
+            'shard': all_items[0]['extra']['shard'],
+            'local_id': all_items[0]['extra']['local_id'],
+        })
+        with self.request('/api/media/resolve?' + resolve_identity) as response:
+            resolved = json.load(response)
+        with self.request(resolved['media_url']) as response:
+            self.assertEqual(response.read(), image_path.read_bytes())
+        identity = {'resource_kind': 'wechat_source', 'platform': 'wechat',
+                    'account_id': account, 'conversation_id': 'room-000',
+                    'shard': 'message_1.db', 'local_id': '2', 'image_tier': 'mid'}
+        headers = {'Content-Type': 'application/json'}
+        with self.request('/api/resource-jobs', headers,
+                          json.dumps({'items': [identity]}).encode()) as response:
+            job = json.load(response)
+        deadline = time.monotonic() + 3
+        state = job
+        while state['state'] not in ('completed', 'failed', 'cancelled') and time.monotonic() < deadline:
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + job['id']) as response:
+                state = json.load(response)
+        self.assertEqual(state['state'], 'completed')
+        with self.request(state['download_url']) as response:
+            with ZipFile(io.BytesIO(response.read())) as archive:
+                manifest = json.loads(archive.read('manifest.json'))['items']
+                self.assertEqual((manifest[0]['conversation_id'], manifest[0]['shard'],
+                                  manifest[0]['local_id']),
+                                 ('room-000', 'message_1.db', 2))
+                attachment = next(name for name in archive.namelist()
+                                  if name.startswith('attachments/'))
+                self.assertEqual(archive.read(attachment), image_path.read_bytes())
+        provider.media.assert_called_with('room-000', 2, 'message_1.db',
+                                          image_tier='mid', video_variant=None)
+
+        with self.assertRaisesRegex(ValueError, '游标'):
+            self.hub.list_wechat_source_media({
+                'platform': 'wechat', 'account_id': account,
+                'type': 'video', 'limit': 60, 'cursor': first['next_cursor'],
+            })
 
     def test_wechat_media_http_resolution_covers_cached_types_without_source_mutation(self):
         from urllib.parse import urlencode
@@ -5407,6 +5787,27 @@ class ServerTest(unittest.TestCase):
         self.hub.media_paths['test-capability'] = payload
         with self.request('/local-media/test-capability') as response:
             self.assertIn('attachment', response.headers['Content-Disposition'])
+
+    def test_heic_jpeg_preview_keeps_original_download_unchanged(self):
+        from unittest.mock import patch
+
+        payload = Path(self.temp.name) / 'photo.heic'
+        original = (20).to_bytes(4, 'big') + b'ftypheic\x00\x00\x00\x00mif1'
+        jpeg = b'\xff\xd8\xfffixture\xff\xd9'
+        payload.write_bytes(original)
+        self.hub.media_paths['test-heic-preview'] = payload
+
+        with patch.object(Handler, 'preview_local_image', return_value=jpeg) as convert:
+            with self.request('/local-media/test-heic-preview?preview=jpeg') as response:
+                self.assertEqual(response.headers.get_content_type(), 'image/jpeg')
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                self.assertEqual(response.read(), jpeg)
+            convert.assert_called_once_with(payload, 'image/heic')
+
+        with self.request('/local-media/test-heic-preview') as response:
+            self.assertEqual(response.headers.get_content_type(), 'image/heic')
+            self.assertIn('attachment', response.headers['Content-Disposition'])
+            self.assertEqual(response.read(), original)
 
     def test_wechat_bmp_is_inline_only_with_bmp_signature(self):
         cache = Path(self.temp.name) / 'wechat' / 'media'

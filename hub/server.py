@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import heapq
 import io
 import json
 import math
@@ -16,6 +17,7 @@ import shutil
 import sqlite3
 import stat
 import sys
+import subprocess
 import tempfile
 import threading
 import time
@@ -46,6 +48,7 @@ from integrations.wecom.bot_credentials import WeComBotCredentials
 from integrations.wecom.bot_sender import WeComBotTextSender
 from integrations.wecom.bot_media import MAX_MEDIA_SIZE, WeComBotMediaStore
 from integrations.wechat.sender import WeChatGUISender, WeChatSendError
+from .windows_notifications import show_notification
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / '.local'
@@ -391,6 +394,7 @@ class Hub:
         self.send_approval_challenges = {}
         self.providers = {}
         self.media_paths = {}
+        self.media_preview_lock = threading.Lock()
         self.moment_media_paths = {}
         self.resource_jobs = ResourceJobManager(self.storage, self.resolve_resource)
         self.avatar_cache = {}
@@ -402,6 +406,9 @@ class Hub:
         self.qq_key_discovery = {'state': 'idle', 'message': ''}
         self.import_cancellations = {}
         self.stop = threading.Event()
+        self.notified_event_ids = set()
+        self.pending_notification_ids = {}
+        self.notification_lock = threading.Lock()
         self.sources = {p: {'id': p, 'state': 'disconnected', 'version': v,
                            'last_sync': None, 'error': '', 'progress': ''}
                         for p, v in [('wechat', '4.x / WeFlow 5.0.0'),
@@ -462,6 +469,47 @@ class Hub:
     def require_capability(self, name):
         if not self.capability_enabled(name):
             raise PermissionError(unavailable_reason(name))
+
+    def notify_message_event(self, event_id):
+        if not isinstance(event_id, int) or isinstance(event_id, bool) or event_id < 1:
+            raise ValueError('通知事件编号无效')
+        with self.notification_lock:
+            if event_id in self.notified_event_ids:
+                return {'submitted': False, 'duplicate': True}
+            now = time.monotonic()
+            self.pending_notification_ids = {
+                key: created for key, created in self.pending_notification_ids.items()
+                if now - created <= 60
+            }
+            if event_id not in self.pending_notification_ids:
+                raise ValueError('通知事件未由本机消息流发出或已过期')
+            self.pending_notification_ids.pop(event_id, None)
+            rows = self.store.incoming_message_events(event_id - 1, 1)
+            if not rows or rows[0]['event_id'] != event_id:
+                raise ValueError('通知事件已不存在')
+            row = rows[0]
+            filters = self.settings.get('notification_filters', {})
+            identity = json.dumps([row['platform'], row['account_id'], row['conversation_id']],
+                                  ensure_ascii=False, separators=(',', ':'))
+            if (row['platform'] not in filters.get('platforms', NATIVE_PLATFORMS) or
+                    identity in filters.get('muted_conversations', []) or
+                    (filters.get('mode') == 'allowlist' and
+                     identity not in filters.get('allowed_conversations', []))):
+                return {'submitted': False, 'filtered': True}
+            label = {'wechat': '微信', 'wecom': '企业微信', 'qq': 'QQ'}[row['platform']]
+            show_notification(f'{label} · 收到一条新消息')
+            self.notified_event_ids.add(event_id)
+            if len(self.notified_event_ids) > 512:
+                self.notified_event_ids.clear()
+                self.notified_event_ids.add(event_id)
+            return {'submitted': True}
+
+    def queue_notification_event(self, event_id):
+        with self.notification_lock:
+            self.pending_notification_ids[event_id] = time.monotonic()
+            if len(self.pending_notification_ids) > 512:
+                oldest = min(self.pending_notification_ids, key=self.pending_notification_ids.get)
+                self.pending_notification_ids.pop(oldest, None)
 
     @staticmethod
     def _normalize_notification_filters(value):
@@ -1017,7 +1065,7 @@ class Hub:
         from integrations.wecom.adapter import WeComAdapter
         if self._sync_cancelled(cancel):
             return
-        provider = WeComAdapter()
+        provider = WeComAdapter(voice_cache_dir=self.storage / 'media' / 'decoded-voice')
         provider.refresh()
         if self._sync_cancelled(cancel):
             return
@@ -1272,8 +1320,40 @@ class Hub:
                 return
             self.update('qq', state='indexing', progress=f'{index + 1} / {len(convs)} 个会话')
             cid = str(conv.get('id') or conv.get('conversation_id') or '')
-            # A refreshed local snapshot can change offsets; re-scan and upsert
-            # stable message IDs rather than skipping newly checkpointed rows.
+            messages_page = getattr(provider, 'messages_page', None)
+            if callable(messages_page):
+                checkpoint = self.store.sync_checkpoint('qq', account, cid)
+                resume = checkpoint if checkpoint and not checkpoint['complete'] else None
+                cursor = resume.get('cursor') if resume else None
+                offset = resume['next_offset'] if resume else 0
+                while not self._sync_cancelled(cancel):
+                    try:
+                        page = messages_page(conv, limit=500, cursor=cursor)
+                    except QQProviderError:
+                        failed_conversations += 1
+                        break
+                    if not isinstance(page, dict) or not isinstance(page.get('items'), list):
+                        raise RuntimeError('QQ source returned an invalid keyset page')
+                    rows = page['items']
+                    next_cursor = page.get('next_cursor')
+                    complete = not page.get('has_more', False)
+                    if rows and next_cursor == cursor:
+                        raise RuntimeError('QQ source cursor did not advance')
+                    if not rows and not complete and next_cursor == cursor:
+                        raise RuntimeError('QQ source cursor did not advance')
+                    if self._sync_cancelled(cancel):
+                        return
+                    next_offset = offset + len(rows)
+                    if not self._sync_ingest(cancel, 'qq', account, [conv], rows, checkpoint={
+                            'conversation_id': cid, 'next_offset': next_offset,
+                            'cursor': next_cursor, 'complete': complete}):
+                        return
+                    cursor, offset = next_cursor, next_offset
+                    if complete:
+                        break
+                continue
+
+            # Compatibility for local QQ readers that expose offset paging only.
             offset = 0
             while not self._sync_cancelled(cancel):
                 try:
@@ -1614,7 +1694,7 @@ class Hub:
         platform = params.get('platform')
         if params.get('resource_kind') == 'wechat_source':
             allowed = {'resource_kind', 'platform', 'account_id', 'conversation_id',
-                       'shard', 'local_id', 'image_tier', 'video_variant'}
+                       'shard', 'local_id', 'image_tier', 'video_variant', 'media_type'}
             if (set(params) - allowed or platform != 'wechat' or
                     not all(isinstance(params.get(key), str) and params[key] and len(params[key]) <= 512
                             for key in ('account_id', 'conversation_id', 'shard'))):
@@ -1627,7 +1707,10 @@ class Hub:
                 raise ValueError('微信源媒体身份参数无效')
             image_tier = params.get('image_tier', 'mid')
             video_variant = params.get('video_variant')
-            if image_tier not in ('best', 'mid', 'thumb', 'original') or video_variant not in (None, 'poster'):
+            media_type = params.get('media_type')
+            if (image_tier not in ('best', 'mid', 'thumb', 'original') or
+                    video_variant not in (None, 'poster') or media_type not in (None, 'sticker') or
+                    (media_type == 'sticker' and (video_variant is not None or 'image_tier' in params))):
                 raise ValueError('微信媒体预览选项无效')
             provider = self.providers.get('wechat')
             if provider is None:
@@ -1640,6 +1723,19 @@ class Hub:
                                   getattr(reader, 'account', None) or '')
             if not reader or current_account != params['account_id']:
                 raise ValueError('微信源媒体账号已变化，请刷新列表')
+            if media_type == 'sticker':
+                row = reader.get_message_row(params['conversation_id'], int(local_id_text), shard=shard)
+                if row is None or (int(row.get('local_type') or 0) & 0xFFFFFFFF) not in (47, 11000):
+                    raise ValueError('微信源媒体类型已变化，请刷新列表')
+                emoji_md5 = message_emoji_md5(row.get('content'))
+                path = provider.resolve_cached_emoji(emoji_md5) if emoji_md5 else None
+                if not path:
+                    return {'media_url': None, 'available': False,
+                            'message': '本机没有该微信表情的已缓存文件'}
+                mime = mimetypes.guess_type(path.name)[0]
+                return {'media_url': '/local-media/' + self.register_media_path(path),
+                        'available': True, 'mime_type': mime,
+                        'download_name': 'wechat-sticker' + path.suffix.lower()}
             result = provider.media(params['conversation_id'], int(local_id_text), shard,
                                     image_tier=image_tier, video_variant=video_variant)
             path = result.get('path')
@@ -1787,7 +1883,7 @@ class Hub:
                 header = audio.read(12)
             if header.startswith((b'#!SILK', b'\x02#!SILK')):
                 from integrations.wechat.voice import voice_media_result
-                result = voice_media_result(path)
+                result = voice_media_result(path, self.storage / 'media' / 'decoded-voice')
                 path = result.get('path')
         silk_fallback = result.get('playable') is False and row['type'] == 'voice'
         if silk_fallback:
@@ -2073,7 +2169,7 @@ class Hub:
                 provider = WeChatProvider()
             elif platform == 'wecom':
                 from integrations.wecom.adapter import WeComAdapter
-                provider = WeComAdapter()
+                provider = WeComAdapter(voice_cache_dir=self.storage / 'media' / 'decoded-voice')
                 provider.refresh()
             elif qq_local:
                 provider = self.qq_local_provider()
@@ -2100,8 +2196,17 @@ class Hub:
                 raise ValueError('本机没有可读取的图片缓存')
             path = Path(resolved['path'])
         else:
-            params = {'platform': platform, 'account_id': message.get('account_id'),
-                      'message_id': message.get('id'), 'conversation_id': message.get('conversation_id')}
+            if message.get('resource_kind') == 'wechat_source':
+                params = {'resource_kind': 'wechat_source', 'platform': 'wechat',
+                          'account_id': message.get('account_id'),
+                          'conversation_id': message.get('conversation_id'),
+                          'shard': message.get('shard'), 'local_id': message.get('local_id')}
+                source_type = message.get('source_type')
+                if source_type == 'sticker':
+                    params['media_type'] = 'sticker'
+            else:
+                params = {'platform': platform, 'account_id': message.get('account_id'),
+                          'message_id': message.get('id'), 'conversation_id': message.get('conversation_id')}
             if resource_index is not None:
                 params['resource_index'] = resource_index
             resolved = self.resolve_media(params)
@@ -2186,6 +2291,48 @@ class Hub:
         if media_type == 'file':
             mime = mime or 'application/octet-stream'
         return payload, mime
+
+    def read_wechat_source_media(self, identity):
+        """Read one exact source-only WeChat attachment through the shared cache verifier."""
+        if not isinstance(identity, dict):
+            raise ValueError('微信源媒体身份无效')
+        account_id = identity.get('account_id')
+        conversation_id = identity.get('conversation_id')
+        shard = identity.get('shard')
+        local_id = identity.get('local_id')
+        media_type = identity.get('type')
+        if (identity.get('platform') != 'wechat' or
+                not all(isinstance(value, str) and value and len(value) <= maximum
+                        for value, maximum in ((account_id, 256), (conversation_id, 512),
+                                               (shard, 512), (local_id, 20))) or
+                not local_id.isascii() or not local_id.isdecimal() or
+                Path(shard).name != shard or
+                media_type not in ('image', 'sticker', 'video', 'voice', 'file')):
+            raise ValueError('微信源媒体身份无效')
+        provider = self.providers.get('wechat')
+        if provider is None:
+            from integrations.wechat.provider import WeChatProvider
+            provider = WeChatProvider()
+            with self.lock:
+                self.providers['wechat'] = provider
+        reader = getattr(provider, 'reader', None)
+        reader_account = str(getattr(reader, 'wxid', None) or getattr(reader, 'account', None) or '')
+        if reader is None or reader_account != account_id:
+            raise ValueError('微信源媒体账号已变化，请刷新列表')
+        row = reader.get_message_row(conversation_id, int(local_id), shard=shard)
+        if row is None:
+            raise ValueError('微信源媒体记录已变化，请刷新列表')
+        local_type = int(row.get('local_type') or 0) & 0xFFFFFFFF
+        actual_type = {3: 'image', 34: 'voice', 43: 'video', 47: 'sticker',
+                       11000: 'sticker', 49: 'file'}.get(local_type)
+        if actual_type != media_type:
+            raise ValueError('微信源媒体类型已变化，请刷新列表')
+        message = {'platform': 'wechat', 'account_id': account_id,
+                   'conversation_id': conversation_id, 'id': '',
+                   'type': 'image' if media_type == 'sticker' else media_type,
+                   'resource_kind': 'wechat_source', 'source_type': media_type,
+                   'shard': shard, 'local_id': local_id}
+        return self.read_cached_image(message)
 
     def list_qq_cache_resources(self, *, kind='', query='', offset=0, limit=60,
                                 start_ms=None, end_ms=None):
@@ -2338,19 +2485,23 @@ class Hub:
         account_id = params.get('account_id', '')
         conversation_id = params.get('conversation_id', '')
         media_type = params.get('type', '')
-        if (params.get('platform') != 'wechat' or not account_id or not conversation_id or
+        if (params.get('platform') != 'wechat' or not account_id or
+                not isinstance(account_id, str) or not isinstance(conversation_id, str) or
                 len(account_id) > 256 or len(conversation_id) > 512):
-            raise ValueError('请先选择准确的微信账号和会话')
+            raise ValueError('请先选择准确的微信账号')
         if params.get('q'):
             raise ValueError('微信源媒体视图按媒体类型和日期筛选')
-        if media_type not in ('', 'image', 'video', 'voice', 'file'):
+        if media_type not in ('', 'image', 'video', 'voice', 'sticker', 'file'):
             raise ValueError('此来源视图不支持该媒体类型')
         try:
             offset, limit = int(params.get('offset', 0)), int(params.get('limit', 60))
         except (TypeError, ValueError):
             raise ValueError('媒体分页参数无效') from None
-        if not 0 <= offset <= 10_000 or not 1 <= limit <= 60:
-            raise ValueError('源媒体分页范围为 0 至 10000')
+        if offset < 0 or not 1 <= limit <= 60:
+            raise ValueError('媒体分页参数无效')
+        encoded_cursor = params.get('cursor')
+        if encoded_cursor and offset:
+            raise ValueError('媒体分页参数无效')
         start = parse_bound(params.get('start'))
         end = parse_bound(params.get('end'), end=True)
         if start is not None and end is not None and start > end:
@@ -2366,37 +2517,235 @@ class Hub:
                               getattr(reader, 'account', None) or '')
         if not reader or current_account != account_id:
             raise ValueError('微信源媒体账号已变化，请先同步并重新选择账号')
+        if not conversation_id:
+            return self._list_wechat_account_source_media(
+                params, provider, account_id, media_type, start, end, limit, offset,
+                encoded_cursor)
         selected_types = (provider._SOURCE_MEDIA_TYPES.get(media_type) if media_type else
                           set().union(*provider._SOURCE_MEDIA_TYPES.values()))
         raw_types = sorted({str(int(value) & 0xFFFFFFFF) for value in selected_types})
-        first = provider.source_media(conversation_id, media_type=media_type,
-                                      start_time=start, end_time=end, offset=0, limit=1)
-        raw_total = int(first.get('total') or 0)
-        indexed_total = self.store.wechat_indexed_source_media_count(
-            account_id, conversation_id, raw_types, start, end)
-        total = max(0, raw_total - indexed_total)
-        wanted, found, raw_offset = offset + limit, [], 0
-        while raw_offset < raw_total and raw_offset < 10_000 and len(found) < wanted:
+        scope = hashlib.sha256(json.dumps(
+            [account_id, conversation_id, media_type, start, end],
+            ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()[:16]
+        after_cursor, total = None, None
+        if encoded_cursor:
+            if (not isinstance(encoded_cursor, str) or
+                    not re.fullmatch(r'[A-Za-z0-9_-]{1,1024}', encoded_cursor)):
+                raise ValueError('媒体游标无效')
+            try:
+                decoded = json.loads(base64.urlsafe_b64decode(
+                    encoded_cursor + '=' * (-len(encoded_cursor) % 4)))
+                after_cursor, total, cursor_scope = decoded
+                if (cursor_scope != scope or type(total) is not int or total < 0 or
+                        not isinstance(after_cursor, dict)):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+                raise ValueError('媒体游标无效') from None
             page = provider.source_media(conversation_id, media_type=media_type,
-                                         start_time=start, end_time=end,
-                                         offset=raw_offset, limit=500)
+                                         start_time=start, end_time=end, offset=0,
+                                         limit=500, after_cursor=after_cursor,
+                                         include_total=False)
+        else:
+            page = provider.source_media(conversation_id, media_type=media_type,
+                                         start_time=start, end_time=end, offset=0, limit=500)
+            raw_total = int(page.get('total') or 0)
+            indexed_total = self.store.wechat_indexed_source_media_count(
+                account_id, conversation_id, raw_types, start, end)
+            total = max(0, raw_total - indexed_total)
+        if offset >= total:
+            return {'items': [], 'total': total, 'limit': limit, 'offset': offset,
+                    'next_cursor': None}
+        items, remaining_skip = [], offset
+        last_returned_cursor, has_more = after_cursor, False
+        while True:
             candidates = page.get('items') or []
             if not candidates:
                 break
             indexed = self.store.wechat_source_media_ids(
                 account_id, conversation_id, [row['id'] for row in candidates])
-            found.extend(row for row in candidates if row['id'] not in indexed)
-            raw_offset += len(candidates)
-        if len(found) < wanted and raw_offset < raw_total:
-            raise ValueError('此会话源媒体数量较多，请缩小日期范围或指定媒体类型')
+            for row in candidates:
+                row_cursor = row.pop('_source_cursor', None)
+                if row['id'] in indexed:
+                    continue
+                if remaining_skip:
+                    remaining_skip -= 1
+                    last_returned_cursor = row_cursor or last_returned_cursor
+                    continue
+                if len(items) >= limit:
+                    has_more = True
+                    break
+                items.append(row)
+                last_returned_cursor = row_cursor or last_returned_cursor
+            if has_more:
+                break
+            next_source_cursor = page.get('next_cursor')
+            if next_source_cursor is None or next_source_cursor == after_cursor:
+                break
+            after_cursor = next_source_cursor
+            page = provider.source_media(conversation_id, media_type=media_type,
+                                         start_time=start, end_time=end,
+                                         offset=0, limit=500, after_cursor=after_cursor,
+                                         include_total=False)
+        next_cursor = None
+        if has_more and last_returned_cursor is not None:
+            payload = json.dumps([last_returned_cursor, total, scope],
+                                 ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            next_cursor = base64.urlsafe_b64encode(payload).decode('ascii').rstrip('=')
         conversation = self.store.get_conversation('wechat', account_id, conversation_id)
         title = conversation.get('title') if conversation else provider.reader.get_nickname(conversation_id)
-        items = []
-        for row in found[offset:offset + limit]:
-            items.append({**row, 'account_id': account_id, 'conversation_title': title,
-                          'conversation_kind': conversation.get('kind') if conversation else
-                          ('group' if conversation_id.endswith('@chatroom') else 'direct')})
-        return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
+        return {'items': [{**row, 'account_id': account_id, 'conversation_title': title,
+                           'conversation_kind': conversation.get('kind') if conversation else
+                           ('group' if conversation_id.endswith('@chatroom') else 'direct')}
+                          for row in items], 'total': total, 'limit': limit, 'offset': offset,
+                'next_cursor': next_cursor}
+
+    def _list_wechat_account_source_media(self, params, provider, account_id,
+                                           media_type, start, end, limit, offset,
+                                           encoded_cursor):
+        if offset:
+            raise ValueError('账号级微信源媒体请使用游标分页')
+        reader = provider.reader
+        sessions = reader.get_sessions(limit=100001)
+        if len(sessions) > 100000:
+            raise ValueError('微信会话数量超过账号级媒体浏览上限')
+        session_ids = sorted({str(row.get('username') or '') for row in sessions
+                              if row.get('username') and
+                              (not params.get('conversation_id') or
+                               str(row['username']) == params.get('conversation_id'))})
+        if not session_ids:
+            return {'items': [], 'total': 0, 'limit': limit, 'offset': 0,
+                    'next_cursor': None}
+        session_hashes = {hashlib.sha256(session_id.encode('utf-8')).hexdigest(): session_id
+                          for session_id in session_ids}
+        raw_types = sorted({str(int(value) & 0xFFFFFFFF) for value in
+                            (provider._SOURCE_MEDIA_TYPES.get(media_type) if media_type else
+                             set().union(*provider._SOURCE_MEDIA_TYPES.values()))})
+        scope = hashlib.sha256(json.dumps(
+            [account_id, 'account-wide', params.get('conversation_id', ''),
+             media_type, start, end], ensure_ascii=False,
+            separators=(',', ':')).encode('utf-8')).hexdigest()[:16]
+        global_cursor = None
+        total = None
+        if encoded_cursor:
+            if (not isinstance(encoded_cursor, str) or
+                    not re.fullmatch(r'[A-Za-z0-9_-]{1,1024}', encoded_cursor)):
+                raise ValueError('媒体游标无效')
+            try:
+                decoded = json.loads(base64.urlsafe_b64decode(
+                    encoded_cursor + '=' * (-len(encoded_cursor) % 4)))
+                global_cursor, total, cursor_scope = decoded
+                if (cursor_scope != scope or type(total) is not int or total < 0 or
+                        not isinstance(global_cursor, list) or len(global_cursor) != 2 or
+                        not isinstance(global_cursor[0], str) or
+                        global_cursor[0] not in session_hashes or
+                        not isinstance(global_cursor[1], dict) or
+                        type(global_cursor[1].get('sort_seq')) is not int):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+                raise ValueError('媒体游标无效') from None
+
+        cursor_conversation = session_hashes.get(global_cursor[0]) if global_cursor else None
+        cursor_row = global_cursor[1] if global_cursor else None
+        class _WorstFirst:
+            __slots__ = ('key', 'row')
+
+            def __init__(self, key, row):
+                self.key, self.row = key, row
+
+            def __lt__(self, other):
+                return self.key > other.key
+
+        merged = []
+        total_count = 0
+        for session_id in session_ids:
+            first = True
+            source_cursor = cursor_row if session_id == cursor_conversation else None
+            threshold = None
+            threshold_inclusive = False
+            if cursor_conversation and session_id != cursor_conversation:
+                threshold = cursor_row['sort_seq']
+                threshold_inclusive = session_id > cursor_conversation
+            page_items = 0
+            seen = set()
+            session_order = 0
+            scanned_to_end = False
+            while True:
+                page = provider.source_media(
+                    session_id, media_type=media_type, start_time=start,
+                    end_time=end, offset=0, limit=500,
+                    after_cursor=source_cursor,
+                    after_sort_seq=threshold,
+                    after_sort_seq_inclusive=threshold_inclusive,
+                    include_total=(not encoded_cursor and first))
+                if not encoded_cursor and first:
+                    raw_total = int(page.get('total') or 0)
+                    indexed_total = self.store.wechat_indexed_source_media_count(
+                        account_id, session_id, raw_types, start, end)
+                    total_count += max(0, raw_total - indexed_total)
+                first = False
+                rows = page.get('items') or []
+                if not rows:
+                    scanned_to_end = True
+                    break
+                indexed_ids = self.store.wechat_source_media_ids(
+                    account_id, session_id, [row['id'] for row in rows])
+                for row in rows:
+                    row_cursor = row.get('_source_cursor')
+                    if not isinstance(row_cursor, dict):
+                        continue
+                    identity = row.get('id')
+                    if not isinstance(identity, str) or identity in seen or identity in indexed_ids:
+                        continue
+                    seen.add(identity)
+                    row['conversation_id'] = session_id
+                    row['_source_cursor'] = row_cursor
+                    key = (-int(row.get('sort_seq') or 0), session_id, session_order)
+                    session_order += 1
+                    candidate = _WorstFirst(key, row)
+                    if len(merged) < limit + 1:
+                        heapq.heappush(merged, candidate)
+                    elif key < merged[0].key:
+                        heapq.heapreplace(merged, candidate)
+                    page_items += 1
+                    if page_items >= limit + 1:
+                        break
+                if page_items >= limit + 1:
+                    break
+                next_source_cursor = page.get('next_cursor')
+                if next_source_cursor is None or next_source_cursor == source_cursor:
+                    scanned_to_end = True
+                    break
+                source_cursor = next_source_cursor
+                threshold = None
+            if not encoded_cursor:
+                estimate = max(0, raw_total - indexed_total)
+                difference = page_items - estimate
+                # shortcut: early-stopped sessions keep a count estimate; scan all rows when exact totals are required.
+                total_count += difference if scanned_to_end else max(0, difference)
+            if not encoded_cursor:
+                total = total_count
+
+        merged.sort(key=lambda candidate: candidate.key)
+        has_more = len(merged) > limit
+        items = [candidate.row for candidate in merged[:limit]]
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            session_hash = hashlib.sha256(last['conversation_id'].encode('utf-8')).hexdigest()
+            payload = json.dumps([[session_hash, last['_source_cursor']],
+                                  total, scope], ensure_ascii=False,
+                                 separators=(',', ':')).encode('utf-8')
+            next_cursor = base64.urlsafe_b64encode(payload).decode('ascii').rstrip('=')
+        output = []
+        for row in items:
+            row.pop('_source_cursor', None)
+            conversation_id = row['conversation_id']
+            output.append({**row, 'account_id': account_id,
+                           'conversation_title': reader.get_nickname(conversation_id) or conversation_id,
+                           'conversation_kind': ('group' if conversation_id.endswith('@chatroom')
+                                                 else 'direct')})
+        return {'items': output, 'total': total, 'limit': limit, 'offset': 0,
+                'next_cursor': next_cursor}
 
     def _issue_moment_media_url(self, candidate, cache_root, mime=None):
         root = Path(cache_root).resolve(strict=True)
@@ -2699,7 +3048,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.get_api(parsed.path, params)
             else:
-                self.static(parsed.path)
+                self.static(parsed.path, params)
         except ValueError as exc:
             self.json({'error': str(exc)}, 400)
         except FileNotFoundError:
@@ -2760,6 +3109,7 @@ class Handler(BaseHTTPRequestHandler):
                         'platform', 'account_id', 'conversation_id',
                         'conversation_title', 'conversation_kind')}
                     data = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+                    self.hub.queue_notification_event(int(row['event_id']))
                     self.wfile.write(f"id: {row['event_id']}\nevent: message\ndata: {data}\n\n".encode('utf-8'))
                 if rows:
                     self.wfile.write(
@@ -2894,12 +3244,13 @@ class Handler(BaseHTTPRequestHandler):
                 tools += ('prepare_qq_send', 'get_qq_send_status')
             wechat_ready = None
             if self.hub.capability_enabled('wechat_send'):
+                tools += ('get_wechat_send_status',)
                 try:
                     wechat_ready = self.hub.wechat_sender.readiness(True)
                 except Exception:
                     wechat_ready = None
             if isinstance(wechat_ready, dict) and wechat_ready.get('state') == 'ready':
-                tools += ('prepare_wechat_send', 'get_wechat_send_status')
+                tools += ('prepare_wechat_send',)
             wecom_bot_identity = None
             if self.hub.capability_enabled('wecom_bot_send'):
                 try:
@@ -3393,7 +3744,16 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b'{}')
             if not isinstance(body, dict):
                 raise ValueError('JSON 对象无效')
-            if path == '/api/voice/transcribe':
+            if path == '/api/notifications/test':
+                self.hub.require_capability('notifications')
+                show_notification('这是一条测试通知，不含聊天内容。')
+                result = {'submitted': True}
+            elif path == '/api/notifications/message':
+                self.hub.require_capability('notifications')
+                if set(body) != {'event_id'}:
+                    raise ValueError('通知事件参数无效')
+                result = self.hub.notify_message_event(body.get('event_id'))
+            elif path == '/api/voice/transcribe':
                 result = self.hub.transcribe_voice(body)
             elif path == '/api/qq/forward-resources':
                 required = {'account_id', 'conversation_id', 'message_id'}
@@ -3427,6 +3787,13 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('缺少拒绝确认')
                 result = self.hub.send_service.reject(path.split('/')[-2], 'qq')
             elif path == '/api/wechat-sends/prepare':
+                readiness = self.hub.wechat_sender.readiness(True)
+                if (not isinstance(readiness, dict) or readiness.get('state') != 'ready'
+                        or not isinstance(readiness.get('account_id'), str)
+                        or not readiness['account_id']):
+                    raise ValueError('本机微信客户端不可用；请在已登录的 Windows 主机上打开微信')
+                if body.get('account_id') != readiness['account_id']:
+                    raise ValueError('account_id must match the currently logged-in WeChat account')
                 result = self.hub.send_service.prepare({**body, 'platform': 'wechat'})
             elif re.fullmatch(r'/api/wechat-sends/[A-Za-z0-9_-]{8,80}/approve', path):
                 self.hub.require_capability('wechat_send')
@@ -3847,7 +4214,57 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             source.close()
 
-    def static(self, urlpath):
+    def preview_local_image(self, path, mime):
+        if not self.hub.media_preview_lock.acquire(timeout=60):
+            raise ValueError('本机图片预览排队超时，仍可下载原件')
+        try:
+            path = Path(path)
+            if path.is_symlink() or not path.is_file():
+                raise FileNotFoundError
+            payload = _read_cached_snapshot(path, 64 * 1024 * 1024,
+                                            '图片超过本机预览的 64 MiB 限制')
+            if mime == 'image/tiff':
+                valid = payload.startswith((b'II*\x00', b'MM\x00*', b'II+\x00', b'MM\x00+'))
+            else:
+                box_size = int.from_bytes(payload[:4], 'big') if len(payload) >= 16 else 0
+                valid = False
+                if (payload[4:8] == b'ftyp' and 16 <= box_size <= min(len(payload), 4096)
+                        and (box_size - 16) % 4 == 0):
+                    brands = [payload[8:12]] + [payload[offset:offset + 4]
+                                                 for offset in range(16, box_size, 4)]
+                    valid = any(brand in (b'heic', b'heix', b'hevc', b'hevx', b'mif1', b'msf1')
+                                for brand in brands)
+            if not valid:
+                raise ValueError('本机图片格式无效')
+            from integrations.wechat.vendor.media import MediaDownloader
+            ffmpeg = MediaDownloader._ffmpeg_exe()
+            if not ffmpeg:
+                raise ValueError('本机图片预览转换器不可用')
+            with tempfile.TemporaryDirectory(prefix='lmh-preview-') as temp_dir:
+                source = Path(temp_dir) / ('source.tiff' if mime == 'image/tiff' else 'source.heic')
+                output = Path(temp_dir) / 'preview.jpg'
+                source.write_bytes(payload)
+                del payload
+                result = subprocess.run([
+                    ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1',
+                    '-max_pixels', '24000000', '-i', str(source), '-frames:v', '1', '-vf',
+                    "scale=w='min(1600,iw)':h='min(1600,ih)':force_original_aspect_ratio=decrease",
+                    '-q:v', '4', '-fs', '16M', '-y', str(output),
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), check=False)
+                if result.returncode or not output.is_file() or output.stat().st_size > 16 * 1024 * 1024:
+                    raise ValueError('本机无法预览此图片，仍可下载原件')
+                preview = output.read_bytes()
+                if not preview.startswith(b'\xff\xd8\xff') or not preview.endswith(b'\xff\xd9'):
+                    raise ValueError('本机无法预览此图片，仍可下载原件')
+                return preview
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError('本机图片预览转换超时，仍可下载原件') from exc
+        finally:
+            self.hub.media_preview_lock.release()
+
+    def static(self, urlpath, params=None):
+        params = params or {}
         if urlpath.startswith('/local-moment-media/'):
             if not self.hub.capability_enabled('moments'):
                 self.json(self.hub.capability_error('moments'), 403)
@@ -3897,6 +4314,17 @@ class Handler(BaseHTTPRequestHandler):
         if path.suffix.lower() in ('.heic', '.heif'):
             mime = 'image/heic'
         if urlpath.startswith('/local-media/'):
+            if params.get('preview') == 'jpeg' and mime in ('image/heic', 'image/tiff'):
+                try:
+                    preview = self.preview_local_image(path, mime)
+                except ValueError as exc:
+                    self.json({'error': str(exc)}, 422)
+                    return
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    self.json({'error': '本机无法预览此图片，仍可下载原件'}, 422)
+                    return
+                self.send_bytes(preview, 'image/jpeg')
+                return
             headers = {}
             safe_inline = {'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
                            'audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/ogg', 'audio/mp4',
@@ -3927,7 +4355,8 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def capability_for_path(path, method='GET'):
-        if path == '/api/events/messages':
+        if path in ('/api/events/messages', '/api/notifications/test',
+                    '/api/notifications/message'):
             return 'notifications'
         if path in ('/api/avatar', '/api/contacts'):
             return 'contacts'

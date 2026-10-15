@@ -55,14 +55,30 @@ const context = {
 };
 const controlledFetch = context.fetch;
 vm.runInNewContext(source.replace(initCall,
-  '\nglobalThis.__startMediaPreviews = startMediaPreviews; globalThis.__cancelMediaPreviews = cancelMediaPreviews; globalThis.__state = state; globalThis.__resolveMedia = resolveMedia; globalThis.__loadBestWechatImage = loadBestWechatImage; globalThis.__renderMediaTile = renderMediaTile; globalThis.__previewMedia = previewMedia; globalThis.__typeOptions = typeOptions; globalThis.__resourceExportItems = resourceExportItems; globalThis.__mediaEntries = mediaEntries; globalThis.__mediaEntryKey = mediaEntryKey; globalThis.__stubMediaUi = (render, preview) => { renderView = render; previewMedia = preview; };\n'), context);
+  '\nglobalThis.__startMediaPreviews = startMediaPreviews; globalThis.__cancelMediaPreviews = cancelMediaPreviews; globalThis.__state = state; globalThis.__resolveMedia = resolveMedia; globalThis.__loadBestWechatImage = loadBestWechatImage; globalThis.__renderMediaTile = renderMediaTile; globalThis.__renderListing = renderListing; globalThis.__previewMedia = previewMedia; globalThis.__typeOptions = typeOptions; globalThis.__usesCursorPaging = usesCursorPaging; globalThis.__resourceExportItems = resourceExportItems; globalThis.__mediaEntries = mediaEntries; globalThis.__mediaEntryKey = mediaEntryKey; globalThis.__stubMediaUi = (render, preview) => { renderView = render; previewMedia = preview; };\n'), context);
 
 const state = context.__state;
 state.view = 'media';
 state.filters.source = 'qq-cache';
+assert.equal(context.__usesCursorPaging(), false, 'QQ cache keeps offset pagination');
 const qqCacheTypes = context.__typeOptions('');
 for (const type of ['image', 'video', 'voice', 'file']) assert.match(qqCacheTypes, new RegExp(`value="${type}"`));
 assert.doesNotMatch(qqCacheTypes, /value="sticker"/, 'QQ cache gallery hides unsupported sticker filtering');
+state.filters.source = 'wechat-source';
+assert.equal(context.__usesCursorPaging(), true, 'WeChat source media uses cursor pagination');
+assert.match(context.__typeOptions(''), /value="sticker"/, 'unindexed WeChat media supports sticker filtering');
+state.accountScopes = [{platform: 'wechat', account_id: 'fixture-account'}];
+state.filters.account_scope = JSON.stringify(['wechat', 'fixture-account']);
+state.filters.conversation_id = '';
+state.total = 0;
+state.items = [];
+state.loading = false;
+const sourceMediaListing = context.__renderListing();
+assert.match(sourceMediaListing, /value="wechat-source"[^>]*selected/);
+const sourceOption = sourceMediaListing.match(/<option value="wechat-source"[^>]*>[^<]*/)?.[0] || '';
+assert.match(sourceOption, /微信数据库媒体/);
+assert.doesNotMatch(sourceOption, /disabled/);
+assert.match(sourceMediaListing, /会话 ID（留空浏览全部微信会话）/);
 state.filters.source = 'all';
 assert.match(context.__typeOptions(''), /value="sticker"/, 'chat media retains the cached sticker filter');
 const avatarTile = context.__renderMediaTile({type: 'image', name: 'fixture.png', resourceKind: 'message',
@@ -76,14 +92,14 @@ const cacheTile = context.__renderMediaTile({type: 'image', name: 'cached.png', 
 assert.doesNotMatch(cacheTile, /media-sender/);
 const heicTile = context.__renderMediaTile({type: 'image', name: 'photo.heic', resourceKind: 'qq_cache',
   resourceIndex: null, resource: null,
-  message: {id: 'heic', platform: 'qq', timestamp: 1,
+  message: {id: 'heic', platform: 'qq', timestamp: 1, media_url: '/local-media/heic-token',
     extra: {resource_kind: 'qq_cache', mime_type: 'image/heic'}}}, 2);
-assert.match(heicTile, /浏览器不支持预览/);
-assert.doesNotMatch(heicTile, /<img/);
+assert.match(heicTile, /src="\/local-media\/[^\"]+\?preview=jpeg"/);
+assert.match(heicTile, /<img/);
 let openedModal;
 context.modal = (...args) => { openedModal = args; };
 context.__previewMedia('/local-media/heic-token', 'image', 'photo.heic', 'image/heic');
-assert.match(openedModal[1], /当前浏览器无法预览 HEIC 图片/);
+assert.match(openedModal[1], /src="\/local-media\/heic-token\?preview=jpeg"/);
 assert.match(openedModal[1], /href="\/local-media\/heic-token" download="photo\.heic"/);
 context.__stubMediaUi(() => {}, context.__previewMedia);
 context.fetch = async () => ({ok: true, json: async () => ({
@@ -92,8 +108,8 @@ context.fetch = async () => ({ok: true, json: async () => ({
 await context.__resolveMedia({id: 'heic', platform: 'qq', account_id: 'fixture-account',
   type: 'image', file_name: 'photo.heic',
   extra: {resource_kind: 'qq_cache', resource_id: 'opaque-heic', mime_type: 'image/heic'}});
-assert.match(openedModal[1], /当前浏览器无法预览 HEIC 图片/,
-  'QQ cache resolution carries the image MIME into the modal');
+assert.match(openedModal[1], /src="\/local-media\/qq-heic-token\?preview=jpeg"/,
+  'QQ cache resolution carries the image MIME into the local preview route');
 assert.match(openedModal[1], /href="\/local-media\/qq-heic-token" download="photo\.heic"/,
   'QQ HEIC preview offers its original local file');
 context.fetch = controlledFetch;
@@ -296,6 +312,32 @@ assert.equal(JSON.stringify(context.__resourceExportItems([sourceEntry])[0]), JS
   resource_kind: 'wechat_source', platform: 'wechat', account_id: 'fixture-account',
   conversation_id: 'fixture-room', shard: 'message_4.db', local_id: 17, image_tier: 'best',
 }));
+
+const sourceSticker = {id: 'room:message_7.db:18', platform: 'wechat', account_id: 'fixture-account',
+  conversation_id: 'fixture-room', type: 'sticker', raw_type: '47', timestamp: 1,
+  extra: {resource_kind: 'wechat_source', shard: 'message_7.db', local_id: 18, local_type: 47}};
+state.items = [sourceSticker];
+context.fetch = async url => {
+  const params = new URL(url, 'http://localhost').searchParams;
+  assert.equal(params.get('resource_kind'), 'wechat_source');
+  assert.equal(params.get('media_type'), 'sticker');
+  assert.equal(params.has('image_tier'), false);
+  assert.equal(params.has('path'), false);
+  assert.equal(params.has('text'), false);
+  return {ok: true, json: async () => ({media_url: '/local-media/wechat-sticker-token', mime_type: 'image/png'})};
+};
+context.__startMediaPreviews(9);
+observers.at(-1).show([0]);
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(previewFor(0).innerHTML,
+  '<img src="/local-media/wechat-sticker-token" alt="微信表情（仅本机缓存）" loading="lazy">');
+const stickerEntry = context.__mediaEntries()[0];
+assert.match(context.__renderMediaTile(stickerEntry, 0),
+  /<img src="\/local-media\/wechat-sticker-token" alt="微信表情（仅本机缓存）" loading="lazy">/);
+assert.deepEqual(JSON.parse(JSON.stringify(context.__resourceExportItems([stickerEntry])[0])), {
+  resource_kind: 'wechat_source', platform: 'wechat', account_id: 'fixture-account',
+  conversation_id: 'fixture-room', shard: 'message_7.db', local_id: 18, media_type: 'sticker',
+});
 
 console.log('PASS visible WeChat, WeCom, and QQ images resolve through bounded local preview paths');
 }

@@ -169,11 +169,12 @@ running process predates the current worktree edits, so this snapshot does not
 verify the latest source in the live service. Local queue state is omitted from
 this public roadmap.
 
-**P13 approval queue update (2026-10-15):** the user-authorized personal-WeChat
-test request is present in the local `pending_approval` queue while
-`wechat_send` is enabled. No duplicate request was created, and no request was
-approved or delivered. Target, text, account, and request ID are intentionally
-omitted from this public document. Real delivery remains unverified.
+**P14 docs commit hosted verification (2026-10-15):** commit
+`2860ce8ba87d69be1b473e4dfbfe8a39d648ad73` passed Windows runs `38672652376`
+(`main`) and `38672652404` (`codex/roadmap-p8-p14-20261014`). Both runs passed
+the full gate, package builds and smoke checks, then verified uploaded and
+downloaded artifact bytes and provenance. These runs do not include the current
+uncommitted source-media pagination changes.
 
 **P14 current-worktree package refresh (2026-10-15):** the latest portable
 package contains 9,783 files; the sanitized source archive contains 690
@@ -448,6 +449,36 @@ WeCom bot prepare/status tools only when the send capability is enabled and
 the configured identity is valid, matching runtime MCP discovery. Credential
 status errors fail closed. Synthetic HTTP coverage checks enabled, disabled,
 unconfigured, and unavailable states; no real delivery is performed.
+Personal WeChat also exposes capability-gated `prepare_wechat_send` and
+`get_wechat_send_status`; those tools only prepare and read locally approved
+requests, and focused MCP regressions cover the gate.
+
+**P11 unindexed WeChat media pagination follow-up (2026-10-15):** source-media
+pages now continue with a cross-shard keyset cursor, so records beyond the old
+10,000-row scan ceiling remain reachable without retaining all prior pages in
+memory. Focused database and HTTP regressions cover cursor ordering, null
+sequences, deep pages, and existing normalization of supported file variants.
+Real-account media completeness remains unverified.
+
+**P11 account-wide WeChat source media (2026-10-15):** the media library can
+now browse unindexed media across every visible session for one selected WeChat
+account, with an optional exact conversation filter. Account-wide pages merge
+all message shards in a stable order, deduplicate indexed rows, and bind opaque
+cursors to account and filters; source identity remains available for exact
+preview and export. Session enumeration is bounded at 100,000 entries and
+fails explicitly above that limit. Synthetic coverage spans 105 sessions,
+cross-session continuation, shard identity, scope rejection, preview identity,
+and read-only database hashes. Real-cache completeness and full WeFlow parity
+remain open; P11 stays `IN_PROGRESS`.
+
+**P11 WeChat source-media MCP alignment (2026-10-15):** MCP now exposes a
+cursor-paged listing and exact cached-item read for source-only attachments,
+always scoped to one explicit WeChat account and conversation. Listing metadata
+includes the shard/local row identity and omits bodies, paths, URLs, and bytes;
+the read rechecks the current account and source row type, then uses the shared
+Hub media resolver and existing bounded/signature-checked local cache reader.
+Focused synthetic MCP and Hub tests pass. Real-account cache coverage and full
+WeFlow media parity remain open; P11 stays `IN_PROGRESS`.
 
 ## Phase 11 - WeFlow Core Feature Alignment
 
@@ -461,8 +492,9 @@ IDs without the shard and metadata needed to deduplicate, globally paginate,
 resolve previews, and export safely. P11 remains open until one validated
 account/conversation/source identity is carried through listing, resolution,
 and ZIP export. This gap was implemented later the same day; see the P11 source
-media follow-up below. The 10,000-row view bound and real-cache acceptance remain
-open.
+media follow-up below. The keyset scan has no fixed raw-row ceiling, although
+deep offsets still require scanning preceding rows. Real-cache acceptance and
+full WeFlow parity remain open.
 | P11-02 | Resource management and complete exports | Hub, WebUI | P8-02 | JSON/CSV/Markdown/TXT/HTML/XLSX/SQL/ChatLab message exports preserve platform, exact account, conversation ID, and message ID provenance with injection protections; contact JSON/CSV exports preserve only normalized profile scalar allowlist values, never QCE `raw` or unknown nested payload, URLs or token/credential-like values. Current group roster exports as JSON/CSV with platform/account/group provenance, field whitelist, CSV formula protection including values with leading whitespace/BOM, avatar/token omission, export capability gate, and explicit 1,000-member limit (larger rosters fail rather than truncate). Media library supports cross-page selection of up to 100 individual attachments from chat, QQ roaming, WeCom, cached Moments and the authenticated QQ global cache gallery into a cancellable, capability-gated local ZIP task (50 MiB per file/512 MiB total) with a manifest and API/UI progress. Disabling the media capability cancels and joins active ZIP jobs; re-enabling it resumes job acceptance. QQ cache export accepts only opaque account-bound resource identity; the client cannot submit URLs or paths, and QCE-declared size is checked against the bounded downloaded bytes. Batch export supports QQ resource indexes 0-100 to match the provider reader and rejects 101; other platforms retain their 0-49 bound. WeChat chat-image ZIP export defaults to best available and can request only cached `mid`, `thumb`, or `original`; missing originals fail that item without triggering source downloads. The selector is limited to ordinary WeChat chat images, not Moments, WeCom, QQ, or other media. Cached WeChat type-47 stickers resolve only within the exact account's allowlisted local cache and may be previewed, explicitly read through MCP, or included in ZIP export; unresolved stickers remain searchable placeholders, and sticker classification stays separate from ordinary image filters/counters. Synthetic resolver/job/UI tests cover tier forwarding, sticker cache boundaries, path rejection and unchanged default behavior. Synthetic HTTP/UI tests verify QQ gallery metadata/preview identity and provider URL/path redaction. Synthetic HTTP end-to-end tests run real WeChat/WeCom/QQ Hub resolvers and the separate Moments catalog resolver into ZIP, verifying bytes, identity-only manifests, path/credential redaction, caller-path rejection, and source immutability; indexed WeCom attachments remain exportable even when attached to a text-type parent message. Moments ZIP jobs use only account/post/media-index/variant identity, re-resolve the catalog locator, revalidate cache-root containment, and never accept or expose caller paths. Batch export enforces budgets per chunk and checks cancellation while reading; local media playback/preview uses bounded 1 MiB streaming with single byte-range support. Media-library keyword filters match conversation title, filename, attachment name, chat message text, sender name/ID, or Moments post content before SQLite count/pagination. WeChat video/file cache staging also uses bounded memory, an account-root check and atomic Hub-cache writes. Optional media backup bundles the index snapshot with indexed account-scoped Hub WeChat media-cache files and referenced Hub-managed QQ roaming files; restore validates archive paths, budgets and SHA-256 before merging and refuses conflicting overwrites. Legacy unscoped and orphan cache files plus source-client databases/caches are excluded. Clearing the local index removes managed attachment archives. A schema-v8 SQLite Moments catalog atomically replaces one account's sanitized posts/media after successful explicit WeChat sync, tracks intentionally empty catalogs, filters/pages without rescanning `sns.db`, and stores only validated cache-relative locators; missing/invalid cache roots still allow text catalog refresh with media marked unavailable. Export resource projection now preserves repeated identical attachments inside one list while taking the maximum multiplicity across mirrored aliases, and tests exercise JSON, ChatLab and SQL output. The active-job cancellation regression passes; full resource library/decryption parity and real-device acceptance remain open. | IN_PROGRESS |
 
 P11-01 media-library follow-up (2026-10-14): One WeChat chat image can explicitly
@@ -720,6 +752,11 @@ passes; real-account/cache acceptance and broader media parity remain open.
 |---|---|---|---|---|---|
 | P13-01 | WeChat/WeCom send adapters | `integrations/`, Hub, WebUI, MCP | P9-01, P10-01 | Personal WeChat sending is implemented as a default-off `wechat_send` capability: Win32 `ctypes` drive the already-open conversation window of the logged-in client, with no injection, DLL hook or client database write, and delivery is only claimed when a read-back of the cached message rows shows the same text from the local account. Real delivery on a real conversation remains unverified. WeCom has a self-contained standard-library TLS WebSocket adapter for independent bot-identity Markdown, image, file, AMR voice, and video messages; it never impersonates the logged-in employee. Capability defaults off; bot credentials use current-user Windows DPAPI; the browser uploads only a user-selected file to a loopback endpoint, where allowlisted extension/signature/size checks create an opaque local attachment ID. Preparation is durable and every text/media delivery requires request-bound one-time UI approval; attachment bytes are revalidated before upload and removed after delivery/rejection. The stdlib protocol follows upload init/chunk/finish with matching type and sends the returned `media_id`; chunks are 512 KiB, up to 100. MCP remains text-prepare/status-only and cannot upload, approve, or deliver attachments. QQ APIs cannot access bot requests. Ambiguous send receipts become unknown and are never retried. Synthetic protocol, attachment, HTTP-route, WebUI and MCP regressions pass. No real bot credentials/device delivery, target reachability or official acknowledgement behavior has been verified; employee-identity WeChat sending and the personal WeChat route remain unverified against a real conversation, so no real delivery is claimed for either channel. References: [official WeCom AI bot SDK protocol](https://github.com/WecomTeam/aibot-node-sdk), [official upload/send instructions](https://github.com/WecomTeam/wecom-unified/blob/main/skills/wecom-unified/references/wecomcli-message.md). | IN_PROGRESS |
 
+**P13 offline status follow-up (2026-10-15):** HTTP-installed MCP clients now
+retain `get_wechat_send_status` while the WeChat client is unavailable; only
+`prepare_wechat_send` requires client readiness. A focused configuration
+regression covers offline and ready states. No message was prepared or sent.
+
 **P13 clipboard-preservation follow-up (2026-10-14):** personal WeChat text
 entry now uses Unicode keyboard events instead of replacing the system
 clipboard. Synthetic sender tests verify the existing clipboard value is
@@ -792,7 +829,7 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Application commit `13597f1b0061380d2d383d99d0e18e689e5fd27e` passed both full hosted Windows runs (`38666599984` on `main`, `38666600073` on the roadmap branch). The XLSX exporter now fixes ZIP entry timestamps. Latest application commit `d61c08696fcc41bb333343068ae3ed30f0f98a3a` passed full Windows runs `38671025839` (`main`) and `38671026098` (roadmap branch), including source/portable builds, isolated Hub/MCP/source smokes, provenance checks, artifact download, and byte/provenance verification. The `main` artifact (`11944920205`) is 251,849,201 bytes, SHA-256 `183bac524c1247cd3328bf903d279d7f949d2f66a4901cf0e8845018f2871f4d`; the roadmap artifact (`11945205168`) is 251,847,714 bytes, SHA-256 `618ead63b359bd92d0938329bd6b3571e6ad1b4ad8446687ded18bfe6daa8d36`. Both are retained through 2026-10-22. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Application commit `13597f1b0061380d2d383d99d0e18e689e5fd27e` passed both full hosted Windows runs (`38666599984` on `main`, `38666600073` on the roadmap branch). The XLSX exporter now fixes ZIP entry timestamps. Application commit `d61c08696fcc41bb333343068ae3ed30f0f98a3a` passed full Windows runs `38671025839` (`main`) and `38671026098` (roadmap branch), including source/portable builds, isolated Hub/MCP/source smokes, provenance checks, artifact download, and byte/provenance verification. The `main` artifact (`11944920205`) is 251,849,201 bytes, SHA-256 `183bac524c1247cd3328bf903d279d7f949d2f66a4901cf0e8845018f2871f4d`; the roadmap artifact (`11945205168`) is 251,847,714 bytes, SHA-256 `618ead63b359bd92d0938329bd6b3571e6ad1b4ad8446687ded18bfe6daa8d36`. Both are retained through 2026-10-22. | IN_PROGRESS |
 
 **P11 unindexed WeChat source media (2026-10-15):** the media library can
 optionally list media rows directly from the local read-only WeChat database
@@ -800,8 +837,41 @@ when the user selects one exact WeChat account and conversation. Preview and
 ZIP export carry the account, conversation, shard, and local ID; indexed rows
 are deduplicated, message bodies are not read, and source paths stay server-side.
 Synthetic database/provider, HTTP preview-to-ZIP, and WebUI regressions pass.
-Source enumeration is bounded to 10,000 raw rows per view; full WeFlow media
-and decryption parity plus real-account cache acceptance remain open.
+Source enumeration follows a cross-shard keyset cursor without the former
+10,000-row ceiling; deep offsets still take time proportional to the skipped
+rows. Full WeFlow media/decryption parity and real-account cache acceptance
+remain open.
+
+The source gallery also lists type-47/11000 stickers. An explicit preview or
+ZIP request revalidates the exact source row, extracts only its bounded emoji
+cache key server-side, and resolves within the existing account-scoped local
+cache. The list remains metadata-only; hashes and source paths are not returned.
+
+**P14 current-worktree status (2026-10-15):** the hosted Windows evidence in
+P14-01 validates commit `d61c086` only. The current source-media and
+notification changes passed the full local gate (835 Python tests, 33
+WebUI checks, five source-mutation gates, and the 25,000-message benchmark).
+The synthetic timings were 1.536 s ingest, 0.033 s first search, 1.589 s for
+50 pages, 0.096 s backup, and 0.285 s restore, with zero WAL failures. The
+9,787-file portable package (587,017,262 bytes) and 692-file sanitized source
+bundle passed isolated smoke. A `local-worktree` manifest
+verified both package inventories and bytes for commit
+`2860ce8ba87d69be1b473e4dfbfe8a39d648ad73`. Uploaded/downloaded artifact
+round-trip and hosted Windows verification for this source state remain open,
+so P14-01 remains `IN_PROGRESS`.
+
+**P12-01 desktop-notification result (2026-10-15):** the user did not see the
+isolated synthetic notification. The probe had not actually moved Edge into a
+hidden/background state, which is required by the current browser-notification
+path; no Windows toast was created or received. P12-01 remains IN_PROGRESS for
+real foreground/background and OS notification-center acceptance.
+
+**P12-01 explicit test action (2026-10-15):** Settings now offers a fixed,
+body-free test notification while the capability is enabled. It can exercise
+browser/Windows presentation from a foreground click without creating an SSE
+event or using chat identity/content. Synthetic checks cover enabled/disabled
+and granted/denied states; this does not replace real notification-center
+acceptance, so P12-01 remains `IN_PROGRESS`.
 
 **P12-03 UI boundary update (2026-10-15):** the desktop settings view no longer
 offers install/uninstall controls without an inspectable native implementation.
@@ -3955,11 +4025,198 @@ open; P13-01 stays `IN_PROGRESS`.
 profile used only synthetic records, and browser notification permission was
 granted. Minimizing the automated Edge window still left the app page reporting
 `document.hidden == false`, so the notification creation path was not exercised.
-No Windows toast or operating-system click is claimed; P12-01 remains
-`IN_PROGRESS` pending a genuine background-window acceptance.
+The user has since confirmed the separate test notification did not appear on
+the Windows desktop. No Windows toast or operating-system click is claimed;
+P12-01 remains `IN_PROGRESS` pending a genuine background-window acceptance.
+
+**P11 HEIC/TIFF preview follow-up (2026-10-15):** the local media route can now
+convert a validated cached original to a bounded JPEG preview with the bundled
+FFmpeg. The gallery and viewer retain an original-download link. This improves
+local usability but does not establish WeFlow parity or real-cache acceptance;
+runtime verification remains open.
 
 **P11 WeChat cached thumbnail suffix (2026-10-15):** the image cache resolver
 now recognizes `.thumb.dat` as a thumbnail, matching the pinned WeFlow image
 cache tier logic. This affects only local cache selection; unknown `_b/.b/_w/.w/_c/.c`
 variants remain unclassified. Focused synthetic verification is recorded in
 the development log; real-cache coverage remains open.
+
+**P11 WeChat source-media paging (2026-10-15):** the WebUI now continues from a
+scope-bound keyset cursor for unindexed source media, reusing the initial total
+on later pages and avoiding repeated scans from the beginning. Legacy offset
+requests remain supported. Focused synthetic HTTP/provider/WebUI checks pass;
+real-cache and full WeFlow parity remain open, so P11 stays `IN_PROGRESS`.
+
+**P14 current worktree package smoke (2026-10-15):** portable and sanitized
+source packages rebuilt from the current worktree passed privacy scans and
+isolated Hub/MCP/source smoke checks. A `local-worktree` manifest verified both
+package inventories and bytes; its commit field is the base `2860ce8` HEAD and
+does not represent the uncommitted edits as a Git commit. GitHub CLI is
+unavailable, so current hosted CI and uploaded/downloaded artifact verification
+remain open; P14 stays `IN_PROGRESS`.
+
+**P9/P11 local follow-up (2026-10-15):** send history now uses SQLite insertion
+order as a deterministic tie-breaker before the 100-record limit; a synthetic
+same-second regression confirms the newest 100 requests and makes no delivery.
+Shared SILK decoding now writes content-addressed WAV output under Hub-owned
+storage, including the WeChat, WeCom, and QQ call paths. Synthetic WeChat and
+WeCom checks confirm source files/directories remain unchanged and no temporary
+output remains. Focused tests pass; P9-02 and P11-01 remain `IN_PROGRESS` for
+real-client and full media/cache acceptance.
+
+**P14 current worktree package smoke r5 (2026-10-15):** after the P9 send-list
+ordering and P11 Hub-owned voice decode cache changes, portable and sanitized
+source packages were rebuilt and passed privacy scans plus isolated Hub/MCP/
+source smoke. The manifest verifies 9,787 portable files (587,050,524 bytes)
+and a 25,133,738-byte source archive against base HEAD `2860ce8` with
+`local-worktree` provenance. Hosted CI and uploaded/downloaded artifact
+round-trip remain open; P14 stays `IN_PROGRESS`.
+
+**P14 current worktree package smoke r6 (2026-10-15):** refreshed after the
+QQ caller regression was updated. The 9,787-file portable package
+(587,050,616 bytes) and 25,133,866-byte sanitized source archive pass isolated
+Hub/MCP/source smoke, privacy scans, and local manifest verification. Hosted
+CI and uploaded/downloaded artifact round-trip remain open; P14 stays
+`IN_PROGRESS`.
+
+**P13 WeChat preparation identity binding (2026-10-15):** HTTP and MCP now
+compare the requested account with the current ready sender account before
+creating a pending approval. Synthetic regressions verify that a mismatched
+account creates no request and calls no delivery adapter. Real sending remains
+unverified; P13 stays `IN_PROGRESS`.
+
+MCP status lookup remains available while WeChat is offline, as it only reads
+the Hub's local approval queue; only request preparation requires live sender
+readiness and account binding.
+
+**P12-01 visible notification acceptance (2026-10-15):** the user confirmed
+that the explicit synthetic test notification was not visible on the Windows
+desktop. The current implementation calls the browser Notification API and
+does not provide a native Windows notification-center sender. P12-01 remains
+`IN_PROGRESS`; browser API invocation is not accepted as visible OS delivery.
+
+**P14 current worktree package smoke r7 (2026-10-15):** the refreshed Windows
+portable package (9,787 files, 587,107,842 bytes) and sanitized source archive
+(25,138,225 bytes) passed isolated startup/MCP/source checks, privacy scanning,
+and local manifest byte/provenance verification for base HEAD `2860ce8`. This
+includes the account-wide WeChat source-media path and WeChat send preparation
+identity binding. No hosted run or artifact upload/download round trip was
+performed; P14 remains `IN_PROGRESS`.
+
+**P14 current worktree package smoke r8 (2026-10-15):** the Windows package
+now includes the native notification bridge. The portable build contains 9,791
+files (587,097,430 bytes); the sanitized source ZIP is 25,136,806 bytes. Both
+source and portable isolated startup checks passed, and the local-worktree
+manifest `output/windows/LocalMessageHub-artifact-manifest-p8p14-20261015-r8.json`
+verified package bytes for HEAD `2860ce8`. No hosted run or artifact upload /
+download round trip was performed, so P14 remains `IN_PROGRESS`. The r8
+package record and a final server-test assertion were added after its archives
+were built; executable source and WebUI code match the package.
+
+**P12 Windows notification path (2026-10-15):** the Hub now sends the fixed test
+notice and filtered, body-free incoming-message notices through the Windows
+notification-area balloon API, without browser permission prompts. The local
+PowerShell delivery command returned success; a POST through the isolated Hub
+also returned `shown: true`. Focused synthetic checks passed for same-origin
+gating, fresh stream-issued event IDs, filters, duplicate tabs, and content
+minimization. The user has not yet confirmed that the Windows shell displayed
+the notice. Native notice click-through and real background delivery remain
+unaccepted, so P12-01 stays `IN_PROGRESS`; the existing Hub on 8765 was not
+restarted. The isolated r9 Hub is available at `http://127.0.0.1:8773/` using
+empty temporary storage for user-visible verification.
+
+**P14 current worktree package smoke r9 (2026-10-15):** the portable build
+contains 9,791 files (587,087,366 bytes); the sanitized source ZIP is
+25,137,093 bytes. Both isolated startup checks passed, and
+`output/windows/LocalMessageHub-artifact-manifest-p8p14-20261015-r9.json`
+verified local-worktree package bytes and provenance. Hosted CI and an artifact
+upload/download round trip remain open; P14 remains `IN_PROGRESS`.
+
+**P12 Windows notification follow-up (2026-10-15):** after the user confirmed
+the earlier test was not visible, inspection found that the old path used a
+WinForms tray balloon and that the live 8765 capability was disabled; the
+earlier successful POST was against isolated storage. Delivery now submits a
+Windows Runtime Toast through the registered Windows PowerShell identity, and
+API results say `submitted` rather than claiming the user saw it. A direct
+Windows Toast and a temporary, restored 8765 test both returned `submitted`.
+The capability remains off. The new Toast's user-visible appearance is awaiting
+confirmation; notification click-through is not implemented, so P12-01 remains
+`IN_PROGRESS`.
+
+**P9/P11 local source refresh (2026-10-15):** after restarting the updated
+8765 Hub, a read-only all-platform sync completed and all three local sources
+reported `connected` without errors. This verifies provider availability and
+indexing only; it does not close P9 live-send or P11 complete real-cache/media
+parity acceptance.
+
+**P14 current worktree package smoke r10 (2026-10-15):** the portable package
+contains 9,791 files (587,100,485 bytes); the sanitized source archive contains
+694 files (25,096,458 bytes). Isolated Hub/MCP startup checks, privacy scanning,
+and manifest byte/provenance verification passed. The
+`output/windows/LocalMessageHub-artifact-manifest-p8p14-20261015-r10.json`
+manifest identifies `local-worktree` provenance at base HEAD `2860ce8`. Hosted
+artifact upload/download verification remains open; P14 stays `IN_PROGRESS`.
+
+**P14 source documentation refresh r11 (2026-10-15):** the sanitized source
+archive was rebuilt after recording the P12 Toast diagnosis and verification.
+It contains 694 files (25,096,860 bytes) and passes isolated startup and
+privacy checks. The verified manifest pairs this source archive with portable
+package r10 and records `local-worktree` provenance; hosted artifact
+upload/download verification remains open.
+
+**P11 QQ sync pagination follow-up (2026-10-15):** QQ full snapshot replay now
+uses a timestamp/rowid keyset for each 500-message page, avoiding deep `OFFSET`
+skips while preserving deterministic ties and null-timestamp rows. Interrupted
+syncs persist the keyset cursor; completed syncs still replay the snapshot so
+older source edits are reconciled. Two focused regressions passed, and the live
+8765 read-only QQ sync completed with the same indexed message total and no
+source error. Snapshot decryption and complete real-cache/media parity remain
+open, so P11 remains `IN_PROGRESS`.
+
+**P12 Windows notification identity follow-up (2026-10-15):** the user
+confirmed the previous Toast did not appear. The sender had borrowed the
+Windows PowerShell identity instead of registering a Hub AppUserModelID and
+Start menu shortcut, a documented desktop Toast requirement. The Hub now
+registers its own per-user shortcut and uses that identity. Registration-only
+execution succeeded and Windows lists the Hub identity; no notification was
+sent during this fix. Visible delivery still requires a user-triggered test,
+so P12-01 remains `IN_PROGRESS`.
+
+Windows reports no setting for a newly registered Hub identity until the
+notification path is used, while an existing system app reports `Enabled`.
+The sender now blocks only explicit disabled states and lets Windows decide
+when the new identity state is unknown. User-visible delivery remains pending.
+
+**P14 current worktree package smoke r13 (2026-10-15):** rebuilt the portable
+package and sanitized source archive with the Hub-owned Toast identity and
+clearer test feedback. Portable UI/source/MCP smoke, source ZIP isolated
+startup, privacy scans, and manifest byte/provenance checks passed. Manifest
+`output/windows/LocalMessageHub-artifact-manifest-p8p14-20261015-r13.json`
+records local-worktree provenance at base HEAD `2860ce8`; hosted artifact
+upload/download verification remains open, so P14 stays `IN_PROGRESS`.
+
+**P12/P14 follow-up and package r14 (2026-10-15):** Windows returns no
+notification setting for the new Hub identity before first use, but reports
+`Enabled` for an existing application identity. The sender now blocks only an
+explicit disabled state; actual Toast display remains unverified until the
+user runs the UI test. Package r14 contains this behavior. Portable and source
+isolated startup/privacy smoke plus manifest byte/provenance verification
+passed; hosted artifact transfer remains open, so P14 stays `IN_PROGRESS`.
+
+**P11 WeChat source-media runtime follow-up (2026-10-15):** the user later
+clarified that they do not recall whether the latest synthetic desktop
+notification appeared, although they have seen notifications before. This does
+not verify that specific Toast. The live notifications capability is off and
+Windows has not created settings for the Hub identity; no setting was changed
+or notification resent. A real source-media call exposed a sender-name
+lookup calling `WeChatProvider` instead of its `LocalReader`; this is corrected
+and the focused provider tests now assert the ownership boundary. Completed
+account-wide session scans reconcile stale indexed counts against exact source
+identities; early-stopped sessions retain the inexpensive count estimate.
+Three focused regressions passed. A read-only snapshot of
+the current real index and WeChat database returned one sticker in the first
+page, total four, with a continuation cursor and no message-body reads. The
+running 8765 process predates the source fix and needs restart; stopping its
+verified PID 41824 was rejected by tool policy (`blocked by policy`), so the
+live page still uses the previous loaded code. P11-01 remains `IN_PROGRESS`
+pending live reload and broader real-cache coverage.

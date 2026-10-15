@@ -147,6 +147,7 @@ class WeChatProvider:
     platform = "wechat"
     _SOURCE_MEDIA_TYPES = {
         "image": {3}, "voice": {34}, "video": {43},
+        "sticker": {47, 11000},
         "file": {49, 34359738417, 103079215153, 25769803825},
     }
 
@@ -461,7 +462,9 @@ class WeChatProvider:
                 conn.close()
 
     def source_media(self, session_id: str, *, media_type: str = "", start_time=None,
-                     end_time=None, offset=0, limit=60) -> dict[str, Any]:
+                     end_time=None, offset=0, limit=60, after_cursor=None,
+                     after_sort_seq=None, after_sort_seq_inclusive=False,
+                     include_total=True) -> dict[str, Any]:
         """Page unprojected source media metadata without materializing message content."""
         if not isinstance(session_id, str) or not session_id or len(session_id) > 512:
             raise ValueError("invalid WeChat conversation")
@@ -470,25 +473,34 @@ class WeChatProvider:
         types = (self._SOURCE_MEDIA_TYPES[media_type] if media_type else
                  set().union(*self._SOURCE_MEDIA_TYPES.values()))
         result = self.reader.get_media_rows(session_id, types, offset=offset, limit=limit,
-                                            start_time=start_time, end_time=end_time)
+                                            start_time=start_time, end_time=end_time,
+                                            after_cursor=after_cursor,
+                                            after_sort_seq=after_sort_seq,
+                                            after_sort_seq_inclusive=after_sort_seq_inclusive,
+                                            include_total=include_total)
         items = []
         for row in result["items"]:
             local_type = int(row["local_type"]) & 0xFFFFFFFF
-            kind = {3: "image", 34: "voice", 43: "video", 49: "file"}.get(local_type)
+            kind = {3: "image", 34: "voice", 43: "video", 47: "sticker",
+                    11000: "sticker", 49: "file"}.get(local_type)
             if kind is None:
                 continue
             shard = row["shard"]
             sender_id = row.get("sender_id")
-            sender = self._sender_names(shard).get(int(sender_id or 0), "")
+            sender = self.reader._sender_names(shard).get(int(sender_id or 0), "")
             items.append({"id": f"{session_id}:{shard}:{row['local_id']}",
                           "platform": self.platform, "conversation_id": session_id,
                           "timestamp": row["create_time"], "sort_seq": row["sort_seq"],
+                          "_source_cursor": {"sort_seq": row["sort_seq"],
+                                             "sort_seq_is_null": row.get("sort_seq_is_null", False),
+                                             "shard": shard, "local_id": row["local_id"]},
                           "sender_id": sender_id, "sender_name": sender,
                           "type": kind, "text": "", "raw_type": str(local_type),
                           "extra": {"resource_kind": "wechat_source", "shard": shard,
                                     "local_id": row["local_id"],
                                     "local_type": row["local_type"]}})
-        return {"items": items, "total": result["total"]}
+        return {"items": items, "total": result["total"],
+                "next_cursor": result.get("next_cursor")}
 
     def emoji_cache_account_dir(self) -> Path:
         account_id = str(self.reader.account or '').strip()
@@ -573,7 +585,7 @@ class WeChatProvider:
         if local_type == 34 and path:
             from .voice import voice_media_result
 
-            return voice_media_result(path)
+            return voice_media_result(path, RUNTIME / "media" / "decoded-voice")
         if local_type == 34:
             status = self.voice_status(session_id, local_id, shard, downloader=downloader)
             return {"available": False, "path": None,

@@ -429,6 +429,46 @@ class LocalQQProvider:
         table, columns, peer = self._schemas[kind]
         rows = conn.execute(f'SELECT rowid AS local_rowid,* FROM "{table}" WHERE {peer}=? ORDER BY "40050" DESC,rowid DESC LIMIT ? OFFSET ?',
                             (identity, limit, offset))
+        return self._message_items(rows, identity, table, columns)
+
+    def messages_page(self, conversation, limit=500, cursor=None):
+        if type(limit) is not int or not 1 <= limit <= 2000:
+            raise ValueError('invalid message page')
+        if cursor is not None and (
+                not isinstance(cursor, dict) or set(cursor) != {'timestamp', 'rowid'} or
+                (cursor['timestamp'] is not None and type(cursor['timestamp']) not in (int, str)) or
+                type(cursor['rowid']) is not int or cursor['rowid'] < 1):
+            raise ValueError('invalid message cursor')
+        conn = self._open()
+        kind = conversation.get('kind', 'private') if isinstance(conversation, dict) else 'private'
+        identity = str(conversation.get('id', '')) if isinstance(conversation, dict) else str(conversation)
+        if kind not in self._schemas:
+            return {'items': [], 'next_cursor': cursor, 'has_more': False}
+        table, columns, peer = self._schemas[kind]
+        where = f'{peer}=?'
+        params = [identity]
+        if cursor is not None:
+            timestamp, rowid = cursor['timestamp'], cursor['rowid']
+            if timestamp is None:
+                where += ' AND "40050" IS NULL AND rowid<?'
+                params.append(rowid)
+            else:
+                where += ' AND ("40050" IS NULL OR "40050"<? OR ("40050"=? AND rowid<?))'
+                params.extend((timestamp, timestamp, rowid))
+        rows = conn.execute(
+            f'SELECT rowid AS local_rowid,* FROM "{table}" WHERE {where} '
+            f'ORDER BY "40050" DESC,rowid DESC LIMIT ?', (*params, limit + 1)).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = self._message_items(rows, identity, table, columns)
+        next_cursor = ({'timestamp': rows[-1]['40050'], 'rowid': int(rows[-1]['local_rowid'])}
+                       if rows else cursor)
+        if next_cursor and (next_cursor['timestamp'] is not None and
+                            type(next_cursor['timestamp']) not in (int, str)):
+            raise LocalQQError('schema_unsupported', '此 QQNT 消息表时间字段格式尚未支持')
+        return {'items': items, 'next_cursor': next_cursor, 'has_more': has_more}
+
+    def _message_items(self, rows, identity, table, columns):
         result = []
         for row in rows:
             value = lambda field: row[field] if field in columns else None

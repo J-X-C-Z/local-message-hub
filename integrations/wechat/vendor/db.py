@@ -2125,11 +2125,19 @@ class WeChatDB:
 
     def get_media_rows(self, user: str, types: set, *, offset: int = 0,
                        limit: int = 60, start_time: int | None = None,
-                       end_time: int | None = None) -> dict:
+                       end_time: int | None = None,
+                       after_cursor: dict | None = None,
+                       after_sort_seq: int | None = None,
+                       after_sort_seq_inclusive: bool = False,
+                       include_total: bool = True) -> dict:
         """Page media identities and display metadata without reading message bodies."""
         offset, limit = int(offset), int(limit)
         type_codes = sorted({int(value) for value in types})
-        if offset < 0 or not 1 <= limit <= 500 or not type_codes:
+        if (offset < 0 or not 1 <= limit <= 500 or not type_codes or
+                type(include_total) is not bool or
+                type(after_sort_seq_inclusive) is not bool or
+                (after_cursor is not None and (offset != 0 or after_sort_seq is not None)) or
+                (after_sort_seq is not None and type(after_sort_seq) is not int)):
             raise ValueError("invalid media page")
         where = " WHERE local_type IN (%s)" % ",".join("?" for _ in type_codes)
         params = list(type_codes)
@@ -2142,24 +2150,78 @@ class WeChatDB:
 
         def _read(tables):
             rows, total = [], 0
+            cursor_values = None
+            cursor_shard_order = None
+            if after_cursor is not None:
+                try:
+                    cursor_seq = after_cursor["sort_seq"]
+                    cursor_is_null = after_cursor["sort_seq_is_null"]
+                    cursor_shard = after_cursor["shard"]
+                    cursor_local_id = after_cursor["local_id"]
+                    if (type(cursor_seq) is not int or type(cursor_is_null) is not bool or
+                            not isinstance(cursor_shard, str) or not cursor_shard or
+                            type(cursor_local_id) is not int or
+                            (cursor_is_null and cursor_seq != 0)):
+                        raise ValueError
+                    cursor_values = (cursor_seq, cursor_is_null, cursor_shard, cursor_local_id)
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError("invalid media cursor") from None
+                shard_order = {self._shard_label(conn): index
+                               for index, (conn, _table) in enumerate(tables)}
+                cursor_shard_order = shard_order.get(cursor_values[2])
+                if cursor_shard_order is None:
+                    raise ValueError("stale media cursor")
             for shard_order, (conn, table) in enumerate(tables):
                 quoted = '"' + table.replace('"', '""') + '"'
-                total += int(conn.execute("SELECT count(*) FROM %s%s" % (quoted, where), params).fetchone()[0])
+                if include_total:
+                    total += int(conn.execute("SELECT count(*) FROM %s%s" % (quoted, where), params).fetchone()[0])
                 shard = self._shard_label(conn)
+                query_where, query_params = where, list(params)
+                if after_sort_seq is not None:
+                    operator = "<=" if after_sort_seq_inclusive else "<"
+                    query_where += f" AND COALESCE(sort_seq, 0) {operator} ?"
+                    query_params.append(after_sort_seq)
+                if cursor_values is not None:
+                    cursor_seq, cursor_is_null, _cursor_shard, cursor_local_id = cursor_values
+                    seq = "COALESCE(sort_seq, 0)"
+                    if shard_order < cursor_shard_order:
+                        query_where += f" AND {seq} < ?"
+                        query_params.append(cursor_seq)
+                    elif shard_order > cursor_shard_order:
+                        query_where += f" AND {seq} <= ?"
+                        query_params.append(cursor_seq)
+                    elif cursor_is_null:
+                        query_where += f" AND ({seq} < ? OR ({seq} = ? AND sort_seq IS NULL AND local_id > ?))"
+                        query_params.extend((cursor_seq, cursor_seq, cursor_local_id))
+                    else:
+                        query_where += f" AND ({seq} < ? OR ({seq} = ? AND (sort_seq IS NULL OR local_id > ?)))"
+                        query_params.extend((cursor_seq, cursor_seq, cursor_local_id))
                 cursor = conn.execute(
                     "SELECT local_id, local_type, real_sender_id, create_time, sort_seq "
-                    "FROM %s%s ORDER BY sort_seq DESC, local_id ASC LIMIT ?" % (quoted, where),
-                    (*params, offset + limit),
+                    "FROM %s%s ORDER BY COALESCE(sort_seq, 0) DESC, "
+                    "sort_seq IS NULL ASC, local_id ASC LIMIT ?" % (quoted, query_where),
+                    (*query_params, limit if cursor_values is not None else offset + limit),
                 )
                 rows.extend((int(row["sort_seq"] or 0), shard_order,
                              {"local_id": int(row["local_id"]),
                               "local_type": int(row["local_type"]),
                               "sender_id": row["real_sender_id"],
                               "create_time": int(row["create_time"] or 0),
-                              "sort_seq": int(row["sort_seq"] or 0), "shard": shard})
+                              "sort_seq": int(row["sort_seq"] or 0),
+                              "sort_seq_is_null": row["sort_seq"] is None,
+                              "shard": shard})
                             for row in cursor.fetchall())
             rows.sort(key=lambda item: item[0], reverse=True)
-            return {"items": [item[2] for item in rows[offset:offset + limit]], "total": total}
+            items = ([item[2] for item in rows[:limit]] if cursor_values is not None
+                     else [item[2] for item in rows[offset:offset + limit]])
+            next_cursor = None
+            if items:
+                last = items[-1]
+                next_cursor = {"sort_seq": last["sort_seq"],
+                               "sort_seq_is_null": last["sort_seq_is_null"],
+                               "shard": last["shard"], "local_id": last["local_id"]}
+            return {"items": items, "total": total if include_total else None,
+                    "next_cursor": next_cursor}
 
         return self._run_msg_query(user, _read) or {"items": [], "total": 0}
 

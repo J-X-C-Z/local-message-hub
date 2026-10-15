@@ -130,7 +130,7 @@ class SendRepository:
                 values.append(platform)
             where = " WHERE " + " AND ".join(clauses) if clauses else ""
             rows = self._conn.execute(
-                "SELECT * FROM send_requests" + where + " ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM send_requests" + where + " ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (*values, limit)).fetchall()
             return [dict(row) for row in rows]
 

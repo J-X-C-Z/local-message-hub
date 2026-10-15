@@ -110,6 +110,22 @@ _READ_TOOLS = [
          "conversation_id": {"type": "string", "maxLength": 2048},
          "start": {"type": "string", "maxLength": 10}, "end": {"type": "string", "maxLength": 10},
          "limit": _int(1, 100), "offset": _int(0, 1000000)})},
+    {"name": "list_wechat_source_media", "description": "List source-only WeChat attachment metadata from exactly one account and conversation. Uses cursor pagination and returns shard/local_id identity needed to request one cached attachment. Never returns message bodies, paths, URLs, or bytes.",
+     "inputSchema": _object({"platform": {"type": "string", "enum": ["wechat"]},
+         "account_id": {"type": "string", "minLength": 1, "maxLength": 256},
+         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 512},
+         "type": {"type": "string", "enum": ["", "image", "sticker", "video", "voice", "file"]},
+         "start": {"type": "string", "maxLength": 10}, "end": {"type": "string", "maxLength": 10},
+         "limit": _int(1, 60), "cursor": {"type": "string", "maxLength": 1024}},
+         ("platform", "account_id", "conversation_id"))},
+    {"name": "get_wechat_source_media", "description": "Read one explicitly selected WeChat source attachment from the local cache by exact account, conversation, shard and local_id. Uses the same 8 MiB bound and content-signature checks as other MCP cached media. Never accepts a path or URL.",
+     "inputSchema": _object({"platform": {"type": "string", "enum": ["wechat"]},
+         "account_id": {"type": "string", "minLength": 1, "maxLength": 256},
+         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 512},
+         "shard": {"type": "string", "minLength": 1, "maxLength": 512},
+         "local_id": {"type": "string", "pattern": "^[0-9]{1,20}$"},
+         "type": {"type": "string", "enum": ["image", "sticker", "video", "voice", "file"]}},
+         ("platform", "account_id", "conversation_id", "shard", "local_id", "type"))},
     {"name": "get_message", "description": "Read one indexed message, including attachment and sender metadata. Media bytes are never returned.",
      "inputSchema": _object({"platform": {"type": "string", "enum": list(PLATFORMS)},
          "account_id": {"type": "string", "minLength": 1, "maxLength": 256},
@@ -268,6 +284,8 @@ _TOOL_FIELDS = {
     "list_sources": set(),
     "list_imports": {"limit", "offset"},
     "list_media": {"platform", "account_id", "conversation_id", "type", "query", "start", "end", "limit", "offset"},
+    "list_wechat_source_media": {"platform", "account_id", "conversation_id", "type", "start", "end", "limit", "cursor"},
+    "get_wechat_source_media": {"platform", "account_id", "conversation_id", "shard", "local_id", "type"},
     "get_message": {"platform", "account_id", "message_id"},
     "get_attachment": {"platform", "account_id", "message_id", "resource_index"},
     "list_qq_forward_attachments": {"account_id", "conversation_id", "message_id"},
@@ -302,6 +320,8 @@ _TOOL_REQUIRED = {
     "list_group_members": {"platform", "account_id", "conversation_id"},
     "get_message": {"platform", "account_id", "message_id"},
     "get_attachment": {"platform", "account_id", "message_id"},
+    "list_wechat_source_media": {"platform", "account_id", "conversation_id"},
+    "get_wechat_source_media": {"platform", "account_id", "conversation_id", "shard", "local_id", "type"},
     "list_qq_forward_attachments": {"account_id", "conversation_id", "message_id"},
     "get_qq_forward_attachment": {"account_id", "conversation_id", "message_id", "resource_handle"},
     "get_contact_avatar": {"platform", "account_id", "contact_id"},
@@ -331,6 +351,7 @@ _TOOL_CAPABILITY = {
     "list_group_members": "chat",
     "list_imports": "imports",
     "list_media": "media", "get_attachment": "media",
+    "list_wechat_source_media": "media", "get_wechat_source_media": "media",
     "list_qq_cache_resources": "media", "get_qq_cache_resource": "media",
     "list_qq_forward_attachments": "media", "get_qq_forward_attachment": "media",
     "list_relationship_footprint": "relationship_footprint",
@@ -355,7 +376,8 @@ class MCPServer:
                  group_members_reader=None,
                  qq_forward_reader=None, qq_forward_lister=None,
                  wecom_bot_identity_reader=None,
-                 wechat_readiness_reader=None, qq_send_target_resolver=None):
+                 wechat_readiness_reader=None, qq_send_target_resolver=None,
+                 wechat_source_media_lister=None, wechat_source_media_reader=None):
         self.store = store
         self.allow_writes = bool(allow_writes)
         self.media_reader = media_reader
@@ -372,6 +394,8 @@ class MCPServer:
         self.wecom_bot_identity_reader = wecom_bot_identity_reader
         self.wechat_readiness_reader = wechat_readiness_reader
         self.qq_send_target_resolver = qq_send_target_resolver
+        self.wechat_source_media_lister = wechat_source_media_lister
+        self.wechat_source_media_reader = wechat_source_media_reader
         self.analytics = AnalyticsService(store)
         self.initialized = False
         self.stopping = False
@@ -385,13 +409,18 @@ class MCPServer:
             tools = tools + [_SEND_PREPARE_TOOL, _SEND_STATUS_TOOL]
         if self.send_service is not None and self.capability_enabled("wecom_bot_send") and self._wecom_bot_identity():
             tools = tools + [_WECOM_BOT_PREPARE_TOOL, _WECOM_BOT_STATUS_TOOL]
-        if self.send_service is not None and self.capability_enabled("wechat_send") and self._wechat_ready():
-            tools = tools + [_WECHAT_PREPARE_TOOL, _WECHAT_STATUS_TOOL]
+        if self.send_service is not None and self.capability_enabled("wechat_send"):
+            tools = tools + [_WECHAT_STATUS_TOOL]
+            if self._wechat_ready():
+                tools = tools + [_WECHAT_PREPARE_TOOL]
         return [tool for tool in tools
                 if self.capability_enabled(_TOOL_CAPABILITY.get(tool["name"]))
                 and (tool["name"] != "search_moments" or self.moments_reader is not None)
                 and (tool["name"] != "get_moment_media" or self.moments_media_reader is not None)
                 and (tool["name"] != "get_attachment" or self.media_reader is not None)
+                and (tool["name"] not in {"list_wechat_source_media", "get_wechat_source_media"}
+                     or (self.wechat_source_media_lister is not None and
+                         self.wechat_source_media_reader is not None))
                 and (tool["name"] != "list_qq_cache_resources" or self.qq_gallery_reader is not None)
                 and (tool["name"] != "get_qq_cache_resource" or self.media_reader is not None)
                 and (tool["name"] != "get_contact_avatar" or self.avatar_reader is not None)
@@ -429,12 +458,15 @@ class MCPServer:
     def _wechat_ready(self):
         """Only expose the WeChat send tools when the local client is actually usable."""
         if self.wechat_readiness_reader is None:
-            return False
+            return None
         try:
             value = self.wechat_readiness_reader()
         except Exception:
-            return False
-        return isinstance(value, dict) and value.get("state") == "ready"
+            return None
+        if (not isinstance(value, dict) or value.get("state") != "ready"
+                or not isinstance(value.get("account_id"), str) or not value["account_id"]):
+            return None
+        return value
 
     def handle(self, message):
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
@@ -525,7 +557,7 @@ class MCPServer:
                 media_content = None
                 if tool_name in {"get_attachment", "get_moment_media", "get_qq_cache_resource",
                                  "get_qq_forward_attachment",
-                                 "get_contact_avatar"}:
+                                 "get_contact_avatar", "get_wechat_source_media"}:
                     metadata = raw_value
                     if tool_name == "get_contact_avatar":
                         if self.avatar_reader is None:
@@ -551,6 +583,20 @@ class MCPServer:
                             media_content = {"type": "resource", "resource": {
                                 "uri": "lmh://attachment/cached-media", "mimeType": mime, "blob": encoded}}
                         raw_value = {key: item for key, item in metadata.items() if key != "message"}
+                    elif tool_name == "get_wechat_source_media":
+                        if self.wechat_source_media_reader is None:
+                            raise ValueError("微信源媒体读取服务不可用")
+                        payload, mime = self.wechat_source_media_reader(metadata)
+                        encoded = base64.b64encode(payload).decode("ascii")
+                        if mime.startswith("image/"):
+                            media_content = {"type": "image", "data": encoded, "mimeType": mime}
+                        elif mime.startswith("audio/"):
+                            media_content = {"type": "audio", "data": encoded, "mimeType": mime}
+                        else:
+                            media_content = {"type": "resource", "resource": {
+                                "uri": "lmh://wechat-source/cached-media", "mimeType": mime, "blob": encoded}}
+                        raw_value = {key: value for key, value in metadata.items()
+                                     if key not in {"shard", "local_id"}}
                     elif tool_name == "get_qq_forward_attachment":
                         payload, mime = metadata["payload"], metadata["mime_type"]
                         encoded = base64.b64encode(payload).decode("ascii")
@@ -618,8 +664,11 @@ class MCPServer:
             raise ValueError("本地发送服务不可用")
         if name in {"prepare_wechat_send", "get_wechat_send_status"} and self.send_service is None:
             raise ValueError("本地发送服务不可用")
-        if name in {"prepare_wechat_send", "get_wechat_send_status"} and not self._wechat_ready():
-            raise ValueError("本机微信客户端不可用；请在已登录的 Windows 主机上打开微信")
+        wechat_readiness = None
+        if name == "prepare_wechat_send":
+            wechat_readiness = self._wechat_ready()
+            if not wechat_readiness:
+                raise ValueError("本机微信客户端不可用；请在已登录的 Windows 主机上打开微信")
         if name in {"prepare_wecom_bot_send", "get_wecom_bot_send_status"} and not self._wecom_bot_identity():
             raise ValueError("企微机器人未配置；请先在本机设置中配置机器人身份")
         if name == "get_qq_forward_attachment" and self.qq_forward_reader is None:
@@ -636,7 +685,8 @@ class MCPServer:
         limits = {"platform": 16, "query": 2000, "account_id": 256, "conversation_id": 2048,
                   "contact_id": 512, "identity_id": 256, "message_id": 2048,
                   "referencing_message_id": 2048,
-                  "type": 32, "start": 32, "end": 32, "cursor": 128, "note": 4096,
+                  "type": 32, "start": 32, "end": 32, "cursor": 1024, "note": 4096,
+                  "shard": 512, "local_id": 20,
                   "conversation_type": 16, "text": 4000, "request_id": 80,
                   "resource_handle": 128, "counterpart_id": 512}
         for key, maximum in limits.items():
@@ -686,6 +736,8 @@ class MCPServer:
                 raise ValueError("WeCom bot send request not found")
             return result
         if name == "prepare_wechat_send":
+            if args["account_id"] != wechat_readiness["account_id"]:
+                raise ValueError("account_id must match the currently logged-in WeChat account")
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args["account_id"]):
                 raise ValueError("account_id is invalid")
             if not re.fullmatch(r"(?:[A-Za-z0-9_-]{1,64}|[A-Za-z0-9_-]{1,64}@chatroom)", args["conversation_id"]):
@@ -749,6 +801,8 @@ class MCPServer:
             raise ValueError("limit must be from 1 to 100")
         if not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= 1_000_000:
             raise ValueError("offset must be from 0 to 1000000")
+        if name == "get_wechat_source_media" and not re.fullmatch(r"[0-9]{1,20}", args["local_id"]):
+            raise ValueError("local_id must be a decimal WeChat row ID")
         if name == "list_group_members":
             if platform not in ("wechat", "wecom", "qq"):
                 raise ValueError("platform must be wechat, wecom, or qq")
@@ -894,6 +948,43 @@ class MCPServer:
                     extra.pop("media", None)
                 item["resource_uri"] = self._message_uri(item["platform"], item["account_id"], item["id"])
             return result
+        if name == "list_wechat_source_media":
+            if self.wechat_source_media_lister is None or self.wechat_source_media_reader is None:
+                raise ValueError("微信源媒体读取服务不可用")
+            media_type = args.get("type", "")
+            if media_type not in ("", "image", "sticker", "video", "voice", "file"):
+                raise ValueError("Unknown media type")
+            result = self.wechat_source_media_lister({
+                "platform": "wechat", "account_id": args["account_id"],
+                "conversation_id": args["conversation_id"], "type": media_type,
+                "start": args.get("start", ""), "end": args.get("end", ""),
+                "limit": min(limit, 60), "offset": 0, "cursor": args.get("cursor", ""),
+            })
+            items = []
+            for source in result.get("items", []):
+                extra = source.get("extra") if isinstance(source.get("extra"), dict) else {}
+                shard, local_id = extra.get("shard"), extra.get("local_id")
+                if (source.get("platform") != "wechat" or
+                        source.get("conversation_id") != args["conversation_id"] or
+                        source.get("account_id") != args["account_id"] or
+                        not isinstance(shard, str) or not shard or
+                        type(local_id) is not int or local_id < 0):
+                    continue
+                items.append({key: source.get(key) for key in
+                              ("id", "timestamp", "sender_id", "sender_name", "type", "raw_type")
+                              if source.get(key) is not None})
+                items[-1].update({"platform": "wechat", "account_id": args["account_id"],
+                                  "conversation_id": args["conversation_id"],
+                                  "shard": shard, "local_id": str(local_id)})
+            return {"items": items, "total": result.get("total", len(items)),
+                    "limit": result.get("limit", min(limit, 60)),
+                    "next_cursor": result.get("next_cursor")}
+        if name == "get_wechat_source_media":
+            if self.wechat_source_media_lister is None or self.wechat_source_media_reader is None:
+                raise ValueError("微信源媒体读取服务不可用")
+            return {"platform": "wechat", "account_id": args["account_id"],
+                    "conversation_id": args["conversation_id"], "shard": args["shard"],
+                    "local_id": args["local_id"], "type": args["type"]}
         if name == "list_qq_cache_resources":
             if self.qq_gallery_reader is None:
                 raise ValueError("本机 QQ 缓存读取服务不可用")
@@ -1099,7 +1190,9 @@ def serve(input_stream=None, output_stream=None, storage=LOCAL):
                            qq_forward_lister=media_hub.list_qq_forward_attachments,
                            qq_send_target_resolver=media_hub.resolve_qq_send_target,
                            wecom_bot_identity_reader=media_hub.wecom_bot_credentials.status,
-                           wechat_readiness_reader=lambda: media_hub.wechat_sender.readiness(True))
+                           wechat_readiness_reader=lambda: media_hub.wechat_sender.readiness(True),
+                           wechat_source_media_lister=media_hub.list_wechat_source_media,
+                           wechat_source_media_reader=media_hub.read_wechat_source_media)
         while True:
             line = input_stream.readline(_MAX_LINE + 1)
             if not line:

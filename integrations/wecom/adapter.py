@@ -29,8 +29,10 @@ class WeComSnapshotError(RuntimeError):
 class WeComAdapter:
     """Read-only query facade over the local WeCom snapshot engine."""
 
-    def __init__(self, interval: int = 30, data_root: str | None = None):
+    def __init__(self, interval: int = 30, data_root: str | None = None,
+                 voice_cache_dir: str | Path | None = None):
         self.engine = SyncEngine(interval=interval, full_root=data_root)
+        self.voice_cache_dir = Path(voice_cache_dir) if voice_cache_dir else Path(OUT).parent / "media" / "decoded-voice"
         self._loaded = False
         self._messages_released = False
         self._released_media = {}
@@ -293,7 +295,7 @@ class WeComAdapter:
                         header = media_file.read(7)
                     if header.startswith((b'#!SILK', b'\x02#!SILK')):
                         from integrations.wechat.voice import voice_media_result
-                        return voice_media_result(str(candidate))
+                        return voice_media_result(str(candidate), self.voice_cache_dir)
                     path = str(candidate) if key == '_local_cache_path' else safe_rel
                     return {"available": True, "path": path,
                             "name": attachment.get("n") or candidate.name, "reason": None}

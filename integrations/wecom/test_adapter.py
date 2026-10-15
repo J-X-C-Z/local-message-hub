@@ -7,7 +7,7 @@ import tempfile
 import threading
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 class WeComMediaResolverTest(unittest.TestCase):
@@ -110,20 +110,25 @@ class WeComMediaResolverTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             voice = root / "voice.silk"
-            voice.write_bytes(b"#!SILK" + b"fixture")
+            payload = b"#!SILK" + b"fixture"
+            voice.write_bytes(payload)
+            output_dir = root / "hub-voice-cache"
             adapter = object.__new__(self.adapter.WeComAdapter)
             adapter.engine = types.SimpleNamespace(cache_root=str(root))
+            adapter.voice_cache_dir = output_dir
             adapter._messages = lambda: [{"message_id": "voice-message", "media": [
                 {"p": "voice.silk", "n": "voice.silk"},
             ]}]
-            decoded = {"available": True, "path": str(root / "voice.wav"),
-                       "playable": True, "mime_type": "audio/wav", "reason": None}
+            decoder = types.SimpleNamespace(decode=Mock(return_value=b"1234"))
             with patch.object(self.adapter, "OUT", str(root)), \
-                    patch("integrations.wechat.voice.voice_media_result", return_value=decoded) as decode:
+                    patch.dict(sys.modules, {"pilk_nogil": decoder}):
                 result = adapter.media("voice-message")
 
-        self.assertEqual(result, decoded)
-        decode.assert_called_once_with(str(voice))
+            self.assertTrue(result["playable"])
+            self.assertEqual(Path(result["path"]).parent, output_dir)
+            self.assertEqual(voice.read_bytes(), payload)
+            self.assertEqual({path.name for path in root.iterdir()}, {"voice.silk", "hub-voice-cache"})
+            self.assertEqual(list(output_dir.glob("*.wav.tmp")), [])
 
 
 class WeComGroupRosterTest(unittest.TestCase):
