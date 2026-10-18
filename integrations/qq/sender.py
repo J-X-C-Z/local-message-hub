@@ -14,6 +14,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 _SERVER_NAME = "Local Message Hub"
 _CONFIG = "onebot11.json"
+_MAX_SEND_RESPONSE_BYTES = 1024 * 1024
+_MAX_READINESS_RESPONSE_BYTES = 64 * 1024
 
 
 class _RejectRedirects(HTTPRedirectHandler):
@@ -104,7 +106,10 @@ class NapCatOneBotSender:
                                method="POST")
         try:
             with self.opener(http_request, timeout=self.timeout) as response:
-                payload = json.loads(response.read(1024 * 1024).decode("utf-8"))
+                raw = response.read(_MAX_SEND_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_SEND_RESPONSE_BYTES:
+                raise QQDeliveryUnknown("onebot_response_too_large")
+            payload = json.loads(raw.decode("utf-8"))
         except TimeoutError:
             raise TimeoutError("OneBot request timed out") from None
         except HTTPError as exc:
@@ -150,8 +155,11 @@ class NapCatOneBotSender:
                           "Authorization": "Bearer " + endpoint["token"]}, method="POST")
         try:
             with self.opener(request, timeout=self.timeout) as response:
-                raw = response.read(64 * 1024)
+                raw = response.read(_MAX_READINESS_RESPONSE_BYTES + 1)
             result["endpoint_reachable"] = True
+            if len(raw) > _MAX_READINESS_RESPONSE_BYTES:
+                result["state"] = "invalid_response"
+                return result
             payload = json.loads(raw.decode("utf-8"))
         except HTTPError as exc:
             result["endpoint_reachable"] = True

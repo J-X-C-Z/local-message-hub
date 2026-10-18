@@ -1,5 +1,97 @@
 # Development Log
 
+## 2026-10-19 - P14 Current Full Local Gate
+
+- Ran the required `scripts/check-local-hub.ps1` once after integrating the
+  current sender, notification and MCP/QQ follow-ups. All 871 Python tests,
+  five source-mutation gate checks and 32 WebUI checks passed, along with
+  syntax/compilation, Git/source privacy, package manifest, isolated smoke and
+  deterministic source-ZIP checks.
+- The 25,000-message synthetic benchmark measured 1.979 s ingest, 0.052 s
+  first search, 2.497 s for 50 cursor pages, 0.156 s backup and 0.356 s restore,
+  with zero WAL failures. This is synthetic performance evidence, not a
+  guarantee for every source/client/cache.
+- The user deferred real personal-WeChat sending acceptance. No delivery was
+  attempted and existing approvals were not consumed. Source-client mutation,
+  real bot/QQ delivery, full media parity and live Windows notification
+  activation remain open. Current-revision hosted packaging/artifact evidence
+  must still be collected; P14 remains `IN_PROGRESS` at this checkpoint.
+
+## 2026-10-19 - P11 Real Local Avatar And Media Acceptance
+
+- Started the current worktree Hub on loopback with periodic sync disabled.
+  Read-only cached-avatar verification accepted WeChat JPEG and QQ JPEG/PNG/GIF
+  bytes; sampled files decoded successfully without exposing their pixels.
+- A hidden browser tab used the actual platform switcher: visible conversation
+  avatars decoded on WeChat, QQ and WeCom (5/5, 15/15 and 8/8 viewport images).
+  Every avatar URL was same-origin `/api/avatar`; no remote image elements
+  were present. This is real cached-avatar browser evidence, not complete
+  media or other-schema acceptance.
+- A real cached QQ JPEG resolved through the Hub media token and fully decoded
+  locally. A real cached QQ voice item served valid mono 16-bit 24 kHz PCM WAV.
+  Neither was played, transcribed or uploaded. Other sampled
+  missing caches leave image/video/file completeness unproven; P11 remains
+  `IN_PROGRESS`. No message body, identity or private media bytes are recorded
+  in this public log.
+
+## 2026-10-19 - P12 Toast Body Activation And P13 Sender Identity
+
+- Windows toast body clicks and its action button now use the same short-lived
+  opaque loopback target. The registration shortcut uses the actual listener
+  port without retaining a target token. Both transports reject non-loopback
+  URLs, invalid ports and trailing newlines before changing registration.
+- Two focused tests execute the actual PowerShell XML builder without
+  registering or displaying a toast; existing notification API and WebUI
+  target tests also pass. Added the new module to the required local/CI gate.
+  Windows-visible notification/click acceptance remains open; no additional
+  test notification was sent.
+- Fixed personal WeChat receipts that assumed numeric sender ID 2 meant self.
+  They now require exact current-account `sender_username` plus `is_self`
+  resolved by LocalReader from the message shard. Account changes result in
+  unknown delivery. All 35 sender tests pass, including non-2 self IDs,
+  unproven/other-account ID 2 rows and account-switch rejection. No message
+  was prepared, approved or sent during these checks; P13 remains open.
+
+## 2026-10-18 - P13 WeChat UIA Composer Binding
+
+- Replaced coordinate-based composer targeting and draft clearing with the
+  Windows UI Automation tree. The sender accepts only one enabled Edit control
+  whose `chat_input_field` AutomationId and accessible name match the exact
+  locally resolved conversation; it refuses nonempty drafts, writes the
+  approved text through ValuePattern, and verifies the exact read-back before
+  pressing Enter once.
+- The exact window title is rechecked immediately before Enter. An interrupted
+  send also requires the WeChat window to retain foreground ownership. If that
+  pre-send check fails, the sender clears only the exact approved text it just
+  wrote; an interrupted Enter input is recorded as unknown so the approval
+  service cannot safely retry it. Unsupported or ambiguous UIA trees fail
+  closed without a coordinate fallback.
+- The 35 targeted sender and approval-route tests passed, as did Python
+  compilation, GUID parsing, and `git diff --check`. No live WeChat window was
+  used and no message was sent. UIA COM behavior and automatic real-client
+  delivery still require device acceptance; P13-01 remains `IN_PROGRESS`.
+
+## 2026-10-19 - P14 Current Worktree Source Package
+
+- Rebuilt the sanitized source bundle from the current worktree at
+  `output/windows/lmh-source-20261019-final.zip` (694 entries; SHA-256
+  `cf1224b95d775a7f7efe2c809a6e67210b251f5889349d54a49378475516587a`). Its
+  extracted Hub served the WebUI and three source entries, and its isolated
+  read-only MCP endpoint responded. The archive contains the updated UIA
+  sender and both Windows notification runtime files; the package privacy scan
+  and an independent user-profile-path check passed. The ZIP includes the
+  roadmap and excludes the development log per the package allowlist.
+- This is local worktree package evidence only. The current uncommitted source
+  has not passed hosted CI or an uploaded/downloaded artifact round trip, so
+  P14-01 remains `IN_PROGRESS`.
+
+## 2026-10-18 - P12-01 Body-Free Test Toast
+
+- After the user approved one test notification, the Windows notification
+  helper accepted the fixed body-free message. The Hub notification capability
+  stayed disabled; the test did not create a message event. OS visibility was
+  not confirmed, so desktop delivery acceptance remains open.
+
 ## 2026-10-15 - P13 Offline WeChat MCP Status
 
 - HTTP-generated MCP configurations now keep
@@ -8788,6 +8880,38 @@ passed (1 test); the full WeChat media module passed 61 tests and
   API submission only; P12-01 remains `IN_PROGRESS` pending visible desktop
   acceptance.
 
+## 2026-10-16 - P12-01 Notification Click-Through Audit
+
+- Corrected the roadmap's earlier overclaim: the WebUI regression proves only
+  that the request carries an opaque event ID and no message body or account /
+  conversation identifiers. `windows_toast.ps1` creates a toast with no launch
+  arguments or actions, and there is no activation route that selects a chat.
+- Click-through remains unimplemented. The body-free toast was accepted by the
+  Hub, but Windows display and background delivery remain unverified.
+
+## 2026-10-16 - P12-01 Opaque Toast Activation
+
+- Windows message notifications now offer an `打开会话` protocol action. Its
+  URL contains only a 24-byte random token; the Hub keeps the exact target in a
+  bounded in-memory map for ten minutes and consumes it once through a
+  same-origin, capability-gated route. Failed toast submission removes the
+  token. The WebUI removes the token from its address bar before resolving it,
+  then opens the exact platform/account/conversation.
+- Synthetic HTTP coverage verifies the target binding and one-time use. No new
+  toast was submitted during this change. Windows button activation and desktop
+  visibility remain unverified; P12-01 stays `IN_PROGRESS`.
+
+## 2026-10-16 - P14 Hosted Acceptance For Committed HEAD
+
+- Verified the current committed HEAD `4d3d93ccdf07d3943dfd6db003de03710305cd0b`
+  on both public branches: Windows runs `38770697980` (`main`) and
+  `38770697482` (`codex/roadmap-p8-p14-20261014`) completed successfully.
+  Both include the full local gate, portable/source builds, isolated smokes,
+  privacy and manifest checks, and uploaded/downloaded artifact verification.
+- Artifacts `11992546125` (main) and `11991578222` (roadmap) are retained
+  through 2026-10-22. The runs cover committed HEAD, not uncommitted worktree
+  changes; the latter still needs local gate and package verification.
+
 ## 2026-10-16 - P11 Media Classification and Achievement Counts
 
 - QQ attachment projections now resolve categories from `type`, then `kind`,
@@ -8838,3 +8962,55 @@ passed (1 test); the full WeChat media module passed 61 tests and
   the UIA path is not wired into the automatic sender, `PrintWindow`-based
   composer confirmation and coordinate fallback are untouched, and P13-01 stays
   `IN_PROGRESS`.
+
+## 2026-10-16 - P11-02 Unindexed WeChat Session Media
+
+- Exact WeChat account/conversation session bundles now page through the local
+  source-media reader and add unindexed image, video, voice, sticker, and file
+  identities when no full-text keyword is active. Existing date/type filters,
+  shard/local-ID validation, local resolver, cancellation, 100-item limit, and
+  private-safe manifest remain in force. Other platform scopes and account-wide
+  or cross-platform queries do not enumerate WeChat source media.
+- A focused synthetic HTTP regression verifies image/sticker identities reach
+  the ZIP resolver and confirms keyword-filtered exports do not add source-only
+  media. No real chat content or client files were read by this regression;
+  real-cache breadth, Moments export, and the QQ global gallery remain open.
+- The complete local gate passed on this source: 855 Python tests, five
+  fail-closed source-mutation checks, 32 WebUI checks, package/privacy/source
+  smoke, and the 25,000-message performance probe. Synthetic timings were
+  1.298 s ingest, 0.028 s first search, 1.421 s for 50 pages, 0.083 s backup,
+  and 0.242 s restore, with zero WAL failures. The hosted checks noted above
+  ran on the preceding commit and do not include this follow-up.
+
+## 2026-10-16 - P9-02 OneBot Oversized Response Handling
+
+- OneBot send and `get_login_info` now read one byte beyond their existing 1
+  MiB and 64 KiB limits. Oversized send responses become `unknown` and are not
+  retried; oversized readiness responses report `invalid_response` without an
+  online identity.
+- All 22 focused QQ sender tests passed, including synthetic valid-JSON
+  prefixes with oversized whitespace tails. No NapCat endpoint or QQ account
+  was contacted. Live send acceptance remains open.
+
+## 2026-10-16 - P9 Runtime Wiring And P12 Notification Revocation
+
+- A temporary bundle now exercises `QQProvider._prepare_runtime()` through the
+  `NapCatOneBotSender` config reader. It verifies an enabled authenticated
+  `127.0.0.1` endpoint with CORS and WebSocket disabled, without launching QQ or
+  NapCat.
+- Toast activation URLs enforce TCP ports 1–65535 in both Python and PowerShell.
+  Disabling the notifications capability revokes unconsumed conversation
+  activation tokens, including after the capability is later re-enabled.
+- Four focused HTTP/configuration tests passed, as did all 22 QQ sender tests,
+  the notification WebUI test, Python compilation, and `git diff --check`. The
+  full local gate passed 861 Python tests, five mutation-gate checks, 32 WebUI
+  checks, privacy/source-package smoke, and the 25,000-message benchmark
+  (1.294 s ingest, 0.028 s first search, 1.371 s for 50 pages, 0.078 s backup,
+  0.441 s restore; zero WAL failures).
+- The sanitized source-package required-file list now explicitly includes both
+  Windows notification runtime files. Windows-visible toast activation and
+  live QQ delivery remain unverified; hosted P14 does not cover this worktree.
+- After that manifest change, `scripts/package-windows-source.ps1` built a
+  694-file sanitized archive at `output/windows/lmh-source-20261016.zip`; its
+  extracted Hub passed the empty-storage smoke, and both Toast runtime files
+  were confirmed in the archive. The PowerShell Toast script also parsed cleanly.

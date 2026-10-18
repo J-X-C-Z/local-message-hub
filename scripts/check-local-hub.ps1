@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $python = if ($env:LMH_PYTHON) { $env:LMH_PYTHON } else { 'python' }
 & $python -m unittest hub.test_imports hub.test_mcp hub.test_sending hub.test_auto_export hub.test_export_memory hub.test_analytics hub.test_resources hub.test_backups hub.test_account_safety hub.test_voice_transcription hub.test_moments_exports hub.test_startup hub.test_capabilities hub.test_store hub.test_server `
     integrations.wechat.test_cursor integrations.wechat.test_media integrations.wechat.test_moments integrations.wechat.test_provider integrations.wechat.test_sns_media integrations.wecom.test_adapter integrations.wecom.test_config integrations.wecom.test_bot_credentials integrations.wecom.test_bot_media integrations.wecom.test_bot_sender `
-    integrations.qq.test_provider integrations.qq.test_sender integrations.qq.test_local_provider integrations.qq.test_local_wal integrations.qq.test_key_reader integrations.qq.test_send_target integrations.telegram.test_adapter integrations.wechat.test_sender hub.test_streaming_json -q
+    integrations.qq.test_provider integrations.qq.test_sender integrations.qq.test_local_provider integrations.qq.test_local_wal integrations.qq.test_key_reader integrations.qq.test_send_target integrations.telegram.test_adapter integrations.wechat.test_sender hub.test_windows_notifications hub.test_streaming_json -q
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 node --check webui/app.js

@@ -29,6 +29,15 @@ class FakeResponse:
         return self.payload
 
 
+class TrailingWhitespaceResponse(FakeResponse):
+    def __init__(self, payload):
+        super().__init__(payload)
+        self.payload += b" " * (sender_module._MAX_SEND_RESPONSE_BYTES + 1)
+
+    def read(self, limit):
+        return self.payload[:limit]
+
+
 class NapCatSenderTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -121,6 +130,18 @@ class NapCatSenderTest(unittest.TestCase):
         self.assertTrue(captured["url"].endswith("/get_login_info"))
         self.assertEqual(captured["body"], b"{}")
         self.assertTrue(captured["authorization"].startswith("Bearer "))
+
+    def test_readiness_rejects_oversized_response_with_valid_json_prefix(self):
+        def opener(*_args, **_kwargs):
+            return TrailingWhitespaceResponse({"status": "ok", "retcode": 0,
+                "data": {"user_id": 12345678, "nickname": "Synthetic QQ"}})
+
+        result = NapCatOneBotSender(self.path, opener=opener).readiness()
+
+        self.assertEqual(result["state"], "invalid_response")
+        self.assertTrue(result["endpoint_reachable"])
+        self.assertIsNone(result["account_id"])
+        self.assertIsNone(result["account_online"])
 
     def test_readiness_rejects_non_integer_success_retcode(self):
         for retcode in (False, 0.0):
@@ -353,6 +374,30 @@ class NapCatSenderTest(unittest.TestCase):
             again = service.approve_and_deliver(request_id)
             self.assertEqual(result["status"], "unknown")
             self.assertEqual(result["error_code"], "onebot_transport_unknown")
+            self.assertEqual(again["status"], "unknown")
+            self.assertEqual(len(calls), 1)
+        finally:
+            repository.close()
+
+    def test_oversized_send_response_is_unknown_without_retry(self):
+        calls = []
+
+        def opener(*_args, **_kwargs):
+            calls.append(True)
+            return TrailingWhitespaceResponse({"status": "ok", "retcode": 0,
+                                               "data": {"message_id": 42}})
+
+        repository = SendRepository(Path(self.temp.name) / "oversized.sqlite3")
+        service = SendService(repository, NapCatOneBotSender(self.path, opener=opener))
+        payload = {"platform": "qq", "account_id": "12345678", "conversation_type": "private",
+                   "conversation_id": "87654321", "text": "synthetic",
+                   "request_id": "oversized-onebot-response"}
+        try:
+            request_id = service.prepare(payload)["request_id"]
+            result = service.approve_and_deliver(request_id)
+            again = service.approve_and_deliver(request_id)
+            self.assertEqual(result["status"], "unknown")
+            self.assertEqual(result["error_code"], "onebot_response_too_large")
             self.assertEqual(again["status"], "unknown")
             self.assertEqual(len(calls), 1)
         finally:

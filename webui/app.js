@@ -1833,6 +1833,19 @@ function sendTestNotification() {
     .then(() => toast('测试通知已提交给 Windows，是否显示请查看桌面'))
     .catch(error => toast(error.message, true));
 }
+async function openNotificationTarget(token) {
+  const target = await api('/api/notifications/activate', null,
+    {method: 'POST', body: JSON.stringify({token})});
+  if (!platforms[target.platform] || !target.account_id || !target.conversation_id) {
+    throw new Error('通知会话目标无效');
+  }
+  state.view = 'chat';state.platform = target.platform;state.cq = '';
+  state.selected = {id: target.conversation_id, account_id: target.account_id,
+    platform: target.platform, title: target.conversation_title,
+    kind: target.conversation_kind};
+  state.contextMessage = null;state.contextMode = false;
+  renderShell();await loadView();
+}
 async function toggleNotificationCapability(enabled) {
   await saveSettings({capabilities: {notifications: enabled}});
   renderShell();
@@ -2215,6 +2228,8 @@ document.addEventListener('keydown', event => {
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {if (state.theme === 'system') setTheme('system');});
 
 async function init() {
+  const notificationToken = /^#notification=([A-Za-z0-9_-]{32})$/.exec(location.hash)?.[1] || '';
+  if (notificationToken) history.replaceState(null, '', location.pathname + location.search + '#chat');
   const initialView = location.hash.slice(1);
   state.view = initialView === 'qq-login' ? 'sources' : Object.hasOwn(views, initialView) ? initialView : 'chat';
   setTheme(state.theme);renderShell();
@@ -2223,6 +2238,10 @@ async function init() {
   syncAccountLockPolling();
   if (state.settings.account_lock_enabled) noteAccountActivity();
   renderShell();await loadView();syncNotificationStream();
+  if (notificationToken) {
+    try {await openNotificationTarget(notificationToken);}
+    catch (error) {toast(error.message || '通知会话已失效', true);}
+  }
   let previousCount = state.sources.reduce((a, s) => a + (s.message_count || 0), 0);
   sourcePollTimer = setInterval(async () => {
     if (sourcePollBusy || document.hidden) return;

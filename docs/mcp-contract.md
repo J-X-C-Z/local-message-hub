@@ -2,10 +2,13 @@
 
 `hub.mcp_server` is an independent MCP stdio process. It opens the
 same `<storage>\hub.sqlite3` as the WebUI and does not start a full sync,
-desktop shell or network listener. Platform readers are initialized only when
-an attachment tool is explicitly called. Group rosters use an existing local
-platform reader and do not trigger a sync; they fail closed until that reader
-is connected. The Python standard library is the only runtime dependency.
+desktop shell or network listener. Platform readers are initialized on demand
+for explicit media or group-roster requests, using the existing local source
+configuration without starting a sync. Group requests validate the indexed
+account/group before opening a reader, and verify the reader's account before
+returning members. Indexed queries use only the Python standard library;
+platform readers need their integration dependencies. Use the bundled reader
+Python runtime shown below for the complete tool surface.
 
 ## Run
 
@@ -255,8 +258,8 @@ The route requires the exact indexed account and group identity and returns
 locally filtered, bounded member metadata. QQ's bundled local QCE endpoint
 currently returns its full roster in one response, which the Hub filters and
 caps locally. MCP `list_group_members` delegates to the same Hub method and
-applies the `chat` capability gate; if the stdio process has no connected local
-reader, the call returns an unavailable-source error. This does not query
+applies the `chat` capability gate and opens the configured reader on demand;
+if that source is unavailable, the call returns an error. This does not query
 enterprise server-side archives.
 Implemented standard surfaces are tools/list+call,
 resources/list+read+templates/list and prompts/list+get. Resource subscriptions,

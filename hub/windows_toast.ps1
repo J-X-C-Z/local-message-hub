@@ -1,10 +1,34 @@
 param(
     [Parameter(Mandatory = $true)][string]$Title,
     [Parameter(Mandatory = $true)][string]$Message,
+    [string]$OpenUrl,
     [switch]$RegisterOnly
 )
 
 $ErrorActionPreference = 'Stop'
+function Get-LmhToastXml {
+    param([string]$Title, [string]$Message, [string]$OpenUrl)
+    $safeTitle = [System.Security.SecurityElement]::Escape($Title)
+    $safeMessage = [System.Security.SecurityElement]::Escape($Message)
+    $activation = ''
+    $actions = ''
+    if ($OpenUrl) {
+        if ($OpenUrl -cnotmatch '\Ahttp://127\.0\.0\.1:([0-9]{1,5})/#notification=[A-Za-z0-9_-]{32}\z') {
+            throw 'Invalid local notification target.'
+        }
+        $port = [int]$Matches[1]
+        if ($port -lt 1 -or $port -gt 65535) {
+            throw 'Invalid local notification target.'
+        }
+        $safeUrl = [System.Security.SecurityElement]::Escape($OpenUrl)
+        $activation = " activationType='protocol' launch='$safeUrl'"
+        $actions = "<actions><action content='&#25171;&#24320;&#20250;&#35805;' activationType='protocol' arguments='$safeUrl'/></actions>"
+    }
+    return "<toast$activation><visual><binding template='ToastGeneric'><text>$safeTitle</text><text>$safeMessage</text></binding></visual>$actions</toast>"
+}
+
+# Validate and build before changing notification registration or calling Windows.
+$toastXml = Get-LmhToastXml -Title $Title -Message $Message -OpenUrl $OpenUrl
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime] | Out-Null
@@ -13,7 +37,9 @@ $programs = [Environment]::GetFolderPath('Programs')
 $shortcutPath = Join-Path $programs 'Local Message Hub Notifications.lnk'
 $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
 $shortcut.TargetPath = Join-Path $env:WINDIR 'explorer.exe'
-$shortcut.Arguments = 'http://127.0.0.1:8765/'
+$shortcut.Arguments = if ($OpenUrl) {
+    ([Uri]$OpenUrl).GetLeftPart([UriPartial]::Authority) + '/'
+} else { 'http://127.0.0.1:8765/' }
 $shortcut.Description = 'Local Message Hub desktop notifications'
 $shortcut.Save()
 
@@ -82,10 +108,8 @@ if ($null -ne $notifier.Setting -and
     $notifier.Setting -ne [Windows.UI.Notifications.NotificationSetting]::Enabled) {
     throw 'Local Message Hub notifications are disabled in Windows settings.'
 }
-$safeTitle = [System.Security.SecurityElement]::Escape($Title)
-$safeMessage = [System.Security.SecurityElement]::Escape($Message)
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$safeTitle</text><text>$safeMessage</text></binding></visual></toast>")
+$xml.LoadXml($toastXml)
 $toast = New-Object Windows.UI.Notifications.ToastNotification($xml)
 $notifier.Show($toast)
 Write-Output 'submitted'

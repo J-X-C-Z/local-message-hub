@@ -4,6 +4,7 @@ import json
 import hashlib
 import http.client
 import io
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -213,6 +214,27 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(result['items'][0]['handle'], 'opaque_handle_1234567890')
         provider.expand_forward_resources.assert_called_once()
         self.assertEqual(provider.expand_forward_resources.call_args.args[0]['id'], 'peer:parent')
+
+    def test_qq_forward_resource_route_does_not_read_when_media_capability_is_disabled(self):
+        from unittest.mock import Mock
+
+        self.hub.store.ingest('qq', '10001', [{'id': 'peer', 'title': 'Peer'}], [{
+            'id': 'peer:parent', 'conversation_id': 'peer', 'timestamp': 1000,
+            'type': 'text', 'roaming_content': {'elements': [{'type': 'forward'}]},
+        }])
+        provider = SimpleNamespace(expand_forward_resources=Mock())
+        self.hub.providers['qq'] = provider
+        self.hub.set_capabilities({'media': False})
+        request = Request(self.url + '/api/qq/forward-resources',
+                          headers={'Content-Type': 'application/json'},
+                          data=json.dumps({'account_id': '10001', 'conversation_id': 'peer',
+                                           'message_id': 'peer:parent'}).encode())
+
+        with self.assertRaises(HTTPError) as denied:
+            urlopen(request, timeout=3)
+
+        self.assertEqual(denied.exception.code, 403)
+        provider.expand_forward_resources.assert_not_called()
 
     def test_mcp_qq_forward_attachment_lists_and_reads_scoped_handle(self):
         from unittest.mock import Mock
@@ -1488,6 +1510,10 @@ class ServerTest(unittest.TestCase):
         self.assertIn('tools:\n      include:', settings['config_text'])
         self.assertIn('- list_media', settings['config_text'])
         self.assertIn('- get_attachment', settings['config_text'])
+        for name in ('get_quoted_message_context', 'list_wechat_source_media',
+                     'get_wechat_source_media', 'list_group_chat_profiles',
+                     'get_annual_report', 'get_pair_report'):
+            self.assertIn(f'- {name}', settings['config_text'])
         self.assertNotIn('- get_moment_media', settings['config_text'])
         self.assertNotIn('- list_relationship_footprint', settings['config_text'])
         self.assertIn('  local-message-hub:', settings['config_text'])
@@ -3819,7 +3845,26 @@ class ServerTest(unittest.TestCase):
             with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
                               json.dumps({'event_id': event['event_id']}).encode()) as response:
                 self.assertEqual(json.load(response), {'submitted': True})
-            show.assert_called_once_with('微信 · 收到一条新消息')
+            show.assert_called_once()
+
+            notification_text, open_url = show.call_args.args
+            self.assertEqual(notification_text, '微信 · 收到一条新消息')
+            self.assertRegex(open_url, r'^' + re.escape(self.url) +
+                             r'/#notification=[A-Za-z0-9_-]{32}$')
+            token = open_url.rsplit('=', 1)[-1]
+            with self.request('/api/notifications/activate',
+                              {'Content-Type': 'application/json'},
+                              json.dumps({'token': token}).encode()) as response:
+                target = json.load(response)
+            self.assertEqual(target, {
+                'platform': 'wechat', 'account_id': 'account', 'conversation_id': 'room',
+                'conversation_title': 'Test', 'conversation_kind': None,
+            })
+            with self.assertRaises(HTTPError) as consumed:
+                self.request('/api/notifications/activate',
+                             {'Content-Type': 'application/json'},
+                             json.dumps({'token': token}).encode())
+            self.assertEqual(consumed.exception.code, 400)
             with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
                               json.dumps({'event_id': event['event_id']}).encode()) as response:
                 self.assertEqual(json.load(response), {'submitted': False, 'duplicate': True})
@@ -3843,6 +3888,38 @@ class ServerTest(unittest.TestCase):
                               json.dumps({'event_id': actual_event}).encode()) as response:
                 self.assertEqual(json.load(response), {'submitted': False, 'filtered': True})
             show.assert_called_once()
+
+    def test_notification_activation_target_requires_valid_loopback_port(self):
+        from hub.windows_notifications import _valid_open_url
+
+        token = 'a' * 32
+        self.assertTrue(_valid_open_url(f'http://127.0.0.1:1/#notification={token}'))
+        self.assertTrue(_valid_open_url(f'http://127.0.0.1:65535/#notification={token}'))
+        self.assertFalse(_valid_open_url(f'http://127.0.0.1:0/#notification={token}'))
+        self.assertFalse(_valid_open_url(f'http://127.0.0.1:65536/#notification={token}'))
+
+    def test_disabling_notifications_revokes_unopened_conversation_targets(self):
+        from unittest.mock import patch
+
+        self.hub.set_capabilities({'notifications': True})
+        self.hub.store.ingest('wechat', 'account', [{'id': 'room', 'title': 'Room'}], [
+            {'id': 'revoked-event', 'conversation_id': 'room', 'timestamp': 300,
+             'text': 'private fixture'}])
+        event_id = self.hub.store.message_rowid()
+        self.hub.queue_notification_event(event_id)
+        with patch('hub.server.show_notification'):
+            with self.request('/api/notifications/message', {'Content-Type': 'application/json'},
+                              json.dumps({'event_id': event_id}).encode()):
+                pass
+        token = next(iter(self.hub.notification_targets))
+        self.assertTrue(token)
+        self.hub.set_capabilities({'notifications': False})
+        self.assertFalse(self.hub.notification_targets)
+        self.hub.set_capabilities({'notifications': True})
+        with self.assertRaises(HTTPError) as revoked:
+            self.request('/api/notifications/activate', {'Content-Type': 'application/json'},
+                         json.dumps({'token': token}).encode())
+        self.assertEqual(revoked.exception.code, 400)
 
     def test_auto_export_is_gated_configurable_and_runs_against_local_index(self):
         headers = {'Content-Type': 'application/json'}
@@ -3968,6 +4045,62 @@ class ServerTest(unittest.TestCase):
             self.assertNotIn(str(source).encode(), all_archived)
             self.assertNotIn(b'127.0.0.1', all_archived)
             self.assertNotIn(b'account-secret', all_archived)
+
+    def test_session_bundle_includes_unindexed_wechat_source_media_for_exact_session(self):
+        source = Path(self.temp.name) / 'source-media.png'
+        source.write_bytes(b'synthetic source media')
+        rows = [
+            {'id': 'room:message_0.db:7', 'timestamp': 90, 'type': 'image',
+             'extra': {'shard': 'message_0.db', 'local_id': 7}},
+            {'id': 'room:message_1.db:8', 'timestamp': 80, 'type': 'sticker',
+             'extra': {'shard': 'message_1.db', 'local_id': 8}},
+        ]
+        from integrations.wechat.provider import WeChatProvider
+        provider = WeChatProvider.__new__(WeChatProvider)
+        provider.reader = SimpleNamespace(wxid='account', account='')
+        provider.source_media = lambda *_args, **_kwargs: {
+            'items': [dict(row) for row in rows], 'total': len(rows), 'next_cursor': None}
+        self.hub.providers['wechat'] = provider
+        seen = []
+
+        def local_resolver(request):
+            seen.append(dict(request))
+            return source, f"{request['local_id']}.png"
+
+        self.hub.resource_jobs.resolver = local_resolver
+        self.hub.set_capabilities({'export': True, 'media': True})
+        headers = {'Content-Type': 'application/json'}
+        payload = json.dumps({'query': {'platform': 'wechat', 'account_id': 'account',
+            'conversation_id': 'room', 'format': 'json'}}).encode()
+        with self.request('/api/export/bundle', headers, payload) as response:
+            job = json.load(response)
+        deadline = time.monotonic() + 3
+        state = job
+        while state['state'] not in ('completed', 'failed', 'cancelled') and time.monotonic() < deadline:
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + job['id']) as response:
+                state = json.load(response)
+        self.assertEqual(state['state'], 'completed', state)
+        self.assertEqual(state['total'], 2)
+        self.assertEqual([item['local_id'] for item in seen], [7, 8])
+        self.assertEqual(seen[0]['image_tier'], 'best')
+        self.assertEqual(seen[1]['media_type'], 'sticker')
+        self.assertTrue(all(item['_local_only'] for item in seen))
+
+        provider.source_media = lambda *_args, **_kwargs: self.fail(
+            'full-text filtered exports must not add source-only media')
+        payload = json.dumps({'query': {'platform': 'wechat', 'account_id': 'account',
+            'conversation_id': 'room', 'q': 'hello', 'format': 'json'}}).encode()
+        with self.request('/api/export/bundle', headers, payload) as response:
+            filtered = json.load(response)
+        deadline = time.monotonic() + 3
+        state = filtered
+        while state['state'] not in ('completed', 'failed', 'cancelled') and time.monotonic() < deadline:
+            time.sleep(0.01)
+            with self.request('/api/resource-jobs/' + filtered['id']) as response:
+                state = json.load(response)
+        self.assertEqual(state['state'], 'completed', state)
+        self.assertEqual(state['total'], 0)
 
     def test_session_bundle_requires_both_capabilities_and_fails_over_100_resources(self):
         headers = {'Content-Type': 'application/json'}

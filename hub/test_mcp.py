@@ -110,6 +110,56 @@ class MCPServerTest(unittest.TestCase):
             finally:
                 hub.close()
 
+    def test_group_members_lazily_opens_each_platform_without_sync(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from hub.server import Hub
+
+        with tempfile.TemporaryDirectory() as storage:
+            hub = Hub(storage, resume_imports=False)
+            try:
+                reader = SimpleNamespace(wxid='wechat-account', account='wechat-account_abcd',
+                                         get_group_members=Mock(return_value=[
+                                             {'username': 'member', 'nick_name': 'Member'}]))
+                providers = {
+                    'wechat': SimpleNamespace(reader=reader),
+                    'wecom': SimpleNamespace(members=Mock(return_value={
+                        'items': [{'id': 'member'}], 'total': 1})),
+                    'qq': SimpleNamespace(members=Mock(return_value={
+                        'items': [{'id': 'member'}], 'total': 1})),
+                }
+                targets = {
+                    'wechat': 'integrations.wechat.provider.WeChatProvider',
+                    'wecom': 'integrations.wecom.adapter.WeComAdapter',
+                    'qq': 'integrations.qq.provider.QQProvider',
+                }
+                server = MCPServer(hub.store, group_members_reader=hub.conversation_members)
+                for platform, target in targets.items():
+                    account_id = f'{platform}-account'
+                    hub.store.ingest(platform, account_id, [
+                        {'id': 'group', 'title': 'Synthetic group', 'kind': 'group'}], [])
+                    args = {'platform': platform, 'account_id': account_id,
+                            'conversation_id': 'group', 'limit': 1}
+                    module_name, class_name = target.rsplit('.', 1)
+                    factory = Mock(return_value=providers[platform])
+                    module = SimpleNamespace(**{class_name: factory})
+                    with patch.dict(sys.modules, {module_name: module}), \
+                            patch.object(hub, 'start_sync') as sync:
+                        with self.assertRaises(ValueError):
+                            server.call_tool('list_group_members', {**args, 'account_id': 'wrong'})
+                        factory.assert_not_called()
+                        for _ in range(2):
+                            self.assertEqual(server.call_tool('list_group_members', args)['total'], 1)
+                        factory.assert_called_once()
+                        sync.assert_not_called()
+                reader.wxid = 'other-account'
+                with self.assertRaisesRegex(ValueError, '账号与会话不匹配'):
+                    server.call_tool('list_group_members', {
+                        'platform': 'wechat', 'account_id': 'wechat-account', 'conversation_id': 'group'})
+                self.assertEqual(reader.get_group_members.call_count, 2)
+            finally:
+                hub.close()
+
     def test_analytics_tools_are_scoped_gated_and_content_free(self):
         store = ChatStore(":memory:")
         timestamp = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())

@@ -408,6 +408,7 @@ class Hub:
         self.stop = threading.Event()
         self.notified_event_ids = set()
         self.pending_notification_ids = {}
+        self.notification_targets = {}
         self.notification_lock = threading.Lock()
         self.sources = {p: {'id': p, 'state': 'disconnected', 'version': v,
                            'last_sync': None, 'error': '', 'progress': ''}
@@ -470,7 +471,7 @@ class Hub:
         if not self.capability_enabled(name):
             raise PermissionError(unavailable_reason(name))
 
-    def notify_message_event(self, event_id):
+    def notify_message_event(self, event_id, activation_base_url=''):
         if not isinstance(event_id, int) or isinstance(event_id, bool) or event_id < 1:
             raise ValueError('通知事件编号无效')
         with self.notification_lock:
@@ -497,12 +498,40 @@ class Hub:
                      identity not in filters.get('allowed_conversations', []))):
                 return {'submitted': False, 'filtered': True}
             label = {'wechat': '微信', 'wecom': '企业微信', 'qq': 'QQ'}[row['platform']]
-            show_notification(f'{label} · 收到一条新消息')
+            token = secrets.token_urlsafe(24)
+            target = {key: row[key] for key in (
+                'platform', 'account_id', 'conversation_id', 'conversation_title',
+                'conversation_kind')}
+            now = time.monotonic()
+            self.notification_targets = {
+                key: value for key, value in self.notification_targets.items()
+                if now - value[0] <= 600
+            }
+            self.notification_targets[token] = (now, target)
+            while len(self.notification_targets) > 512:
+                oldest = min(self.notification_targets, key=lambda key: self.notification_targets[key][0])
+                self.notification_targets.pop(oldest, None)
+            try:
+                open_url = (f'{activation_base_url}/#notification={token}'
+                            if activation_base_url else None)
+                show_notification(f'{label} · 收到一条新消息', open_url)
+            except Exception:
+                self.notification_targets.pop(token, None)
+                raise
             self.notified_event_ids.add(event_id)
             if len(self.notified_event_ids) > 512:
                 self.notified_event_ids.clear()
                 self.notified_event_ids.add(event_id)
             return {'submitted': True}
+
+    def activate_notification_target(self, token):
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{32}', token):
+            raise ValueError('通知会话令牌无效')
+        with self.notification_lock:
+            entry = self.notification_targets.pop(token, None)
+        if not entry or time.monotonic() - entry[0] > 600:
+            raise ValueError('通知会话令牌已失效或已使用')
+        return dict(entry[1])
 
     def queue_notification_event(self, event_id):
         with self.notification_lock:
@@ -572,6 +601,9 @@ class Hub:
                    for name in ('qq_send', 'wecom_bot_send', 'wechat_send')):
                 with self.lock:
                     self.send_approval_challenges.clear()
+            if previous.get('notifications', True) and not normalized['notifications']:
+                with self.notification_lock:
+                    self.notification_targets.clear()
             self.settings['capabilities'] = normalized
             if disabling_sync:
                 self.settings['auto_sync'] = False
@@ -1964,13 +1996,25 @@ class Hub:
 
         provider = self.providers.get(platform)
         if provider is None:
-            label = {'wechat': '微信', 'wecom': '企业微信', 'qq': 'QQ'}[platform]
-            raise RuntimeError(f'请先连接并同步{label}数据源')
+            # A stdio client has its own Hub; open the configured reader on demand.
+            if platform == 'wechat':
+                from integrations.wechat.provider import WeChatProvider
+                provider = WeChatProvider()
+            elif platform == 'wecom':
+                from integrations.wecom.adapter import WeComAdapter
+                provider = WeComAdapter(voice_cache_dir=self.storage / 'media' / 'decoded-voice')
+            else:
+                from integrations.qq.provider import QQProvider
+                provider = QQProvider()
+            with self.lock:
+                provider = self.providers.setdefault(platform, provider)
         if platform == 'wechat':
             reader = getattr(provider, 'reader', None)
             if reader is None:
                 raise RuntimeError('请先连接并同步微信数据源')
-            source_account = str(getattr(reader, 'account', '') or '')
+            source_account = getattr(reader, 'wxid', None)
+            if not isinstance(source_account, str) or not source_account:
+                source_account = str(getattr(reader, 'account', '') or '')
             if source_account and source_account != account_id:
                 raise ValueError('微信数据源账号与会话不匹配')
             rows = reader.get_group_members(conversation_id)
@@ -3012,6 +3056,43 @@ class Handler(BaseHTTPRequestHandler):
                 cursor = page.get('next_cursor')
                 if not cursor or not page['items']:
                     break
+            media_type = export_query.get('type', '')
+            provider = self.hub.providers.get('wechat')
+            reader = getattr(provider, 'reader', None)
+            reader_account = str(getattr(reader, 'wxid', None) or
+                                 getattr(reader, 'account', None) or '')
+            if (query.get('platform') == 'wechat' and account_id and conversation_id and
+                    not export_query.get('q') and reader and reader_account == account_id and
+                    media_type in ('', 'image', 'video', 'voice', 'sticker', 'file')):
+                source_cursor = None
+                while True:
+                    if cancel.is_set():
+                        raise InterruptedError
+                    source_page = self.hub.list_wechat_source_media({
+                        'platform': 'wechat', 'account_id': account_id,
+                        'conversation_id': conversation_id, 'type': media_type,
+                        'start': export_query.get('start', ''),
+                        'end': export_query.get('end', ''), 'limit': 60,
+                        **({'cursor': source_cursor} if source_cursor else {}),
+                    })
+                    for item in source_page['items']:
+                        extra = item.get('extra') or {}
+                        request = {'resource_kind': 'wechat_source', 'platform': 'wechat',
+                                   'account_id': account_id, 'conversation_id': conversation_id,
+                                   'shard': extra.get('shard'), 'local_id': extra.get('local_id')}
+                        if item.get('type') == 'sticker':
+                            request['media_type'] = 'sticker'
+                        else:
+                            request['image_tier'] = 'best'
+                        requests.append(request)
+                        if len(requests) > 100:
+                            raise ValueError('会话导出附件超过单次 100 项上限，请缩小筛选范围')
+                    next_source_cursor = source_page.get('next_cursor')
+                    if not next_source_cursor:
+                        break
+                    if source_cursor == next_source_cursor:
+                        raise ValueError('微信源媒体游标无效')
+                    source_cursor = next_source_cursor
             spool.commit()
             count = sequence
             kind = (resolve_chatlab_conversation_type(row[0] for row in spool.execute(
@@ -3345,64 +3426,27 @@ class Handler(BaseHTTPRequestHandler):
             root = ROOT.as_posix()
             storage = self.hub.storage.resolve().as_posix()
             python = Path(sys.executable).resolve().as_posix()
-            tools = ('search_messages', 'search_moments', 'get_moment_media',
-                     'list_conversations', 'list_messages', 'get_message_context',
-                     'list_contacts', 'get_contact_avatar', 'list_group_members', 'list_media', 'get_message',
-                     'get_attachment', 'list_qq_forward_attachments',
-                     'get_qq_forward_attachment', 'list_qq_cache_resources',
-                     'get_qq_cache_resource', 'list_relationship_footprint',
-                     'get_relationship_timeline', 'get_relationship_achievements',
-                     'list_sources', 'list_imports')
-            write_tools = ('update_conversation_metadata', 'set_contact_identity', 'remove_contact_identity')
-            if self.hub.settings.get('mcp_write_enabled') is True:
-                tools += write_tools
-            if self.hub.capability_enabled('qq_send'):
-                tools += ('prepare_qq_send', 'get_qq_send_status')
-            wechat_ready = None
-            if self.hub.capability_enabled('wechat_send'):
-                tools += ('get_wechat_send_status',)
-                try:
-                    wechat_ready = self.hub.wechat_sender.readiness(True)
-                except Exception:
-                    wechat_ready = None
-            if isinstance(wechat_ready, dict) and wechat_ready.get('state') == 'ready':
-                tools += ('prepare_wechat_send',)
-            wecom_bot_identity = None
-            if self.hub.capability_enabled('wecom_bot_send'):
-                try:
-                    wecom_bot_identity = self.hub.wecom_bot_credentials.status()
-                except Exception:
-                    pass
-            if (isinstance(wecom_bot_identity, dict)
-                    and wecom_bot_identity.get('configured') is True
-                    and isinstance(wecom_bot_identity.get('bot_id'), str)):
-                tools += ('prepare_wecom_bot_send', 'get_wecom_bot_send_status')
-            tool_capabilities = {
-                'search_messages': 'search',
-                'list_sources': 'stats',
-                'search_moments': 'moments',
-                'get_moment_media': 'moments',
-                'list_conversations': 'chat', 'list_messages': 'chat', 'get_message_context': 'chat',
-                'get_message': 'chat', 'list_contacts': 'contacts', 'get_contact_avatar': 'contacts',
-                'list_group_members': 'chat',
-                'list_media': 'media',
-                'get_attachment': 'media', 'list_imports': 'imports',
-                'list_qq_forward_attachments': 'media', 'get_qq_forward_attachment': 'media',
-                'list_qq_cache_resources': 'media', 'get_qq_cache_resource': 'media',
-                'list_relationship_footprint': 'relationship_footprint',
-                'get_relationship_timeline': 'relationship_footprint',
-                'get_relationship_achievements': 'relationship_footprint',
-                'update_conversation_metadata': 'organization', 'set_contact_identity': 'organization',
-                'remove_contact_identity': 'organization',
-                'prepare_qq_send': 'qq_send', 'get_qq_send_status': 'qq_send',
-                'prepare_wechat_send': 'wechat_send', 'get_wechat_send_status': 'wechat_send',
-                'prepare_wecom_bot_send': 'wecom_bot_send',
-                'get_wecom_bot_send_status': 'wecom_bot_send',
-            }
-            if not self.hub.capability_enabled('mcp'):
-                tools = ()
-            else:
-                tools = tuple(name for name in tools if self.hub.capability_enabled(tool_capabilities.get(name)))
+            from .mcp_server import MCPServer
+            mcp = MCPServer(
+                self.hub.store, allow_writes=self.hub.settings.get('mcp_write_enabled') is True,
+                media_reader=self.hub.read_cached_image,
+                capabilities=self.hub.settings.get('capabilities'),
+                capability_reader=lambda: self.hub.settings.get('capabilities'),
+                send_service=self.hub.send_service,
+                moments_reader=self.hub.search_moments,
+                moments_media_reader=self.hub.read_moment_media,
+                qq_gallery_reader=self.hub.list_qq_cache_resources,
+                avatar_reader=self.hub.read_contact_avatar,
+                group_members_reader=self.hub.conversation_members,
+                qq_forward_reader=self.hub.read_qq_forward_attachment,
+                qq_forward_lister=self.hub.list_qq_forward_attachments,
+                qq_send_target_resolver=self.hub.resolve_qq_send_target,
+                wecom_bot_identity_reader=self.hub.wecom_bot_credentials.status,
+                wechat_readiness_reader=lambda: self.hub.wechat_sender.readiness(True),
+                wechat_source_media_lister=self.hub.list_wechat_source_media,
+                wechat_source_media_reader=self.hub.read_wechat_source_media,
+            )
+            tools = tuple(tool['name'] for tool in mcp.tools())
             config = '\n'.join((
                 'mcp_servers:',
                 '  local-message-hub:',
@@ -3868,7 +3912,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.hub.require_capability('notifications')
                 if set(body) != {'event_id'}:
                     raise ValueError('通知事件参数无效')
-                result = self.hub.notify_message_event(body.get('event_id'))
+                result = self.hub.notify_message_event(
+                    body.get('event_id'), f'http://127.0.0.1:{self.server.server_port}')
+            elif path == '/api/notifications/activate':
+                self.hub.require_capability('notifications')
+                if set(body) != {'token'}:
+                    raise ValueError('通知会话参数无效')
+                result = self.hub.activate_notification_target(body.get('token'))
             elif path == '/api/voice/transcribe':
                 result = self.hub.transcribe_voice(body)
             elif path == '/api/qq/forward-resources':
@@ -4496,7 +4546,7 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def capability_for_path(path, method='GET'):
         if path in ('/api/events/messages', '/api/notifications/test',
-                    '/api/notifications/message'):
+                    '/api/notifications/message', '/api/notifications/activate'):
             return 'notifications'
         if path in ('/api/avatar', '/api/contacts'):
             return 'contacts'

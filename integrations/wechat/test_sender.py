@@ -8,7 +8,7 @@ import tempfile
 import unittest
 import ctypes
 
-from .sender import (MAIN_WINDOW_TITLES, WINDOW_CLASS, _INPUT, _Win32,
+from .sender import (MAIN_WINDOW_TITLES, WINDOW_CLASS, _INPUT, _Win32, _is_chat_composer,
                      WeChatDeliveryUnknown, WeChatGUISender, WeChatSendError)
 
 
@@ -111,15 +111,28 @@ class WeChatSenderTest(unittest.TestCase):
         self.win32 = FakeWin32(windows=[(7, "Qt51514QWindowIcon", "Weixin")])
         self.sleeps = []
         self.reader = FakeReader()
+        self.composer_calls = []
+
+        def set_composer(handle, text, names, can_commit, send_enter):
+            self.composer_calls.append((handle, text, tuple(names)))
+            if not can_commit():
+                raise WeChatSendError("wechat_conversation_changed")
+            try:
+                send_enter()
+            except Exception:
+                raise WeChatDeliveryUnknown("wechat_send_input_unknown") from None
+
         self.sender = WeChatGUISender(reader_factory=lambda: self.reader,
                                       win32=self.win32,
-                                      timeout=2.0, sleep=self.sleeps.append)
+                                      timeout=2.0, sleep=self.sleeps.append,
+                                      uia_set_text=set_composer)
         self.request = {"platform": "wechat", "account_id": "wxid_self0001",
                         "conversation_type": "private",
                         "conversation_id": "wxid_friend001",
                         "text": "synthetic outbound message", "request_id": "wx-send-0001",
                         "attachment": None}
-        self.sent_rows = [{"sender_id": "2", "content": "synthetic outbound message",
+        self.sent_rows = [{"sender_id": "2", "is_self": True, "sender_username": "wxid_self0001",
+                           "content": "synthetic outbound message",
                            "sort_seq": 20, "local_id": 5, "shard": "message_1.db"}]
 
     def tearDown(self):
@@ -157,6 +170,18 @@ class WeChatSenderTest(unittest.TestCase):
 
     def test_unicode_input_structure_matches_windows_pointer_size(self):
         self.assertEqual(ctypes.sizeof(_INPUT), 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)
+
+    def test_chat_composer_requires_exact_identity_enabled_edit_and_known_name(self):
+        self.assertTrue(_is_chat_composer("chat_input_field", 50004, True,
+                                          "Synthetic Friend", ["Synthetic Friend"]))
+        self.assertTrue(_is_chat_composer("chat_view.chat_input_field", 50004, True,
+                                          "Synthetic Friend", ["Synthetic Friend"]))
+        self.assertFalse(_is_chat_composer("search_input", 50004, True,
+                                           "Synthetic Friend", ["Synthetic Friend"]))
+        self.assertFalse(_is_chat_composer("chat_input_field", 50004, False,
+                                           "Synthetic Friend", ["Synthetic Friend"]))
+        self.assertFalse(_is_chat_composer("chat_input_field", 50004, True,
+                                           "Other Friend", ["Synthetic Friend"]))
 
     def test_unicode_input_sends_utf16_units_as_balanced_key_events(self):
         sent_events = []
@@ -228,19 +253,19 @@ class WeChatSenderTest(unittest.TestCase):
         self.use_reader_with_exchange(
             [{"sender_id": "1", "content": "earlier inbound", "sort_seq": 19,
               "local_id": 4, "shard": "message_1.db"}],
-            [{"sender_id": "2", "content": "synthetic outbound message", "sort_seq": 20,
+            [{"sender_id": "2", "is_self": True, "sender_username": "wxid_self0001",
+              "content": "synthetic outbound message", "sort_seq": 20,
               "local_id": 5, "shard": "message_1.db"}])
         result = self.sender.deliver(self.request)
         self.assertEqual(result["account_id"], "wxid_self0001")
         self.assertEqual(result["message_id"], "wxid_friend001:message_1.db:5")
-        self.assertEqual(self.win32.unicode_inputs, ["synthetic outbound message"])
+        self.assertEqual(self.composer_calls,
+                         [(9, "synthetic outbound message", ("Synthetic Friend", "wxid_friend001"))])
+        self.assertEqual(self.win32.unicode_inputs, [])
         self.assertEqual(self.win32.clipboard, clipboard_before)
-        # Text is typed directly; the module never pastes, so an unrelated
-        # clipboard can never be delivered in place of the approved text.
+        self.assertEqual(self.win32.clicks, [])
         self.assertNotIn((0x56, True), self.win32.keys)
-        self.assertTrue(self.win32.keys.index((0x41, True)) <
-                        self.win32.keys.index((0x0D, False)))
-        self.assertIn((0x0D, False), self.win32.keys)
+        self.assertEqual(self.win32.keys, [(0x0D, False)])
 
     def test_ambiguous_windows_fail_closed_without_typing(self):
         self.open_chat_window("Synthetic Friend", 9)
@@ -301,17 +326,59 @@ class WeChatSenderTest(unittest.TestCase):
         self.assertEqual(locked.exception.code, "wechat_desktop_locked")
         self.assertEqual(self.win32.keys, [])
 
-    def test_blank_composer_after_paste_is_a_hard_failure(self):
+    def test_uia_composer_verification_failure_stops_before_enter(self):
         self.open_chat_window()
         clipboard_before = {"text": "draft", "private_format": b"\x02"}
         self.win32.clipboard = clipboard_before
-        self.win32.grab_object = FakeGrab(dark=0.0)
+        self.sender.uia_set_text = lambda *_args: (_ for _ in ()).throw(
+            WeChatSendError("wechat_uia_readback_mismatch"))
         self.use_reader(self.sent_rows)
-        with self.assertRaises(WeChatSendError) as untyped:
+        with self.assertRaises(WeChatSendError) as unverified:
             self.sender.deliver(self.request)
-        self.assertEqual(untyped.exception.code, "wechat_input_not_confirmed")
+        self.assertEqual(unverified.exception.code, "wechat_uia_readback_mismatch")
         self.assertEqual(self.win32.clipboard, clipboard_before)
+        self.assertEqual(self.win32.clicks, [])
         self.assertEqual([key for key in self.win32.keys if key[0] == 0x0D], [])
+
+    def test_changed_window_title_stops_after_composing_without_enter(self):
+        self.open_chat_window()
+        self.use_reader(self.sent_rows)
+
+        def compose(_handle, _text, _names, can_commit, _send_enter):
+            self.win32.windows[-1] = (9, WINDOW_CLASS, "Different Friend")
+            if not can_commit():
+                raise WeChatSendError("wechat_conversation_changed")
+
+        self.sender.uia_set_text = compose
+        with self.assertRaises(WeChatSendError) as changed:
+            self.sender.deliver(self.request)
+        self.assertEqual(changed.exception.code, "wechat_conversation_changed")
+        self.assertEqual(self.win32.keys, [])
+
+    def test_lost_foreground_stops_before_enter(self):
+        self.open_chat_window()
+        self.use_reader(self.sent_rows)
+
+        def compose(_handle, _text, _names, can_commit, _send_enter):
+            self.win32.foreground = 7
+            if not can_commit():
+                raise WeChatSendError("wechat_conversation_changed")
+
+        self.sender.uia_set_text = compose
+        with self.assertRaises(WeChatSendError) as changed:
+            self.sender.deliver(self.request)
+        self.assertEqual(changed.exception.code, "wechat_conversation_changed")
+        self.assertEqual(self.win32.keys, [])
+
+    def test_uncertain_enter_failure_is_not_classified_as_safe_to_retry(self):
+        self.open_chat_window()
+        self.use_reader(self.sent_rows)
+        self.win32.key = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic input interruption"))
+        with self.assertRaises(WeChatDeliveryUnknown) as unknown:
+            self.sender.deliver(self.request)
+        self.assertEqual(unknown.exception.code, "wechat_send_input_unknown")
+        self.assertTrue(unknown.exception.delivery_unknown)
 
     def test_unconfirmed_delivery_is_unknown_and_is_not_retried(self):
         self.open_chat_window()
@@ -324,7 +391,8 @@ class WeChatSenderTest(unittest.TestCase):
 
     def test_earlier_duplicate_is_not_accepted_as_a_receipt(self):
         self.open_chat_window()
-        self.use_reader([{"sender_id": "2", "content": "synthetic outbound message",
+        self.use_reader([{"sender_id": "2", "is_self": True, "sender_username": "wxid_self0001",
+                          "content": "synthetic outbound message",
                           "sort_seq": 9, "local_id": 4, "shard": "message_1.db"}])
         with self.assertRaises(WeChatDeliveryUnknown) as stale:
             self.sender.deliver(self.request)
@@ -332,7 +400,8 @@ class WeChatSenderTest(unittest.TestCase):
 
     def test_failed_pre_send_baseline_stops_before_input(self):
         self.open_chat_window()
-        reader = FakeReader([{"sender_id": "2", "content": "synthetic outbound message",
+        reader = FakeReader([{"sender_id": "2", "is_self": True, "sender_username": "wxid_self0001",
+                              "content": "synthetic outbound message",
                               "sort_seq": 9, "local_id": 4, "shard": "message_1.db"}])
         original_get_messages = reader.get_messages
         calls = 0
@@ -349,7 +418,7 @@ class WeChatSenderTest(unittest.TestCase):
         with self.assertRaises(WeChatSendError) as unavailable:
             self.sender.deliver(self.request)
         self.assertEqual(unavailable.exception.code, "wechat_baseline_reader_unavailable")
-        self.assertEqual(self.win32.unicode_inputs, [])
+        self.assertEqual(self.composer_calls, [])
         self.assertEqual([key for key in self.win32.keys if key[0] == 0x0D], [])
 
     def test_receipt_ignores_rows_from_other_senders(self):
@@ -363,7 +432,8 @@ class WeChatSenderTest(unittest.TestCase):
               "local_id": 7, "shard": "message_1.db"},
              {"sender_id": "1", "content": "synthetic outbound message", "sort_seq": 31,
               "local_id": 8, "shard": "message_1.db"},
-             {"sender_id": "2", "content": "synthetic outbound message", "sort_seq": 32,
+             {"sender_id": "2", "is_self": True, "sender_username": "wxid_self0001",
+              "content": "synthetic outbound message", "sort_seq": 32,
               "local_id": 9, "shard": "message_1.db"}])
         result = self.sender.deliver(self.request)
         self.assertEqual(result["message_id"], "wxid_friend001:message_1.db:9")
@@ -376,10 +446,37 @@ class WeChatSenderTest(unittest.TestCase):
               "local_id": 12, "shard": "message_1.db"}],
             [{"sender_id": "1", "content": "earlier inbound", "sort_seq": 44,
               "local_id": 12, "shard": "message_1.db"},
-             {"sender_id": "2", "content": "synthetic outbound message", "sort_seq": 44,
+             {"sender_id": "2", "is_self": True, "sender_username": "wxid_self0001",
+              "content": "synthetic outbound message", "sort_seq": 44,
               "local_id": 13, "shard": "message_1.db"}])
         result = self.sender.deliver(self.request)
         self.assertEqual(result["message_id"], "wxid_friend001:message_1.db:13")
+
+    def test_receipt_uses_resolved_self_identity_instead_of_numeric_sender_id(self):
+        self.open_chat_window()
+        self.use_reader_with_exchange([], [{**self.sent_rows[0], "sender_id": "73"}])
+        result = self.sender.deliver(self.request)
+        self.assertEqual(result["message_id"], "wxid_friend001:message_1.db:5")
+
+    def test_numeric_two_cannot_prove_a_self_receipt(self):
+        self.sender.timeout = 0.01
+        for identity in ({}, {"is_self": False, "sender_username": "wxid_friend001"},
+                         {"is_self": True, "sender_username": "wxid_other_account"}):
+            with self.subTest(identity=identity):
+                self.use_reader([{"sender_id": "2", "content": self.request["text"],
+                                  "local_id": 5, "shard": "message_1.db", **identity}])
+                with self.assertRaises(WeChatDeliveryUnknown) as unknown:
+                    self.sender._verify(self.request["conversation_id"], self.request["text"],
+                                        set(), self.request["account_id"])
+                self.assertEqual(unknown.exception.code, "wechat_receipt_missing")
+
+    def test_changed_account_cannot_supply_the_receipt(self):
+        reader = self.use_reader(self.sent_rows)
+        reader.wxid = "wxid_other_account"
+        with self.assertRaises(WeChatDeliveryUnknown) as unknown:
+            self.sender._verify(self.request["conversation_id"], self.request["text"],
+                                set(), self.request["account_id"])
+        self.assertEqual(unknown.exception.code, "wechat_receipt_account_mismatch")
 
     def test_account_mismatch_blocks_delivery(self):
         self.open_chat_window()

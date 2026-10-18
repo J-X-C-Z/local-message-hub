@@ -125,6 +125,7 @@ $requiredFiles = @(
     'scripts/test-package-privacy.ps1',
     'scripts/benchmark-memory.py',
     'hub/server.py', 'hub/store.py', 'hub/mcp_server.py',
+    'hub/windows_notifications.py', 'hub/windows_toast.ps1',
     'integrations/wecom/bot_credentials.py', 'integrations/wecom/bot_media.py',
     'integrations/wecom/bot_sender.py',
     'integrations/qq/upstream/expanded/qq-chat-exporter-6.3.2/qq-chat-export-server/Cargo.lock',

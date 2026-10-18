@@ -43,6 +43,38 @@ class _Response:
 
 
 class QQProviderTests(unittest.TestCase):
+    def test_runtime_prepares_authenticated_loopback_sender_config(self):
+        from integrations.qq.sender import NapCatOneBotSender
+
+        with tempfile.TemporaryDirectory() as folder:
+            bundle = Path(folder)
+            qq_exe = bundle / "QQ.exe"
+            app = qq_exe.parent / "resources" / "app"
+            config = bundle / "config"
+            app.mkdir(parents=True)
+            config.mkdir()
+            (app / "package.json").write_text(
+                json.dumps({"name": "fixture", "version": "1.0", "private": True}),
+                encoding="utf-8",
+            )
+            (config / "webui.json").write_text("{}", encoding="utf-8")
+            (config / "napcat.json").write_text("{}", encoding="utf-8")
+            onebot_path = config / "onebot11.json"
+            onebot_path.write_text(json.dumps({"network": {"httpServers": []}}),
+                                   encoding="utf-8")
+            provider = QQProvider(bundle_dir=bundle)
+            with patch("integrations.qq.provider.sys.platform", "win32"):
+                provider._prepare_runtime(qq_exe)
+
+            endpoint = NapCatOneBotSender(onebot_path)._endpoint()
+            self.assertEqual(endpoint["host"], "127.0.0.1")
+            self.assertTrue(1 <= endpoint["port"] <= 65535)
+            self.assertGreaterEqual(len(endpoint["token"]), 32)
+            server = json.loads(onebot_path.read_text(encoding="utf-8"))["network"]["httpServers"][0]
+            self.assertFalse(server["enableCors"])
+            self.assertFalse(server["enableWebsocket"])
+            self.assertTrue(server["enable"])
+
     def test_qce_json_response_is_bounded(self):
         provider = QQProvider()
         response = _Response({"data": "x" * 32})

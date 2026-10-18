@@ -40,9 +40,13 @@ _UIA_CLSIDS = ("{e22ad333-b25f-460c-83d0-0581107395c9}",
                "{ff48dba4-60ef-4201-aa87-54103eef5947}")
 _UIA_IID = "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}"
 
-# Composer box as a share of the client rect. Weixin keeps the composer and the
-# tool bar above the bottom edge; only the message area changes height.
-_INPUT_RATIO = (0.30, 0.78, 0.80, 0.94)
+_UIA_TRUE_CONDITION_SLOT = 21
+_UIA_CONTROL_TYPE_PROPERTY = 30003
+_UIA_NAME_PROPERTY = 30005
+_UIA_ENABLED_PROPERTY = 30010
+_UIA_AUTOMATION_ID_PROPERTY = 30011
+_UIA_EDIT_CONTROL = 50004
+_UIA_VALUE_PATTERN = 10002
 
 
 class _GUID(ctypes.Structure):
@@ -57,7 +61,11 @@ class _VARIANT(ctypes.Structure):
 
 def _guid(text):
     value = _GUID()
-    ctypes.windll.ole32.CLSIDFromString(text, ctypes.byref(value))
+    parse = ctypes.windll.ole32.CLSIDFromString
+    parse.argtypes = (wintypes.LPCWSTR, ctypes.POINTER(_GUID))
+    parse.restype = ctypes.c_long
+    if parse(text, ctypes.byref(value)) != 0:
+        raise ValueError("invalid UI Automation GUID")
     return value
 
 
@@ -118,6 +126,183 @@ def _uia_window_class(handle):
             _com_slot(automation, 2)(automation)
         if initialized:
             ole32.CoUninitialize()
+
+
+def _uia_set_chat_text(handle, text, expected_names, can_commit, send_enter):
+    """Set text in the uniquely identified Weixin chat input, without clearing drafts."""
+    ole32 = ctypes.windll.ole32
+    automation = root = condition = elements = composer = value_pattern = None
+    candidates = []
+    initialized = False
+    write_started = False
+    send_started = False
+    try:
+        result = ole32.CoInitializeEx(None, 2)
+        if result not in (0, 1):
+            raise WeChatSendError("wechat_uia_unavailable")
+        initialized = True
+        for clsid_text in _UIA_CLSIDS:
+            clsid, iid = _guid(clsid_text), _guid(_UIA_IID)
+            created = ctypes.c_void_p()
+            if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1,
+                                      ctypes.byref(iid), ctypes.byref(created)) == 0 and created.value:
+                automation = created
+                break
+        if not automation:
+            raise WeChatSendError("wechat_uia_unavailable")
+
+        root = ctypes.c_void_p()
+        if _com_slot(automation, 6, wintypes.HWND, ctypes.POINTER(ctypes.c_void_p))(
+                automation, wintypes.HWND(handle), ctypes.byref(root)) != 0 or not root.value:
+            raise WeChatSendError("wechat_uia_unavailable")
+        condition = ctypes.c_void_p()
+        if _com_slot(automation, _UIA_TRUE_CONDITION_SLOT,
+                     ctypes.POINTER(ctypes.c_void_p))(
+                automation, ctypes.byref(condition)) != 0 or not condition.value:
+            raise WeChatSendError("wechat_uia_unavailable")
+        elements = ctypes.c_void_p()
+        if _com_slot(root, 6, ctypes.c_int, ctypes.c_void_p,
+                     ctypes.POINTER(ctypes.c_void_p))(
+                root, ctypes.c_int(4), condition, ctypes.byref(elements)) != 0 or not elements.value:
+            raise WeChatSendError("wechat_uia_unavailable")
+
+        length = ctypes.c_int()
+        if _com_slot(elements, 3, ctypes.POINTER(ctypes.c_int))(
+                elements, ctypes.byref(length)) != 0 or not 0 <= length.value <= 20000:
+            raise WeChatSendError("wechat_uia_unavailable")
+        for index in range(length.value):
+            element = ctypes.c_void_p()
+            if _com_slot(elements, 4, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))(
+                    elements, ctypes.c_int(index), ctypes.byref(element)) != 0 or not element.value:
+                continue
+            try:
+                aid = _uia_property(element, _UIA_AUTOMATION_ID_PROPERTY)
+                control_type = _uia_property(element, _UIA_CONTROL_TYPE_PROPERTY)
+                name = _uia_property(element, _UIA_NAME_PROPERTY)
+                enabled = _uia_property(element, _UIA_ENABLED_PROPERTY)
+                if _is_chat_composer(aid, control_type, enabled, name, expected_names):
+                    candidates.append(element)
+                    element = None
+            finally:
+                if element:
+                    _com_slot(element, 2)(element)
+        if len(candidates) != 1:
+            raise WeChatSendError("wechat_uia_composer_unverified")
+        composer = candidates.pop()
+        value_pattern = ctypes.c_void_p()
+        if _com_slot(composer, 16, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))(
+                composer, ctypes.c_int(_UIA_VALUE_PATTERN),
+                ctypes.byref(value_pattern)) != 0 or not value_pattern.value:
+            raise WeChatSendError("wechat_uia_composer_unverified")
+        read_value = _com_slot(value_pattern, 4, ctypes.POINTER(ctypes.c_void_p))
+        current = ctypes.c_void_p()
+        if read_value(value_pattern, ctypes.byref(current)) != 0:
+            raise WeChatSendError("wechat_uia_composer_unverified")
+        try:
+            if current.value and ctypes.wstring_at(current.value):
+                raise WeChatSendError("wechat_composer_draft_present")
+        finally:
+            if current.value:
+                ctypes.windll.oleaut32.SysFreeString(current)
+        read_only = ctypes.c_int()
+        if _com_slot(value_pattern, 5, ctypes.POINTER(ctypes.c_int))(
+                value_pattern, ctypes.byref(read_only)) != 0 or read_only.value:
+            raise WeChatSendError("wechat_uia_composer_unverified")
+
+        if _com_slot(composer, 3)(composer) != 0:
+            raise WeChatSendError("wechat_uia_composer_unverified")
+        sys_alloc_string = ctypes.windll.oleaut32.SysAllocString
+        sys_alloc_string.argtypes = (ctypes.c_wchar_p,)
+        sys_alloc_string.restype = ctypes.c_void_p
+        allocated = sys_alloc_string(text)
+        if not allocated:
+            raise WeChatSendError("wechat_uia_composer_unverified")
+        try:
+            write_started = True
+            if _com_slot(value_pattern, 3, ctypes.c_void_p)(value_pattern, allocated) != 0:
+                raise WeChatSendError("wechat_uia_write_failed")
+        finally:
+            ctypes.windll.oleaut32.SysFreeString(ctypes.c_void_p(allocated))
+        written = ctypes.c_void_p()
+        if read_value(value_pattern, ctypes.byref(written)) != 0:
+            raise WeChatSendError("wechat_uia_readback_failed")
+        try:
+            actual = ctypes.wstring_at(written.value) if written.value else ""
+            if actual != text:
+                raise WeChatSendError("wechat_uia_readback_mismatch")
+        finally:
+            if written.value:
+                ctypes.windll.oleaut32.SysFreeString(written)
+        if not can_commit():
+            raise WeChatSendError("wechat_conversation_changed")
+        send_started = True
+        try:
+            send_enter()
+        except Exception:
+            raise WeChatDeliveryUnknown("wechat_send_input_unknown") from None
+    except WeChatSendError:
+        raise
+    except Exception:
+        raise WeChatSendError("wechat_uia_unavailable") from None
+    finally:
+        if write_started and not send_started and value_pattern and value_pattern.value:
+            try:
+                current = ctypes.c_void_p()
+                read = _com_slot(value_pattern, 4, ctypes.POINTER(ctypes.c_void_p))
+                if read(value_pattern, ctypes.byref(current)) == 0:
+                    try:
+                        if current.value and ctypes.wstring_at(current.value) == text:
+                            empty = ctypes.windll.oleaut32.SysAllocString
+                            empty.argtypes = (ctypes.c_wchar_p,)
+                            empty.restype = ctypes.c_void_p
+                            blank = empty("")
+                            if blank:
+                                try:
+                                    _com_slot(value_pattern, 3, ctypes.c_void_p)(value_pattern, blank)
+                                finally:
+                                    ctypes.windll.oleaut32.SysFreeString(ctypes.c_void_p(blank))
+                    finally:
+                        if current.value:
+                            ctypes.windll.oleaut32.SysFreeString(current)
+            except Exception:
+                pass
+        for pointer in candidates:
+            try:
+                _com_slot(pointer, 2)(pointer)
+            except Exception:
+                pass
+        for pointer in (value_pattern, composer, elements, condition, root, automation):
+            if pointer and pointer.value:
+                try:
+                    _com_slot(pointer, 2)(pointer)
+                except Exception:
+                    pass
+        if initialized:
+            ole32.CoUninitialize()
+
+
+def _is_chat_composer(automation_id, control_type, enabled, name, expected_names):
+    return (isinstance(automation_id, str)
+            and automation_id.rsplit(".", 1)[-1] == "chat_input_field"
+            and control_type == _UIA_EDIT_CONTROL and enabled is True
+            and isinstance(name, str) and name in expected_names)
+
+
+def _uia_property(element, property_id):
+    value = _VARIANT()
+    if _com_slot(element, 10, ctypes.c_int, ctypes.POINTER(_VARIANT))(
+            element, ctypes.c_int(property_id), ctypes.byref(value)) != 0:
+        return None
+    try:
+        if value.vt == 8 and value.value[0]:
+            return ctypes.wstring_at(value.value[0])
+        if value.vt == 11:
+            return bool(value.value[0])
+        if value.vt == 3:
+            return ctypes.c_int.from_address(ctypes.addressof(value) + 8).value
+        return None
+    finally:
+        ctypes.windll.oleaut32.VariantClear(ctypes.byref(value))
 
 
 class WeChatSendError(RuntimeError):
@@ -392,12 +577,13 @@ class WeChatGUISender:
     """Deliver exactly one approved text request through a real Weixin window."""
 
     def __init__(self, provider_factory=None, reader_factory=None, timeout=45.0,
-                 win32=None, sleep=time.sleep):
+                 win32=None, sleep=time.sleep, uia_set_text=_uia_set_chat_text):
         self._provider_factory = provider_factory
         self._reader_factory = reader_factory
         self.timeout = min(max(float(timeout), 5.0), 120.0)
         self.win32 = win32 or _Win32()
         self.sleep = sleep
+        self.uia_set_text = uia_set_text
         self._provider = None
 
     def reader(self):
@@ -459,12 +645,12 @@ class WeChatGUISender:
         if not isinstance(conversation_id, str) or not _WXID_RE.fullmatch(conversation_id):
             raise WeChatSendError("wechat_send_conversation_invalid")
 
-        handle, proof = self.resolve_conversation(conversation_id)
+        handle, proof, names = self.resolve_conversation(conversation_id)
         account_id = self._require_account(request.get("account_id"))
         self._pace("send", 1.0)
         watermark = self._watermark(conversation_id)
-        self._compose_and_send(handle, text)
-        receipt = self._verify(conversation_id, text, watermark)
+        self._compose_and_send(handle, text, proof, names)
+        receipt = self._verify(conversation_id, text, watermark, account_id)
         return {"message_id": receipt, "account_id": account_id}
 
     def resolve_conversation(self, conversation_id):
@@ -495,7 +681,7 @@ class WeChatGUISender:
             raise WeChatSendError("wechat_window_too_small")
         if self.win32.input_desktop_locked():
             raise WeChatSendError("wechat_desktop_locked")
-        return handle, proof
+        return handle, proof, titles
 
     @staticmethod
     def _title_proves_target(title, titles):
@@ -526,30 +712,15 @@ class WeChatGUISender:
             self.sleep(0.2)
         raise WeChatSendError("wechat_window_not_foreground")
 
-    def _compose_and_send(self, handle, text):
+    def _compose_and_send(self, handle, text, proof, expected_names):
         self._focus(handle)
-        left, top, right, bottom = self.win32.rect_of(handle)
-        width, height = max(1, right - left), max(1, bottom - top)
-        inset_x, inset_y = max(1, int(width * 0.006)), max(1, int(height * 0.006))
-        span_x, span_y = width - 2 * inset_x, height - 2 * inset_y
-        ratios = _INPUT_RATIO
-        centre_x = left + inset_x + int(span_x * (ratios[0] + ratios[2]) / 2)
-        centre_y = top + inset_y + int(span_y * (ratios[1] + ratios[3]) / 2)
-        self.win32.click_at(centre_x, centre_y)
-        self.sleep(0.3)
-        # Clear any draft first so exactly the approved text ends up in the
-        # composer. Text is entered with Unicode key events, so the user's
-        # clipboard is never read from or written to.
-        self.win32.key(0x41, ctrl=True)
-        self.sleep(0.15)
-        self.win32.key(0x2E)
-        self.sleep(0.15)
-        self.win32.unicode_text(text)
-        self.sleep(0.9)
-        if self.win32.grab(handle).dark_ratio(ratios) < 0.02:
-            raise WeChatSendError("wechat_input_not_confirmed")
         self._pace("send", 1.0)
-        self.win32.key(0x0D)
+        self.uia_set_text(
+            handle, text, expected_names,
+            lambda: (self.win32.is_foreground(handle) and any(
+                hwnd == handle and cls == WINDOW_CLASS and title == proof
+                for hwnd, cls, title in self.win32.enumerate_visible())),
+            lambda: self.win32.key(0x0D))
         self.sleep(1.5)
 
     def _watermark(self, conversation_id):
@@ -574,12 +745,14 @@ class WeChatGUISender:
             identities.add((str(row.get("shard") or ""), local_id))
         return identities
 
-    def _verify(self, conversation_id, text, watermark):
+    def _verify(self, conversation_id, text, watermark, account_id):
         """Read the local database back; only a brand-new self-sent exact match counts."""
         try:
             reader = self.reader()
         except Exception:
             raise WeChatDeliveryUnknown("wechat_receipt_reader_unavailable") from None
+        if str(getattr(reader, "wxid", "") or getattr(reader, "account", "") or "") != account_id:
+            raise WeChatDeliveryUnknown("wechat_receipt_account_mismatch")
         deadline = time.monotonic() + self.timeout
         stale = False
         while time.monotonic() < deadline:
@@ -588,7 +761,8 @@ class WeChatGUISender:
             except Exception:
                 rows = []
             for row in rows or []:
-                if str(row.get("sender_id")) != "2":
+                # Numeric sender IDs are shard-local; LocalReader resolves Name2Id.
+                if row.get("is_self") is not True or row.get("sender_username") != account_id:
                     continue
                 if str(row.get("content") or "") != text:
                     continue

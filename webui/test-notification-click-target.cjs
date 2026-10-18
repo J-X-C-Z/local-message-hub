@@ -22,7 +22,7 @@ const context = {
   },
 };
 vm.runInNewContext(source.replace('\ninit();\n',
-  '\nglobalThis.__state = state; globalThis.__sync = syncNotificationStream; globalThis.__test = sendTestNotification;\n'), context);
+  '\nglobalThis.__state = state; globalThis.__sync = syncNotificationStream; globalThis.__test = sendTestNotification; globalThis.__open = openNotificationTarget;\n'), context);
 context.toast = () => {};
 context.__state.settings = {capabilities: {notifications: {enabled: true}}, notification_filters: {
   platforms: ['wechat', 'wecom', 'qq'], mode: 'all', style: 'normal',
@@ -38,9 +38,25 @@ assert.equal(calls[0][0], '/api/notifications/message');
 assert.equal(calls[0][1].body, '{"event_id":19}');
 assert.doesNotMatch(calls[0][1].body, /PRIVATE_MESSAGE_BODY|private-account|private-room/);
 context.__test();
-setImmediate(() => {
+setImmediate(async () => {
   assert.equal(calls.length, 2);
   assert.equal(calls[1][0], '/api/notifications/test');
   assert.equal(calls[1][1].body, '{}');
+  const target = {platform: 'qq', account_id: 'private-account',
+    conversation_id: 'private-room', conversation_title: 'Private title',
+    conversation_kind: 'group'};
+  const opened = [];
+  context.api = async (url, _params, options) => {
+    opened.push([url, options]);
+    return target;
+  };
+  context.renderShell = () => {};
+  context.loadView = async () => {};
+  await context.__open('opaque-notification-token-123456');
+  assert.equal(opened[0][0], '/api/notifications/activate');
+  assert.equal(opened[0][1].body, '{"token":"opaque-notification-token-123456"}');
+  assert.equal(context.__state.platform, 'qq');
+  assert.equal(context.__state.selected.id, 'private-room');
+  assert.equal(context.__state.selected.account_id, 'private-account');
   console.log('PASS notification requests contain only an opaque event ID or fixed test action');
 });

@@ -19,15 +19,23 @@ The upstream media module has optional GUI helpers; the provider disables
 
 Sending is a separate, default-off module: `sender.py` implements
 `WeChatGUISender`, which drives the already-logged-in local WeChat 4.x client
-through public Win32 `ctypes` calls (`EnumWindows`, `SetForegroundWindow`,
-`SendInput`, `PrintWindow`) to identify an open conversation window and enter
-text into it. It does not import the upstream `wechatauto` package, does not
-inject into the WeChat process, does not hook DLLs, and never writes to the
+through the Windows UI Automation API. It requires a unique enabled
+`chat_input_field` whose accessible name matches the already-verified target,
+refuses to overwrite a draft, sets and reads back the exact approved text, then
+rechecks the target window and foreground ownership, and presses Enter once.
+If a pre-send check fails, it clears only the exact text it just wrote. It does
+not import the upstream `wechatauto` package, does
+not inject into the WeChat process, does not hook DLLs, and never writes to the
 client database. It reads only the target conversation's cached message rows to
-verify that its own message was recorded. Unlike the reader, sending is a
-write-side, human-mimicking action and therefore stays behind the
+verify that its own message was recorded. Unsupported or ambiguous UIA trees
+fail closed; live-client compatibility still requires device acceptance. Unlike
+the reader, sending is a write-side, human-mimicking action and therefore stays behind the
 `wechat_send` capability and per-message local UI approval; the MCP surface
 can prepare and inspect requests but never approves or delivers them.
+Receipt verification uses the current account's exact `sender_username` and
+`is_self` values resolved from each message shard's `Name2Id` table. Numeric
+sender ID 2 alone is never accepted as proof of self-sending, and a changed
+reader account produces an unknown outcome instead of a delivery claim.
 
 The reader uses `ReadProcessMemory` with `PROCESS_VM_READ` and
 `PROCESS_QUERY_INFORMATION`, validates candidates against SQLCipher page HMAC,

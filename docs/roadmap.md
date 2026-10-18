@@ -7,6 +7,25 @@ duplicate working integrations and is not part of the current delivery path.
 Platform access must remain local, read-only, and accurately scoped; unavailable
 capabilities are never represented as connected or complete.
 
+**Current acceptance snapshot (2026-10-19):** this snapshot and the phase
+tables take precedence over the historical checkpoints below. The current
+worktree Hub is running on loopback with periodic synchronization disabled.
+Actual browser platform switching verified that visible WeChat, QQ and WeCom
+conversation avatars load successfully through same-origin `/api/avatar`
+requests; no remote image elements were used. Real cached WeChat/QQ avatar
+bytes also passed signature checks and sampled image decoding. A real cached
+QQ JPEG fully decoded through the local media endpoint, and a real QQ voice
+attachment served valid mono 16-bit PCM WAV; sampled missing cache
+entries do not prove full media parity. P11 remains `IN_PROGRESS`.
+Windows toast body activation now opens the same opaque local target as its
+button; the XML builder is tested without displaying a notification. Actual
+Windows visibility/click activation remains unverified. The WeChat receipt
+reader now requires the account-bound `Name2Id` sender identity instead of
+assuming numeric sender ID 2 is the local user. No real message was sent.
+P12-03/04 remain unavailable pending inspectable native behavior and the
+separately approved source-mutation/backup/rollback flow. P14 hosted evidence
+still applies only to the recorded committed revision, not the current edits.
+
 **Last verified local source state (2026-10-14):** QQNT databases are read-only; new
 keys are protected by current-user Windows DPAPI in private Hub configuration.
 An earlier bounded scan through the running Hub verified and saved the local
@@ -343,6 +362,13 @@ delivery outcome `unknown`, even when Python would compare them equal to zero;
 only an exact nonzero integer rejection is classified as `failed`. The focused
 17-test sender suite passes. Live NapCat/QQ delivery remains unverified.
 
+**P9-02 bounded response follow-up (2026-10-16):** OneBot send responses above
+1 MiB now remain `unknown` without retry; login-readiness responses above 64
+KiB report `invalid_response` and cannot claim an online account. Both reads
+probe one byte past their limits. Focused sender regressions cover valid JSON
+followed by an oversized whitespace tail. Live NapCat/QQ delivery remains
+unverified.
+
 **P9-02 / P13-01 isolated acceptance recheck (2026-10-15):** 110 focused QQ,
 personal WeChat, WeCom bot text/media, and durable send-service tests passed;
 9 HTTP route tests also passed for opt-in, request-bound one-time approval,
@@ -521,9 +547,13 @@ Missing resources are recorded in `manifest.json`. More than 100 attachments,
 an attachment above 50 MiB, or aggregate content above 512 MiB fails the whole
 bundle and never publishes a partial ZIP. Paths and temporary URLs are omitted
 from the manifest; the intermediate message export is deleted after ZIP creation.
-This path does not yet enumerate WeChat source-only media,
-Moments catalogs, or the QQ global gallery; full resource parity and real-cache
-acceptance remain open, so P11-02 stays `IN_PROGRESS`.
+When the export is scoped to one exact WeChat account and conversation with no
+full-text keyword, the bundle also enumerates unindexed source media using the
+same media-type/date filters and exact shard/local-ID identities. It uses the
+existing local source-media resolver, so unresolved entries remain in the
+manifest. Moments catalogs and the QQ global gallery are not included; full
+resource parity and real-cache acceptance remain open, so P11-02 stays
+`IN_PROGRESS`.
 
 P11-01 follow-up (2026-10-15): The WeChat image cache resolver classifies only
 original `_h/.h/_hd/.hd`, base `.dat`, and thumbnail `_t/.t/_thumb` suffixes,
@@ -676,10 +706,29 @@ Real QQ avatar cache availability remains unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P12-01 | Moments, notifications, automated export and account safety | Hub, WebUI, integrations | P8-02 | Automated local export and default-off loopback SSE notifications are implemented. Automatic export pages a temporary transactionally consistent SQLite backup so concurrent sync writes cannot shift OFFSET pages and duplicate or omit records; the snapshot is removed after the job. Notifications support platform filters, all-conversations mode or an explicit conversation allowlist, per-conversation mutes that always take precedence, and standard/silent browser presentation; payloads remain body-free. Synthetic WebUI regressions verify notification clicks select the exact platform/account/conversation, focus and load that chat, never expose a sentinel message body, and close an established event stream if browser notification permission is revoked. When one tab loses its body-free SSE stream, it now checks lock status and reloads to the lock page only if another tab actually locked the account; transient network errors do not force a logout. When a lock-enabled tab resumes visibly, it also checks server session validity without resetting the idle timer and returns to the lock screen after expiry; transient status failures do not force logout. Synthetic tests cover both resume behavior and multiple same-event listeners. Isolated Edge acceptance verified lock setup, immediate lock, 423 API denial, three-second idle relock, and successful unlock after expiry; it exposed and fixed passphrase loss when FormData was read after disabling the input. Real desktop-notification delivery remains open. App lock gates the loopback WebUI/HTTP APIs, hashes a 12+ character passphrase with PBKDF2, rate-limits unlock attempts, keeps at most 64 in-memory sessions while reaping expired sessions on unlock, and closes active SSE streams after lock; independent MCP stdio access is outside its scope. Wheel scrolling is counted as browser activity so sustained wheel-only reading refreshes the configured idle timer. A default-off Moments module performs bounded, read-only local `sns.db` parsing during explicit sync, then serves SQL-backed author/text/date filters, paging and UI/MCP queries from a per-account sanitized SQLite catalog; each page loads media in one batched SQLite query instead of one query per post; keyword search matches post text and comment content, not usernames or media URLs. Filtered JSON/CSV/Markdown/TXT/HTML exports strip media credentials and harden CSV formulas/HTML. Parsed `refCommentId` relationships render escaped reply-to-author labels when the referenced comment exists; missing references render as ordinary comments. Export reads 50-record SQLite pages and serializes incrementally into a byte-capped buffer, aborting at 32 MiB before retaining more output or fetching later pages. Catalog replacement is transactional, cache locators are relative and boundary-validated, and cached text remains queryable when the WeChat reader is unavailable; with multiple cached accounts, callers explicitly select one and media links stay unavailable without that account's reader/cache. WeFlow-compatible existing cache entries are resolved offline, signature/boundary checked, displayed through same-origin 15-minute tokens, and available to MCP only through an explicit image request or MP4/WebM video resource, capped at 8 MiB; no CDN fetch occurs and arbitrary paths/URLs are rejected. MCP `get_attachment` additionally returns explicitly requested cached image, video, voice or file content under the same 8 MiB local-cache boundary, checking media signatures before labeling supported media types. Moments XML media parsing follows the repository's WeFlow `snsService.ts` attribute format for URL/thumb token, key, md5 and enc_idx fields, with child-text fallback; synthetic XML coverage verifies this without network access. Read-only inspection verified representative local `sns.db` and `head_image.db` schemas; the avatar table is matched to contacts by exact username (never inferred from md5), and bounded JPEG-signature blobs are cached under Hub-owned storage during sync with a local-avatar-first policy. Synthetic tests cover schema/key gating, identity, signature/size bounds, local-over-URL precedence, and unchanged fallback behavior. Other schema variants fail closed; synthetic WebUI template-render tests cover avatars in conversation rows, messages, inspector details, and group rosters. Synthetic browser/pixel rendering passed with isolated data; real-account acceptance remains open. Other real-account media/cache acceptance remains open; risky client interception remains separately gated. | IN_PROGRESS |
+| P12-01 | Moments, notifications, automated export and account safety | Hub, WebUI, integrations | P8-02 | Automated local export and default-off loopback SSE notifications are implemented. Automatic export pages a temporary transactionally consistent SQLite backup so concurrent sync writes cannot shift OFFSET pages and duplicate or omit records; the snapshot is removed after the job. Notifications support platform filters, all-conversations mode or an explicit conversation allowlist, per-conversation mutes that always take precedence, and standard/silent browser presentation; event requests contain only an opaque event ID and notification text is body-free. Synthetic tests verify those privacy properties and stream shutdown on browser permission revocation. Windows toast body activation and its action button both open the same validated loopback URL carrying a short-lived opaque target token; Hub consumes it once and WebUI resolves the exact chat. The registration shortcut stores only the actual listener origin. Tests execute the actual PowerShell XML builder without displaying a toast and cover invalid URLs/ports, trailing-newline rejection, HTTP token binding and WebUI navigation. Real Windows notification display/body/button activation remain unverified. A body-free test toast was accepted by the local Hub on 2026-10-16, but actual desktop visibility remains unconfirmed. When one tab loses its body-free SSE stream, it now checks lock status and reloads to the lock page only if another tab actually locked the account; transient network errors do not force a logout. When a lock-enabled tab resumes visibly, it also checks server session validity without resetting the idle timer and returns to the lock screen after expiry; transient status failures do not force logout. Synthetic tests cover both resume behavior and multiple same-event listeners. Isolated Edge acceptance verified lock setup, immediate lock, 423 API denial, three-second idle relock, and successful unlock after expiry; it exposed and fixed passphrase loss when FormData was read after disabling the input. App lock gates the loopback WebUI/HTTP APIs, hashes a 12+ character passphrase with PBKDF2, rate-limits unlock attempts, keeps at most 64 in-memory sessions while reaping expired sessions on unlock, and closes active SSE streams after lock; independent MCP stdio access is outside its scope. Wheel scrolling is counted as browser activity so sustained wheel-only reading refreshes the configured idle timer. A default-off Moments module performs bounded, read-only local `sns.db` parsing during explicit sync, then serves SQL-backed author/text/date filters, paging and UI/MCP queries from a per-account sanitized SQLite catalog; each page loads media in one batched SQLite query instead of one query per post; keyword search matches post text and comment content, not usernames or media URLs. Filtered JSON/CSV/Markdown/TXT/HTML exports strip media credentials and harden CSV formulas/HTML. Parsed `refCommentId` relationships render escaped reply-to-author labels when the referenced comment exists; missing references render as ordinary comments. Export reads 50-record SQLite pages and serializes incrementally into a byte-capped buffer, aborting at 32 MiB before retaining more output or fetching later pages. Catalog replacement is transactional, cache locators are relative and boundary-validated, and cached text remains queryable when the WeChat reader is unavailable; with multiple cached accounts, callers explicitly select one and media links stay unavailable without that account's reader/cache. WeFlow-compatible existing cache entries are resolved offline, signature/boundary checked, displayed through same-origin 15-minute tokens, and available to MCP only through an explicit image request or MP4/WebM video resource, capped at 8 MiB; no CDN fetch occurs and arbitrary paths/URLs are rejected. MCP `get_attachment` additionally returns explicitly requested cached image, video, voice or file content under the same 8 MiB local-cache boundary, checking media signatures before labeling supported media types. Moments XML media parsing follows the repository's WeFlow `snsService.ts` attribute format for URL/thumb token, key, md5 and enc_idx fields, with child-text fallback; synthetic XML coverage verifies this without network access. Read-only inspection verified representative local `sns.db` and `head_image.db` schemas; the avatar table is matched to contacts by exact username (never inferred from md5), and bounded JPEG-signature blobs are cached under Hub-owned storage during sync with a local-avatar-first policy. Synthetic tests cover schema/key gating, identity, signature/size bounds, local-over-URL precedence, and unchanged fallback behavior. Other schema variants fail closed; synthetic WebUI template-render tests cover avatars in conversation rows, messages, inspector details, and group rosters. Synthetic browser/pixel rendering passed with isolated data. Real-account browser switching on 2026-10-19 verified same-origin cached conversation avatars on WeChat, QQ and WeCom; other-schema and complete media acceptance remain open. Other real-account media/cache acceptance remains open; risky client interception remains separately gated. | IN_PROGRESS |
 | P12-02 | Relationship footprint and optional modules | Hub, WebUI, MCP | P8-02 | Read-only derived views and objective private-chat milestones reuse the normalized index, are platform/account/conversation scoped, content-free, and pass synthetic identity/date-boundary tests. Media milestones include WeCom attachments and QQ roaming resources, count each message once per category, and never inspect message text. The default-off module also exposes capability-gated MCP tools for conversation footprint, UTC+08 timeline, and objective milestones. Semantic journey inference is intentionally excluded. | DONE |
 | P12-03 | Anti-recall/source-client mutation gate | `hub/capabilities.py`, WeChat integration, WebUI | P8-02 | `anti_recall` remains default-off and server-forced unavailable. Source-message edit/insert/delete IPC also routes through the main-process fail-closed gate and never invokes `chatService` until a separately reviewed backup/rollback flow is approved. The pinned WeFlow trigger path delegates installation to an external WCDB native component absent from this repository, so trigger semantics, rollback, schema/version compatibility and backup guarantees cannot be verified. Do not expose install/uninstall until the native implementation is inspectable, isolated-database install/check/uninstall/idempotence/rollback tests pass, the user separately approves source-client mutation, and each operation shows the exact account/database and backup/restore impact before execution. No real source DB was modified. | NOT_STARTED |
 | P12-04 | Moments delete/hide interception gate | WeChat integration, WebUI | P8-02 | Moments anti-delete/hide interception is distinct from chat anti-recall and is not implemented. Keep unavailable until its native implementation is inspectable, source-client mutation is separately approved, and isolated-database backup/install/check/uninstall/idempotence/rollback behavior is verified. No real source DB was modified. | NOT_STARTED |
+
+**P12-01 body-free toast check (2026-10-18):** after the user authorized one
+test, the local Windows notification helper accepted its fixed, body-free text.
+The notification capability stayed disabled and no message event was created.
+Whether Windows displayed it was not confirmed; P12-01 remains `IN_PROGRESS`.
+
+**P12-01 correction (2026-10-16):** the P12-01 row above predates the current
+click-through implementation. Windows Toast now provides a protocol action
+with a short-lived opaque target token; the Hub consumes it once and the WebUI
+opens the exact chat. Synthetic HTTP coverage verifies the route and target
+binding. Actual Windows button activation and visible delivery remain
+unverified, so P12-01 stays `IN_PROGRESS`.
+
+**P12-01 correction (2026-10-16):** the table's click-through sentence above
+predates the implementation recorded below. Windows Toast now provides a
+protocol action with a short-lived opaque target token; the Hub consumes it
+once and the WebUI opens the exact chat. Synthetic HTTP coverage verifies the
+route and token binding. Windows button activation and visible delivery remain
+unverified, so P12-01 stays `IN_PROGRESS`.
 
 **P11 QQ relationship media alias follow-up (2026-10-14):** Objective media
 achievement filters now recognize legacy QQ `extra.media` entries and the
@@ -772,7 +821,7 @@ passes; real-account/cache acceptance and broader media parity remain open.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P13-01 | WeChat/WeCom send adapters | `integrations/`, Hub, WebUI, MCP | P9-01, P10-01 | Personal WeChat sending is implemented as a default-off `wechat_send` capability: Win32 `ctypes` drive the already-open conversation window of the logged-in client, with no injection, DLL hook or client database write, and delivery is only claimed when a read-back of the cached message rows shows the same text from the local account. Real delivery on a real conversation remains unverified. WeCom has a self-contained standard-library TLS WebSocket adapter for independent bot-identity Markdown, image, file, AMR voice, and video messages; it never impersonates the logged-in employee. Capability defaults off; bot credentials use current-user Windows DPAPI; the browser uploads only a user-selected file to a loopback endpoint, where allowlisted extension/signature/size checks create an opaque local attachment ID. Preparation is durable and every text/media delivery requires request-bound one-time UI approval; attachment bytes are revalidated before upload and removed after delivery/rejection. The stdlib protocol follows upload init/chunk/finish with matching type and sends the returned `media_id`; chunks are 512 KiB, up to 100. MCP remains text-prepare/status-only and cannot upload, approve, or deliver attachments. QQ APIs cannot access bot requests. Ambiguous send receipts become unknown and are never retried. Synthetic protocol, attachment, HTTP-route, WebUI and MCP regressions pass. No real bot credentials/device delivery, target reachability or official acknowledgement behavior has been verified; employee-identity WeChat sending and the personal WeChat route remain unverified against a real conversation, so no real delivery is claimed for either channel. References: [official WeCom AI bot SDK protocol](https://github.com/WecomTeam/aibot-node-sdk), [official upload/send instructions](https://github.com/WecomTeam/wecom-unified/blob/main/skills/wecom-unified/references/wecomcli-message.md). | IN_PROGRESS |
+| P13-01 | WeChat/WeCom send adapters | `integrations/`, Hub, WebUI, MCP | P9-01, P10-01 | Personal WeChat sending is a default-off `wechat_send` capability for an already-logged-in client. The approved adapter now uses Windows UI Automation to find the unique enabled `chat_input_field` whose accessible name matches the proven target, refuses to overwrite a draft, writes and reads back the exact approved text, rechecks the exact window title and foreground ownership, clears only its exact text if a pre-send check fails, then presses Enter once; there is no coordinate fallback, injection, DLL hook or client database write. Delivery is claimed only for a new cached row with the same text, exact current-account sender_username and is_self resolved from its shard's Name2Id table; numeric sender ID 2 alone never proves self-sending. A changed reader account yields unknown delivery. Synthetic sender coverage passes, but automatic real-client delivery has not been exercised. WeCom has a self-contained standard-library TLS WebSocket adapter for independent bot-identity Markdown, image, file, AMR voice, and video messages; it never impersonates the logged-in employee. Capability defaults off; bot credentials use current-user Windows DPAPI; the browser uploads only a user-selected file to a loopback endpoint, where allowlisted extension/signature/size checks create an opaque local attachment ID. Preparation is durable and every text/media delivery requires request-bound one-time UI approval; attachment bytes are revalidated before upload and removed after delivery/rejection. The stdlib protocol follows upload init/chunk/finish with matching type and sends the returned `media_id`; chunks are 512 KiB, up to 100. MCP remains text-prepare/status-only and cannot upload, approve, or deliver attachments. QQ APIs cannot access bot requests. Ambiguous send receipts become unknown and are never retried. Synthetic protocol, attachment, HTTP-route, WebUI and MCP regressions pass. No real bot credentials/device delivery, target reachability or official acknowledgement behavior has been verified; employee-identity WeChat sending also remains unverified. References: [official WeCom AI bot SDK protocol](https://github.com/WecomTeam/aibot-node-sdk), [official upload/send instructions](https://github.com/WecomTeam/wecom-unified/blob/main/skills/wecom-unified/references/wecomcli-message.md). | IN_PROGRESS |
 
 **P13 offline status follow-up (2026-10-15):** HTTP-installed MCP clients now
 retain `get_wechat_send_status` while the WeChat client is unavailable; only
@@ -851,7 +900,16 @@ reachability, and official receipt behavior remain unverified.
 
 | ID | Task | Goal / modules | Depends | Implementation and acceptance | Status |
 |---|---|---|---|---|---|
-| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Latest hosted acceptance is commit `899ba14f42ad70cc5b097c4b42d10a90faa9d35d`: run `38759795335` on `main` and `38759795133` on `codex/roadmap-p8-p14-20261014` both passed local hub checks, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. The `main` artifact (`11986561145`) is 251,958,893 bytes, SHA-256 `5f47a8da29f040d1a66e9c5c3198d9750df86eb9ade2b2cb876666e9d3f9c09d`; roadmap artifact (`11986111205`) is 251,957,719 bytes, SHA-256 `cf72ec9e5ffa0e6b947133b98d4bf8ff3f43c70f9f233d9ea549bbcd448a97b1`. Both are retained through 2026-10-22. | DONE |
+| P14-01 | Performance, backup, security and package audit | CI, docs, Windows package | P7-P13 | CI runs backup/restore and synthetic performance checks with broad catastrophic-regression ceilings, builds the Windows portable package, executes isolated Hub/MCP/source smokes, and writes a deterministic SHA-256 manifest over both packages. Source ZIP entries use ordinal path ordering and a fixed timestamp; packaging smoke verifies repeated builds produce identical bytes. Privacy audits block local databases, caches, credentials and user-profile paths; only hash-pinned NapCat/QCE templates are allowed. The manifest suite binds hosted creation, pre-upload verification and downloaded-artifact verification to one commit/run provenance. Latest hosted acceptance for committed HEAD `4d3d93ccdf07d3943dfd6db003de03710305cd0b` is Windows run `38770697980` on `main` and `38770697482` on `codex/roadmap-p8-p14-20261014`; both passed the complete local gate, Windows portable/source builds, isolated smokes, privacy and manifest checks, artifact upload/download, and downloaded-byte/provenance verification. Artifacts `11992546125` (main) and `11991578222` (roadmap) remain available through 2026-10-22. These hosted runs cover committed HEAD only. The current worktree source package passed local isolated smoke and privacy checks on 2026-10-18, but has no hosted CI or artifact round-trip evidence. | IN_PROGRESS |
+
+**P14 current-worktree source package (2026-10-19):** the sanitized archive at
+`output/windows/lmh-source-20261019-final.zip` contains 694 entries and passed
+isolated WebUI, three-source, and read-only MCP smoke checks. The archive
+contains the current UIA sender and Windows notification runtime files. The
+package privacy scan and a separate check for the current user's profile path
+passed. Its SHA-256 is recorded in the development log. This is local-only
+evidence; P14-01 remains `IN_PROGRESS` pending current-revision hosted CI and
+artifact transfer.
 
 **P11 unindexed WeChat source media (2026-10-15):** the media library can
 optionally list media rows directly from the local read-only WeChat database
@@ -1023,10 +1081,12 @@ relationship metrics have synthetic coverage. This Windows installation's
 inspection; exact-username JPEG avatar caching now has bounded synthetic
 coverage. MCP contact lists retain avatar references as metadata, while an
 explicit `get_contact_avatar` call returns only a signature-checked image from
-the exact contact's existing local cache. QQ and WeCom currently provide avatar
-URL metadata only; no verified local byte-cache reader exists for these
-platforms, so uncached avatars use the initials fallback. Real-account avatar rendering and
-other-version schema/cache acceptance remain open. Moments now has an explicit-sync per-account SQLite
+the exact contact's existing local cache. QQ local avatar-file reads and WeCom
+conversation-avatar snapshot reads now populate Hub-owned caches. The actual
+browser platform switcher verified loaded, same-origin conversation avatars
+on all three platforms on 2026-10-19. Uncached avatars use initials; WeCom
+contact/member photos and other-version schema/cache acceptance remain open.
+Moments now has an explicit-sync per-account SQLite
 catalog whose cached media now joins the unified SQLite media library and
 bounded batch ZIP export; MCP can return explicitly requested cached Moments
 images and signature-checked MP4/WebM videos via the search-issued local token,
@@ -1036,7 +1096,9 @@ P13 now has an opt-in WeCom bot-identity adapter for Markdown and validated
 image/file/AMR voice/video attachments, with per-message local approval; it is
 not an employee sender. Protocol and UI tests are synthetic only: no real
 credentials, account, device, or delivery were used, and live receipt behavior
-remains unverified. Personal WeChat sending remains unavailable.
+remains unverified. Personal WeChat text sending is implemented as an opt-in
+UI Automation adapter for an authenticated client, with per-message approval
+and exact-account cached receipts; real automatic delivery remains unverified.
 An isolated headless Edge run against temporary synthetic data verified P12
 unlock, notification permission timing and conversation navigation, body-free
 notifications, wheel-based idle refresh, and SSE revocation after lock; it did
@@ -1049,8 +1111,8 @@ acceptance. No source-app account data/config is staged.
 Package inventories and provenance are recorded by the generated manifests
 under `output/windows`; local `build_context=local-worktree` is not hosted
 release provenance. Source and portable packages exclude local message
-databases, account settings, and runtime state. The full local gate most
-recently passed 427 Python and 17 UI tests, package privacy/manifest fixtures,
+databases, account settings, and runtime state. At an earlier baseline
+checkpoint the full local gate passed 427 Python and 17 UI tests, package privacy/manifest fixtures,
 syntax/compile checks, and the
 25,000-message benchmark (0.070 s first search, 2.596 s for 50 pages, 0.077 s
 backup, 0.220 s restore, zero WAL failures).
@@ -4034,10 +4096,10 @@ followed by one more package run so the source bundle contains this record.
 **P12-01 notification metadata follow-up (2026-10-15):** operating-system
 notification tags now use an opaque random ID retained in page memory for each
 exact platform/account/conversation tuple. This keeps same-page notification
-grouping and click routing while keeping raw account and conversation IDs out
-of OS notification metadata. The focused WebUI notification regression passes;
-real desktop delivery and native acceptance remain open, so P12-01 stays
-`IN_PROGRESS`.
+grouping while keeping raw account and conversation IDs out of OS notification
+metadata. At that point the Windows toast lacked activation arguments/actions;
+the later correction above records the current implementation. Real desktop
+visibility remains unconfirmed, so P12-01 stays `IN_PROGRESS`.
 
 **P14 current source checkpoint (2026-10-15):** previous hosted success applies
 to its recorded commit only. The sanitized source commit
@@ -4297,12 +4359,28 @@ VARIANT cleanup are paired. Focused sender (28) and WebUI (1) tests passed.
 This does not wire the manual UI Automation send into the prepared-send adapter
 or prove automatic delivery; P13-01 remains `IN_PROGRESS`.
 
-**P14 hosted acceptance for current code (2026-10-16):** commit
-`f98f05e1474cb2d3c67a9f300d53412883420f89` passed the complete hosted Windows
-workflow on both public branches: run `38767296744` on `main` and
-`38767296636` on `codex/roadmap-p8-p14-20261014`. Both passed the local Hub
+**P14 hosted acceptance for committed HEAD (2026-10-16):** commit
+`4d3d93ccdf07d3943dfd6db003de03710305cd0b` passed the complete hosted Windows
+workflow on both public branches: run `38770697980` on `main` and
+`38770697482` on `codex/roadmap-p8-p14-20261014`. Both passed the local Hub
 gate, portable/source builds, isolated smokes, privacy and manifest checks, and
 artifact upload/download byte and provenance verification. Artifacts
-`11991200021` (251,964,460 bytes) and `11989613988` (251,963,435 bytes) are
-retained through 2026-10-22. P14-01 remains `DONE` for this code revision;
-real-cache and live-device acceptance for P9/P11/P12/P13 remain open.
+`11992546125` (main) and `11991578222` (roadmap) remain available through
+2026-10-22. This does not cover the current uncommitted worktree. P14-01 remains
+`DONE` for committed HEAD; real-cache and live-device acceptance for
+P9/P11/P12/P13 remain open.
+
+**P9-02 runtime wiring and P12-01 activation revocation (2026-10-16):** a
+temporary-bundle regression now exercises NapCat runtime preparation through
+the sender's configuration reader and verifies the generated endpoint is
+enabled, token-authenticated, loopback-only, and has CORS/WebSocket disabled;
+it does not launch NapCat. Notification activation URLs now reject ports
+outside 1–65535, and disabling the notifications capability clears outstanding
+one-time targets so an old toast cannot open a conversation after the module is
+re-enabled. Four focused HTTP/configuration tests passed; 22 QQ sender tests and
+the notification WebUI check passed. The full local gate then passed 861 Python
+tests, five source-mutation gates, 32 WebUI checks, privacy and source-package
+smokes, and the 25,000-message performance probe. Windows Toast activation
+visibility and live QQ delivery remain unverified. These changes are
+uncommitted and are not covered by the hosted P14 runs above; P14-01 remains
+`IN_PROGRESS` for this worktree.
