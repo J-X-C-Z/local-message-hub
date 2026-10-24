@@ -19,6 +19,7 @@ $normalizedRoots = @($privateRoots | ForEach-Object {
 })
 $forbiddenFileNames = @('server.json', 'settings.json', 'wechat.json', 'wecom.json', 'qq-local.json',
                         'security.json', 'onebot11.json', 'napcat.json', 'wecom-bot.credentials',
+                        'email.credentials', 'email.cursor.json',
                         '.env', '.env.local', 'credentials.json', 'cookies.json', 'account.json')
 $forbiddenSuffixes = @('.db', '.db3', '.s3db', '.sl3', '.sqlite', '.sqlite3', '.mdb', '.accdb',
                        '.db-wal', '.db-shm', '.db-journal', '.sqlite-wal', '.sqlite-shm', '.sqlite-journal',

@@ -125,7 +125,8 @@ class WeChatSenderTest(unittest.TestCase):
         self.sender = WeChatGUISender(reader_factory=lambda: self.reader,
                                       win32=self.win32,
                                       timeout=2.0, sleep=self.sleeps.append,
-                                      uia_set_text=set_composer)
+                                      uia_set_text=set_composer,
+                                      uia_target_probe=lambda *_args: False)
         self.request = {"platform": "wechat", "account_id": "wxid_self0001",
                         "conversation_type": "private",
                         "conversation_id": "wxid_friend001",
@@ -167,6 +168,170 @@ class WeChatSenderTest(unittest.TestCase):
         reader.get_messages = get_messages
         self.sender.reader = lambda: reader
         return reader
+
+    def test_main_window_with_verified_active_target_is_preferred(self):
+        self.win32.sizes[7] = (1024, 768)
+        self.open_chat_window()
+        probes = []
+
+        def probe(handle, names):
+            probes.append((handle, tuple(names)))
+            return handle == 7
+
+        self.sender.uia_target_probe = probe
+        self.use_reader_with_exchange([], self.sent_rows)
+        result = self.sender.deliver(self.request)
+        self.assertEqual(result["message_id"], "wxid_friend001:message_1.db:5")
+        self.assertEqual(self.composer_calls[0][0], 7)
+        self.assertGreaterEqual(len(probes), 2)
+        self.assertEqual(self.win32.keys, [(0x0D, False)])
+        self.assertEqual(self.win32.clicks, [])
+
+    def test_main_window_target_change_blocks_enter(self):
+        self.win32.sizes[7] = (1024, 768)
+        self.sender.uia_target_probe = lambda *_args: True
+
+        def compose(_handle, _text, _names, can_commit, _send_enter):
+            self.sender.uia_target_probe = lambda *_args: False
+            self.assertFalse(can_commit())
+            raise WeChatSendError("wechat_conversation_changed")
+
+        self.sender.uia_set_text = compose
+        with self.assertRaises(WeChatSendError) as changed:
+            self.sender.deliver(self.request)
+        self.assertEqual(changed.exception.code, "wechat_conversation_changed")
+        self.assertEqual(self.win32.keys, [])
+
+    def test_main_window_probe_failure_fails_closed(self):
+        def unavailable(*_args):
+            raise RuntimeError("synthetic provider failure")
+
+        self.sender.uia_target_probe = unavailable
+        with self.assertRaises(WeChatSendError) as missing:
+            self.sender.deliver(self.request)
+        self.assertEqual(missing.exception.code, "wechat_conversation_not_open")
+        self.assertEqual(self.composer_calls, [])
+
+    def test_main_window_preflight_stops_before_composer_on_target_change(self):
+        self.win32.sizes[7] = (1024, 768)
+        answers = iter((True, False))
+        self.sender.uia_target_probe = lambda *_args: next(answers)
+        with self.assertRaises(WeChatSendError) as changed:
+            self.sender.deliver(self.request)
+        self.assertEqual(changed.exception.code, "wechat_conversation_changed")
+        self.assertEqual(self.composer_calls, [])
+        self.assertEqual(self.win32.keys, [])
+
+    def test_main_window_account_mismatch_preserves_composer(self):
+        self.win32.sizes[7] = (1024, 768)
+        self.sender.uia_target_probe = lambda *_args: True
+        with self.assertRaises(WeChatSendError) as mismatch:
+            self.sender.deliver({**self.request, "account_id": "wxid_other_account"})
+        self.assertEqual(mismatch.exception.code, "wechat_account_mismatch")
+        self.assertEqual(self.composer_calls, [])
+        self.assertEqual(self.win32.keys, [])
+
+    def test_multiple_verified_main_windows_fail_closed(self):
+        self.win32.windows.append((10, WINDOW_CLASS, "微信"))
+        self.sender.uia_target_probe = lambda *_args: True
+        with self.assertRaises(WeChatSendError) as ambiguous:
+            self.sender.deliver(self.request)
+        self.assertEqual(ambiguous.exception.code, "wechat_conversation_ambiguous")
+        self.assertEqual(self.composer_calls, [])
+
+    def test_main_window_missing_receipt_is_unknown_without_retry(self):
+        self.win32.sizes[7] = (1024, 768)
+        self.sender.uia_target_probe = lambda *_args: True
+        self.sender.timeout = 0.01
+        with self.assertRaises(WeChatDeliveryUnknown) as unknown:
+            self.sender.deliver(self.request)
+        self.assertEqual(unknown.exception.code, "wechat_receipt_missing")
+        self.assertEqual(self.win32.keys, [(0x0D, False)])
+        self.assertEqual(len(self.composer_calls), 1)
+
+    def test_uia_probe_requires_unique_exact_visible_header_and_input(self):
+        from unittest.mock import patch
+        from . import sender as module
+
+        header_id = ("top_content_h_view.top_spacing_v_view.top_left_info_v_view."
+                     "big_title_line_h_view.current_chat_name_label")
+        records = [
+            {30011: header_id, 30003: 50020, 30005: "Synthetic Friend",
+             30010: True, 30022: False},
+            {30011: "chat_input_field", 30003: 50004, 30005: "Synthetic Friend",
+             30010: True, 30022: False},
+        ]
+        releases = []
+        draft = ctypes.create_unicode_buffer("preserve existing draft")
+
+        def slot(pointer, index, *_types):
+            pid = pointer.value
+
+            def call(_this, *args):
+                if index == 2:
+                    releases.append(pid)
+                    return 0
+                if pid == 1 and index == 6:
+                    args[-1]._obj.value = 2
+                elif pid == 1 and index == 21:
+                    args[-1]._obj.value = 3
+                elif pid == 2 and index == 6:
+                    args[-1]._obj.value = 4
+                elif pid == 4 and index == 3:
+                    args[-1]._obj.value = len(records)
+                elif pid == 4 and index == 4:
+                    args[-1]._obj.value = 10 + args[0].value
+                elif pid == 11 and index == 16:
+                    args[-1]._obj.value = 20
+                elif pid == 20 and index == 4:
+                    args[-1]._obj.value = ctypes.addressof(draft)
+                else:
+                    self.fail(f"read-only probe attempted unexpected COM call: {pid}, {index}")
+                return 0
+            return call
+
+        class Ole32:
+            def CoInitializeEx(self, *_args):
+                return 0
+
+            def CoCreateInstance(self, *_args):
+                _args[-1]._obj.value = 1
+                return 0
+
+            def CoUninitialize(self):
+                pass
+
+        with patch.object(module.ctypes.windll, "ole32", Ole32()), \
+             patch.object(module, "_guid", lambda _text: ctypes.c_int()), \
+             patch.object(module, "_com_slot", slot), \
+             patch.object(module, "_uia_property",
+                          lambda ptr, prop: records[ptr.value - 10].get(prop)):
+            self.assertTrue(module._uia_target_proven(7, ["Synthetic Friend"]))
+            cases = [
+                [records[1]],
+                [records[0], records[1], dict(records[1])],
+                [{**records[0], 30005: "Synthetic Friend (2)"}, records[1]],
+                [{**records[0], 30011: "sidebar.current_chat_name_label"}, records[1]],
+                [{**records[0], 30022: True}, records[1]],
+                [records[0], {**records[1], 30022: True}],
+                [records[0], records[0], records[1]],
+                [records[0], records[1], {**records[1], 30005: "Other Friend"}],
+            ]
+            original = list(records)
+            for case in cases:
+                with self.subTest(case=case):
+                    records[:] = case
+                    self.assertFalse(module._uia_target_proven(7, ["Synthetic Friend"]))
+            records[:] = original
+            with patch.object(module.ctypes.windll.oleaut32, "SysFreeString", lambda *_args: None):
+                with self.assertRaises(WeChatSendError) as present:
+                    module._uia_set_chat_text(7, "approved text", ["Synthetic Friend"],
+                                              lambda: True,
+                                              lambda: self.fail("must preserve draft"))
+                self.assertEqual(present.exception.code, "wechat_composer_draft_present")
+                self.assertEqual(draft.value, "preserve existing draft")
+        self.assertIn(1, releases)
+        self.assertIn(4, releases)
 
     def test_unicode_input_structure_matches_windows_pointer_size(self):
         self.assertEqual(ctypes.sizeof(_INPUT), 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)

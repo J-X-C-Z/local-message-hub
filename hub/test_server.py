@@ -563,7 +563,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(result['items'][0]['platform'], 'telegram')
         with self.assertRaisesRegex(ValueError, '未知平台'):
             self.hub.start_sync('telegram')
-        self.assertEqual([source['id'] for source in self.hub.source_info()['sources']], ['wechat', 'wecom', 'qq'])
+        self.assertEqual([source['id'] for source in self.hub.source_info()['sources']], ['wechat', 'wecom', 'qq', 'email'])
 
     def test_telegram_http_preview_and_import_job(self):
         payload = json.dumps({
@@ -607,7 +607,7 @@ class ServerTest(unittest.TestCase):
     def test_overview_reports_live_source_import_and_index_values(self):
         with self.request('/api/stats?platform=all') as response:
             overview = json.load(response)['overview']
-        self.assertEqual([source['id'] for source in overview['sources']], ['wechat', 'wecom', 'qq'])
+        self.assertEqual([source['id'] for source in overview['sources']], ['wechat', 'wecom', 'qq', 'email'])
         self.assertEqual(overview['sources'][0]['message_count'], 1)
         self.assertGreater(overview['index_bytes'], 0)
         self.assertEqual(overview['recent_imports'], [])
@@ -5751,7 +5751,7 @@ class ServerTest(unittest.TestCase):
         provider._loaded = True
         provider._messages_released = False
         provider.engine = SimpleNamespace(cache_root=str(cache_root))
-        provider._messages = lambda: [{
+        provider._raw_messages = lambda: [{
             'message_id': 'room:cached-media', 'conversation_id': 'room',
             'media': [
                 {'_local_cache_path': 'Cache/Image/first.png', 'n': 'first.png'},

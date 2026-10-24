@@ -55,7 +55,7 @@ class WeComMediaResolverTest(unittest.TestCase):
 
             adapter = object.__new__(self.adapter.WeComAdapter)
             adapter.engine = types.SimpleNamespace(cache_root=str(root))
-            adapter._messages = lambda: [{
+            adapter._raw_messages = lambda: [{
                 "message_id": "synthetic-message",
                 "media": [
                     {"p": "images/first.png", "n": "first.png"},
@@ -78,7 +78,7 @@ class WeComMediaResolverTest(unittest.TestCase):
             image.write_bytes(b"fixture")
             adapter = object.__new__(self.adapter.WeComAdapter)
             adapter.engine = types.SimpleNamespace(cache_root=str(root))
-            adapter._messages = lambda: [{
+            adapter._raw_messages = lambda: [{
                 "message_id": "synthetic-message",
                 "media": [
                     {"p": "../outside.png", "n": "outside.png"},
@@ -98,7 +98,7 @@ class WeComMediaResolverTest(unittest.TestCase):
             cached.write_bytes(b'local fixture')
             adapter = object.__new__(self.adapter.WeComAdapter)
             adapter.engine = types.SimpleNamespace(cache_root=str(root))
-            adapter._messages = lambda: [{'message_id': 'local-message', 'media': [
+            adapter._raw_messages = lambda: [{'message_id': 'local-message', 'media': [
                 {'_local_cache_path': 'Cache/Image/local.png', 'n': 'local.png'}]}]
 
             result = adapter.media('local-message')
@@ -116,7 +116,7 @@ class WeComMediaResolverTest(unittest.TestCase):
             adapter = object.__new__(self.adapter.WeComAdapter)
             adapter.engine = types.SimpleNamespace(cache_root=str(root))
             adapter.voice_cache_dir = output_dir
-            adapter._messages = lambda: [{"message_id": "voice-message", "media": [
+            adapter._raw_messages = lambda: [{"message_id": "voice-message", "media": [
                 {"p": "voice.silk", "n": "voice.silk"},
             ]}]
             decoder = types.SimpleNamespace(decode=Mock(return_value=b"1234"))
@@ -129,6 +129,46 @@ class WeComMediaResolverTest(unittest.TestCase):
             self.assertEqual(voice.read_bytes(), payload)
             self.assertEqual({path.name for path in root.iterdir()}, {"voice.silk", "hub-voice-cache"})
             self.assertEqual(list(output_dir.glob("*.wav.tmp")), [])
+
+    def test_restart_restores_media_without_running_source_sync(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / 'Cache' / 'Image' / 'cached.png'
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b'cached fixture')
+            restored = {'same-message': [{'_local_cache_path': 'Cache/Image/cached.png', 'n': 'cached.png'}]}
+            engine = types.SimpleNamespace(
+                cache_root=str(root), restore_cached_media_context=Mock(return_value=restored),
+                run_once=Mock(side_effect=AssertionError('source sync must not run')))
+            with patch.object(self.adapter, 'SyncEngine', return_value=engine):
+                adapter = self.adapter.WeComAdapter()
+            self.assertTrue(adapter.restore_cached_media())
+            self.assertEqual(Path(adapter.media('same-message')['path']), image.resolve())
+            self.assertEqual(adapter.media('other-message')['reason'], 'message_not_found')
+            engine.run_once.assert_not_called()
+
+            engine.restore_cached_media_context.return_value = None
+            with patch.object(self.adapter, 'SyncEngine', return_value=engine):
+                missing = self.adapter.WeComAdapter()
+            self.assertFalse(missing.restore_cached_media())
+            self.assertFalse(missing._loaded)
+            engine.run_once.assert_not_called()
+
+    def test_media_keeps_internal_path_while_public_rows_are_redacted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / 'Cache' / 'Image' / 'cached.png'
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b'cached fixture')
+            adapter = object.__new__(self.adapter.WeComAdapter)
+            adapter._loaded = True
+            adapter._messages_released = False
+            adapter.engine = types.SimpleNamespace(cache_root=str(root), iter_messages=lambda: iter([
+                {'message_id': 'same-message', 'media': [{'_local_cache_path': 'Cache/Image/cached.png'}]}]))
+            with patch.object(self.adapter, 'strip_internal', side_effect=lambda row: {
+                    **row, 'media': [{}]}):
+                self.assertEqual(list(adapter._messages())[0]['media'], [{}])
+                self.assertTrue(adapter.media('same-message')['available'])
 
 
 class WeComGroupRosterTest(unittest.TestCase):

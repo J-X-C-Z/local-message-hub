@@ -133,11 +133,17 @@ $requiredFiles = @(
     'webui/index.html', 'webui/app.js', 'webui/style.css',
     'webui/package.json', 'webui/package-lock.json',
     'integrations/wechat/requirements.txt', 'integrations/wechat/provider.py',
+    'integrations/wechat/official_accounts.py',
+    'integrations/wechat/article_cache.py',
     'integrations/wecom/adapter.py', 'integrations/qq/provider.py', 'integrations/qq/sender.py',
     'integrations/qq/local_provider.py', 'integrations/qq/local_wal.py', 'integrations/qq/key_reader.py',
     'integrations/qq/key_store.py', 'integrations/qq/send_target.py',
     'integrations/telegram/adapter.py',
+    'integrations/email/adapter.py', 'integrations/email/provider.py',
+    'integrations/campus/catalog.py', 'integrations/campus/adapter.py', 'hub/campus.py',
+    'hub/campus_briefing.py', 'hub/campus_scoring.py',
     'docs/LOCAL_HUB.md', 'docs/mcp-contract.md', 'docs/windows-package.md',
+    'docs/information-station.md', 'docs/campus-sources.md',
     'docs/avatar-and-attachments.md', 'docs/roadmap.md', 'docs/weflow-gap-matrix.md',
     'docs/performance.md', 'docs/qq-local.md'
 )
@@ -166,10 +172,13 @@ $includePaths = @(
     'integrations/qq/README.md',
     'integrations/qq/upstream/expanded/qq-chat-exporter-6.3.2',
     'integrations/telegram',
+    'integrations/email',
+    'integrations/campus',
     'scripts/package-windows-source.ps1', 'scripts/build-qce-windows.ps1', 'scripts/assert-package-privacy.ps1',
     'scripts/test-package-privacy.ps1',
     'scripts/benchmark-memory.py',
     'docs/LOCAL_HUB.md', 'docs/mcp-contract.md', 'docs/windows-package.md',
+    'docs/information-station.md', 'docs/campus-sources.md',
     'docs/avatar-and-attachments.md', 'docs/roadmap.md', 'docs/weflow-gap-matrix.md',
     'docs/performance.md', 'docs/qq-local.md'
 )

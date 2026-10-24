@@ -1,6 +1,7 @@
 """Persisted feature availability and permission checks for the local Hub."""
 
 CAPABILITIES = {
+    "campus": {"name": "中大学生信息站", "available": True, "default": True, "reason": ""},
     "search": {"name": "全局搜索", "available": True, "core": True, "default": True, "reason": ""},
     "chat": {"name": "聊天记录", "available": True, "default": True, "reason": ""},
     "contacts": {"name": "联系人", "available": True, "default": True, "reason": ""},

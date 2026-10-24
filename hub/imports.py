@@ -52,6 +52,11 @@ def parse_import(payload: bytes, file_format: str, default_platform: str, defaul
         raise ValueError("请选择有效平台")
     if len(payload) > 256 * 1024 * 1024:
         raise ValueError("导入文件超过 256 MiB 限制")
+    if file_format in ("eml", "mbox"):
+        if default_platform not in ("email", "all"):
+            raise ValueError("邮件导入必须选择邮件或全部平台")
+        from integrations.email.adapter import parse_email_export
+        return parse_email_export(payload, file_format, account_id=default_account)
     if file_format == "telegram":
         if default_platform not in ("telegram", "all"):
             raise ValueError("Telegram Desktop 导出必须选择 Telegram 平台")

@@ -53,6 +53,7 @@ from .windows_notifications import show_notification
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / '.local'
 NATIVE_PLATFORMS = ('wechat', 'wecom', 'qq')
+SYNC_PLATFORMS = (*NATIVE_PLATFORMS, 'email')
 MOMENT_MEDIA_TOKEN_TTL_SECONDS = 15 * 60
 MEDIA_TOKEN_LIMIT = 4096
 MAX_SYNC_CONVERSATION_ID_LENGTH = 512
@@ -393,6 +394,7 @@ class Hub:
         self.sync_gate_lock = threading.RLock()
         self.send_approval_challenges = {}
         self.providers = {}
+        self._campus_service = None
         self.media_paths = {}
         self.media_preview_lock = threading.Lock()
         self.moment_media_paths = {}
@@ -413,7 +415,8 @@ class Hub:
         self.sources = {p: {'id': p, 'state': 'disconnected', 'version': v,
                            'last_sync': None, 'error': '', 'progress': ''}
                         for p, v in [('wechat', '4.x / WeFlow 5.0.0'),
-                                     ('wecom', '本地快照'), ('qq', 'QQNT / 本地数据库')]}
+                                     ('wecom', '本地快照'), ('qq', 'QQNT / 本地数据库'),
+                                     ('email', 'IMAP / Gmail / Outlook')]}
         if resume_imports:
             self._resume_import_jobs()
 
@@ -423,6 +426,8 @@ class Hub:
 
     def close(self):
         self.stop.set()
+        if self._campus_service is not None:
+            self._campus_service.close()
         self.auto_exports.close()
         self.resource_jobs.close()
         self.send_repository.close()
@@ -452,6 +457,10 @@ class Hub:
         return {'token': token, 'expires_in': 60}
 
     def consume_send_approval_challenge(self, request_id, token, platform=None):
+        # Verify the one-time challenge before any state lookup so a token that
+        # was issued for another platform is always reported as an invalid
+        # token, then consume it only after every precondition has passed: a
+        # not-ready WeChat client must not burn the challenge.
         if not isinstance(token, str):
             raise ValueError('发送确认令牌无效或已过期')
         now = time.monotonic()
@@ -462,10 +471,23 @@ class Hub:
                 if challenge and challenge[1] <= now:
                     self.send_approval_challenges.pop(request_id, None)
                 raise ValueError('发送确认令牌无效或已过期')
-            self.send_approval_challenges.pop(request_id, None)
-        request = self.send_service.status(request_id, platform)
-        if not request or request['status'] != 'pending_approval':
+            verified = challenge
+        pending = self.send_service.status(request_id, platform)
+        if not pending or pending['status'] != 'pending_approval':
             raise ValueError('发送请求不存在或已处理')
+        if platform == 'wechat':
+            readiness = self.wechat_sender.readiness(True)
+            if (not isinstance(readiness, dict) or readiness.get('state') != 'ready'
+                    or not isinstance(readiness.get('account_id'), str)
+                    or not readiness['account_id']):
+                raise ValueError('本机微信客户端不可用；请在已登录的 Windows 主机上打开微信')
+            if readiness['account_id'] != pending['account_id']:
+                raise ValueError('account_id must match the currently logged-in WeChat account')
+        with self.lock:
+            if self.send_approval_challenges.get(request_id) is not verified:
+                raise ValueError('发送确认令牌无效或已过期')
+            self.send_approval_challenges.pop(request_id, None)
+        return pending
 
     def require_capability(self, name):
         if not self.capability_enabled(name):
@@ -632,11 +654,63 @@ class Hub:
         with self.lock:
             self.sources[platform].update(values)
 
+    def campus_service(self):
+        from .campus import CampusService
+        with self.lock:
+            if self._campus_service is None:
+                self._campus_service = CampusService(self.storage)
+            return self._campus_service
+
+    def campus_wechat_accounts(self, query=''):
+        if not isinstance(query, str) or len(query) > 100:
+            raise ValueError('公众号查询条件无效')
+        selected = {(s.get('account_id'), s.get('contact_id')): s
+                    for s in self.campus_service().sources()['items'] if s.get('kind') == 'local_wechat'}
+        contacts = {}
+        for term in ('中山大学', '中大学工', '康乐解学'):
+            for item in self.store.contacts('wechat', term, limit=200, kind='official')['items']:
+                if query and query.casefold() not in (item['name'] + ' ' + str(item.get('extra', {}).get('alias', ''))).casefold():
+                    continue
+                key = (item['account_id'], item['id'])
+                source = selected.get(key)
+                contacts[key] = dict(id=item['id'], account_id=item['account_id'], name=item['name'],
+                    alias=item.get('extra', {}).get('alias', ''), selected=source is not None,
+                    article_count=source.get('item_count') if source else None)
+        return {'items': list(contacts.values()), 'total': len(contacts)}
+
+    def import_campus_wechat_accounts(self, values):
+        if not isinstance(values, dict) or set(values) != {'account_id', 'contact_ids'}:
+            raise ValueError('公众号导入参数无效')
+        account, ids = values['account_id'], values['contact_ids']
+        if (not isinstance(account, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', account)
+                or not isinstance(ids, list) or not 1 <= len(ids) <= 30
+                or any(not isinstance(cid, str) or not re.fullmatch(r'gh_[A-Za-z0-9_-]{1,100}', cid) for cid in ids)):
+            raise ValueError('请选择有效的本机公众号')
+        allowed = {(c['account_id'], c['id']) for c in self.campus_wechat_accounts()['items']}
+        if any((account, cid) not in allowed for cid in ids):
+            raise ValueError('公众号必须属于当前索引中已识别的中大相关账号')
+        from integrations.wechat.official_accounts import get_cached_official_articles
+        reports = []
+        for cid in dict.fromkeys(ids):
+            contact = next(c for c in self.store.contacts('wechat', cid, limit=200, account_id=account, kind='official')['items'] if c['id'] == cid)
+            report = get_cached_official_articles(account, cid, limit=500)
+            if report.get('warning'):
+                raise ValueError('该公众号本机缓存暂不可读；请核对微信账号和已缓存的数据库密钥')
+            reports.append(self.campus_service().import_local_wechat(contact, report))
+        return {'accounts': reports, 'added': sum(r['added'] for r in reports),
+                'total': sum(r['total'] for r in reports), 'invalid': sum(r['invalid'] for r in reports)}
+
+    def source_status_snapshot(self):
+        with self.lock:
+            return [dict(source) for source in self.sources.values()]
+
     def source_info(self):
         with self.lock:
             result = [dict(s) for s in self.sources.values()]
         counts = self.store.source_counts()
         for source in result:
+            if source['id'] == 'email':
+                source['email_config'] = self.email_provider().status()
             stats = counts.get(source['id'], {})
             source.update(message_count=stats.get('messages', 0),
                           conversation_count=stats.get('conversations', 0))
@@ -733,6 +807,7 @@ class Hub:
                                 deleted.append(child.relative_to(self.storage).as_posix())
             finally:
                 self.store = ChatStore(database)
+                self.email_provider().reset_checkpoint()
                 self.analytics = AnalyticsService(self.store)
                 self.send_repository = SendRepository(self.store.path)
                 self.send_service = SendService(self.send_repository, {
@@ -765,6 +840,7 @@ class Hub:
                     restore_media_backup(self.store, self.storage, path, Path(RUNTIME) / 'media')
                 else:
                     self.store.restore_from(path)
+                self.email_provider().reset_checkpoint()
             except Exception:
                 try:
                     self.store.restore_from(rollback)
@@ -801,6 +877,9 @@ class Hub:
             payload = json.loads(stage.read_text(encoding='utf-8'))
             messages = payload['messages']
             conversations = payload['conversations']
+            conversations_by_id = {}
+            for index, conversation in enumerate(conversations):
+                conversations_by_id.setdefault(conversation['id'], []).append((index, conversation))
             offset = int(job['processed'])
             written_messages = int(job['messages'])
             written_conversations = int(job['conversations'])
@@ -815,7 +894,8 @@ class Hub:
                     groups.setdefault((message['platform'], message['account_id']), []).append(message)
                 for (platform, account), group in groups.items():
                     conv_ids = {item['conversation_id'] for item in group}
-                    convs = [item for item in conversations if item['id'] in conv_ids]
+                    selected = [item for cid in conv_ids for item in conversations_by_id.get(cid, ())]
+                    convs = [item for _, item in sorted(selected, key=lambda item: item[0])]
                     report = self._import_ingest(cancel, platform, account, convs, group)
                     if report is None:
                         self.store.update_import_job(job_id, state='cancelled', updated_at=int(time.time()))
@@ -859,7 +939,7 @@ class Hub:
 
     def start_sync(self, platform='all', conversation_id=None):
         self.require_capability('sync')
-        if platform not in (*NATIVE_PLATFORMS, 'all'):
+        if platform not in (*SYNC_PLATFORMS, 'all'):
             raise ValueError('未知平台')
         if conversation_id is not None:
             if platform != 'qq':
@@ -867,7 +947,7 @@ class Hub:
             if (not isinstance(conversation_id, str) or not conversation_id.strip() or
                     len(conversation_id) > MAX_SYNC_CONVERSATION_ID_LENGTH):
                 raise ValueError('QQ 会话标识无效')
-        for p in NATIVE_PLATFORMS if platform == 'all' else [platform]:
+        for p in SYNC_PLATFORMS if platform == 'all' else [platform]:
             with self.lock:
                 history = self.qq_history_job
                 if p in self.jobs or (p == 'qq' and history and history['state'] in ('starting', 'running', 'cancel_requested')):
@@ -941,7 +1021,8 @@ class Hub:
             error_message = {
                 'wechat': '本机微信读取失败，请保持微信登录并检查数据库目录',
                 'wecom': '企业微信快照读取失败，请检查本机目录和密钥',
-                'qq': 'QQ 本地数据库读取失败，请检查目录、密钥与数据库版本'
+                'qq': 'QQ 本地数据库读取失败，请检查目录、密钥与数据库版本',
+                'email': '邮件同步失败，请检查服务器、授权凭据与邮箱 IMAP 权限'
             }[platform]
             if platform == 'wecom':
                 try:
@@ -950,6 +1031,10 @@ class Hub:
                         error_message = exc.safe_message
                 except ImportError:
                     pass
+            if platform == 'email':
+                from integrations.email.provider import EmailProviderError
+                if isinstance(exc, EmailProviderError):
+                    error_message = str(exc)
             self.update(platform, state='error', progress='', error=error_message)
             print('Source failure:', platform, type(exc).__name__, flush=True)
         finally:
@@ -962,6 +1047,36 @@ class Hub:
                 self.jobs.discard(platform)
                 if self.sync_cancellations.get(platform) is cancel:
                     self.sync_cancellations.pop(platform, None)
+
+    def email_provider(self):
+        from integrations.email.provider import EmailProvider
+        with self.lock:
+            if 'email' not in self.providers:
+                self.providers['email'] = EmailProvider(self.storage)
+            return self.providers['email']
+
+    def sync_email(self, cancel=None):
+        provider = self.email_provider()
+        if not provider.status().get('configured'):
+            self.update('email', state='disconnected', progress='', error='请先配置邮箱账号')
+            return 'unavailable'
+        result = provider.sync(cancel=lambda: self._sync_cancelled(cancel))
+        records = result['records']
+        messages = records['messages']
+        if messages:
+            account = messages[0]['account_id']
+            if not self._sync_ingest(cancel, 'email', account, records['conversations'], messages):
+                return
+        with self.sync_gate_lock:
+            if self._sync_cancelled(cancel):
+                return
+            provider.commit_checkpoint(result['checkpoint'])
+        if records.get('invalid') or records.get('warnings') or result.get('oversized'):
+            self.update('email', error='部分邮件暂未完整归档，请检查邮件大小或格式')
+            return 'partial'
+        if result.get('has_more'):
+            self.update('email', error='本批邮件已归档；仍有历史邮件待同步，可再次同步继续')
+            return 'partial'
 
     def sync_wechat(self, cancel=None):
         from integrations.wechat.provider import WeChatProvider
@@ -1678,6 +1793,13 @@ class Hub:
                         self.start_sync(p)
 
     def configure(self, platform, values):
+        if platform == 'email':
+            with self.sync_gate_lock, self.lock:
+                if 'email' in self.jobs:
+                    raise ValueError('邮件同步正在运行，请稍后修改配置')
+                self.email_provider().configure(values)
+            self.start_sync('email')
+            return
         if platform not in NATIVE_PLATFORMS:
             raise ValueError('未知平台')
         if platform == 'wecom':
@@ -1781,8 +1903,9 @@ class Hub:
         if 'image_tier' in params and platform != 'wechat':
             raise ValueError('图片质量选项仅适用于微信聊天图片')
         video_variant = params.get('video_variant')
-        if video_variant is not None and (platform != 'wechat' or
-                                          video_variant not in ('poster', 'thumbnail')):
+        if video_variant is not None and (platform not in ('wechat', 'qq') or
+                                          video_variant not in ('poster', 'thumbnail') or
+                                          platform == 'qq' and video_variant != 'poster'):
             raise ValueError('视频预览选项无效')
         if params.get('resource_kind') == 'qq_cache':
             if platform != 'qq' or not self.capability_enabled('media'):
@@ -1827,13 +1950,15 @@ class Hub:
         if 'image_tier' in params and (platform != 'wechat' or row.get('type') != 'image'
                                       or params.get('resource_index') is not None):
             raise ValueError('图片质量选项仅适用于微信聊天图片')
-        if video_variant is not None and (row.get('type') != 'video' or
+        if video_variant is not None and platform == 'wechat' and (row.get('type') != 'video' or
                                           params.get('resource_index') is not None):
             raise ValueError('视频预览选项仅适用于微信聊天视频')
         resource_index = params.get('resource_index')
         if platform in ('qq', 'wecom') and isinstance(resource_index, bool):
             raise ValueError('附件序号无效')
         qq_local = platform == 'qq' and row.get('local_database') is True
+        if video_variant is not None and platform == 'qq' and not qq_local:
+            raise ValueError('视频封面仅适用于 QQ 本地数据库视频')
         if platform == 'qq' and resource_index is not None and not qq_local:
             try:
                 index = int(resource_index)
@@ -1893,7 +2018,16 @@ class Hub:
                         raise ValueError
                 except (ValueError, TypeError):
                     raise ValueError('附件序号无效') from None
-            result = provider.media(row, resource_index=resource_index)
+            media_args = {'resource_index': resource_index}
+            if video_variant is not None:
+                entries = row.get('media') or []
+                index = resource_index if resource_index is not None else 0
+                if (not isinstance(entries, list) or not 0 <= index < len(entries) or
+                        not isinstance(entries[index], dict) or
+                        (entries[index].get('kind') or entries[index].get('type')) != 'video'):
+                    raise ValueError('视频封面仅适用于 QQ 本地数据库视频')
+                media_args['video_variant'] = video_variant
+            result = provider.media(row, **media_args)
         else:
             result = provider.media(row)
         if (platform == 'wechat' and row['type'] == 'voice' and result.get('reason')
@@ -1961,6 +2095,9 @@ class Hub:
             return unavailable
         key = self.register_media_path(Path(path).resolve())
         resolved = {'media_url': '/local-media/' + key}
+        if qq_local and video_variant == 'poster':
+            resolved.update(video_variant='poster', preview_only=True,
+                            mime_type=result.get('content_type'))
         if silk_fallback:
             resolved['mime_type'] = 'audio/silk'
             resolved['download_name'] = 'voice.silk'
@@ -3327,7 +3464,31 @@ class Handler(BaseHTTPRequestHandler):
         paging = {'limit': min(max(int(params.get('limit', 100)), 1), 1000),
                   'offset': max(int(params.get('offset', 0)), 0)}
         store = self.hub.store
-        if path == '/api/sources':
+        if path == '/api/campus/wechat-accounts':
+            result = self.hub.campus_wechat_accounts(params.get('q', ''))
+        elif path == '/api/campus/briefing':
+            result = self.hub.campus_service().briefing(
+                section=params.get('section', 'selected'), q=params.get('q', ''),
+                topic=params.get('topic', ''), date=params.get('date', ''), **paging)
+        elif path == '/api/campus/items':
+            result = self.hub.campus_service().search(
+                q=params.get('q', ''), category=params.get('category', ''),
+                source_id=params.get('source_id', ''), campus=params.get('campus', ''),
+                relevant=params.get('relevant', '') == '1',
+                bookmarked=params.get('bookmarked', '') == '1', **paging)
+        elif path == '/api/campus/sources':
+            result = self.hub.campus_service().sources()
+        elif path == '/api/campus/profile':
+            result = self.hub.campus_service().profile()
+        elif path == '/api/campus/refresh':
+            result = self.hub.campus_service().refresh_status()
+        elif path == '/api/campus/updates':
+            result = self.hub.campus_service().update_settings()
+        elif path == '/api/campus/scoring':
+            result = self.hub.campus_service().scoring_status()
+        elif re.fullmatch(r'/api/campus/items/[a-f0-9]{64}', path):
+            result = self.hub.campus_service().get_item(path.rsplit('/', 1)[1])
+        elif path == '/api/sources':
             result = self.hub.source_info()
         elif path == '/api/accounts':
             result = {'items': store.account_scopes()}
@@ -3429,6 +3590,8 @@ class Handler(BaseHTTPRequestHandler):
             from .mcp_server import MCPServer
             mcp = MCPServer(
                 self.hub.store, allow_writes=self.hub.settings.get('mcp_write_enabled') is True,
+                source_status_reader=self.hub.source_status_snapshot,
+                campus_reader=self.hub.campus_service,
                 media_reader=self.hub.read_cached_image,
                 capabilities=self.hub.settings.get('capabilities'),
                 capability_reader=lambda: self.hub.settings.get('capabilities'),
@@ -3904,7 +4067,37 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b'{}')
             if not isinstance(body, dict):
                 raise ValueError('JSON 对象无效')
-            if path == '/api/notifications/test':
+            if path == '/api/campus/wechat-accounts/import':
+                result = self.hub.import_campus_wechat_accounts(body)
+            elif path == '/api/campus/profile':
+                result = self.hub.campus_service().configure_profile(body)
+            elif path == '/api/campus/updates':
+                result = self.hub.campus_service().configure_updates(body)
+            elif path == '/api/campus/scoring':
+                result = self.hub.campus_service().configure_scoring(body)
+            elif path == '/api/campus/scoring/run':
+                if body:
+                    raise ValueError('评分请求无需参数')
+                result = self.hub.campus_service().start_scoring()
+            elif re.fullmatch(r'/api/campus/sources/[A-Za-z0-9_-]{1,128}', path):
+                result = self.hub.campus_service().configure_source(path.rsplit('/', 1)[1], body)
+            elif path == '/api/campus/refresh':
+                if body:
+                    raise ValueError('刷新请求无需参数')
+                result = self.hub.campus_service().start_refresh()
+            elif path == '/api/campus/wechat':
+                if set(body) != {'url'}:
+                    raise ValueError('请提供公众号文章链接')
+                result = self.hub.campus_service().import_wechat(body['url'])
+            elif re.fullmatch(r'/api/campus/items/[a-f0-9]{64}/state', path):
+                result = self.hub.campus_service().set_item_state(path.split('/')[-2], body)
+            elif re.fullmatch(r'/api/campus/events/[a-f0-9]{64}/state', path):
+                result = self.hub.campus_service().set_event_state(path.split('/')[-2], body)
+            elif re.fullmatch(r'/api/campus/items/[a-f0-9]{64}/fetch', path):
+                if body:
+                    raise ValueError('获取全文无需参数')
+                result = self.hub.campus_service().ensure_full_text(path.split('/')[-2])
+            elif path == '/api/notifications/test':
                 self.hub.require_capability('notifications')
                 show_notification('这是一条测试通知，不含聊天内容。')
                 result = {'submitted': True}
@@ -4545,6 +4738,8 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def capability_for_path(path, method='GET'):
+        if path.startswith('/api/campus/'):
+            return 'campus'
         if path in ('/api/events/messages', '/api/notifications/test',
                     '/api/notifications/message', '/api/notifications/activate'):
             return 'notifications'
@@ -4628,6 +4823,7 @@ def main():
     save_json(hub.storage / 'server.json', {'pid': os.getpid(), 'url': f'http://127.0.0.1:{server.server_port}'})
     if not args.no_autosync:
         threading.Thread(target=hub.autosync, daemon=True).start()
+        hub.campus_service().start_updates(lambda: hub.capability_enabled('campus'))
     print(f'LocalChatHub http://127.0.0.1:{server.server_port}', flush=True)
     try:
         server.serve_forever()

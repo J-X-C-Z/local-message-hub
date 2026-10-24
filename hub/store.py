@@ -36,7 +36,7 @@ from pathlib import Path
 __all__ = ["ChatStore", "PLATFORMS", "MESSAGE_TYPES", "MEDIA_TYPES"]
 
 #: Platforms understood by the store.  ``all`` is a query scope, not a platform.
-PLATFORMS = ("wechat", "wecom", "qq", "telegram")
+PLATFORMS = ("wechat", "wecom", "qq", "telegram", "email")
 
 #: Canonical message types.
 MESSAGE_TYPES = ("text", "image", "video", "voice", "file", "link", "system")
@@ -453,6 +453,18 @@ class ChatStore:
                     text, content='messages', content_rowid='rowid', tokenize='trigram'
                 )
             """)
+            trigger = conn.execute("SELECT sql FROM sqlite_master WHERE name='messages_fts_update'").fetchone()
+            if trigger and "WHEN" not in trigger[0].upper():
+                conn.executescript("""
+                    BEGIN IMMEDIATE;
+                    DROP TRIGGER IF EXISTS messages_fts_update;
+                    CREATE TRIGGER messages_fts_update AFTER UPDATE OF text ON messages
+                    WHEN old.text IS NOT new.text BEGIN
+                        INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+                        INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+                    END;
+                    COMMIT;
+                """)
             conn.executescript("""
                 CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
                     INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
@@ -460,7 +472,8 @@ class ChatStore:
                 CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
                     INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
                 END;
-                CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF text ON messages BEGIN
+                CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF text ON messages
+                WHEN old.text IS NOT new.text BEGIN
                     INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
                     INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
                 END;
@@ -568,8 +581,19 @@ class ChatStore:
 
                 for conv in conv_rows.values():
                     self._upsert_conversation(conn, platform, account_id, conv)
+                message_conversations = {_sid(m.get("conversation_id")) for m in msg_rows.values()}
+                affected = set(conv_rows)
+                for cid in message_conversations:
+                    parent = conn.execute("""
+                        INSERT INTO conversations (platform, account_id, id, message_count)
+                        VALUES (?, ?, ?, 0)
+                        ON CONFLICT(platform, account_id, id) DO NOTHING
+                    """, (platform, account_id, cid))
+                    if parent.rowcount:
+                        affected.add(cid)
                 for msg in msg_rows.values():
-                    self._upsert_message(conn, platform, account_id, msg)
+                    if self._upsert_message(conn, platform, account_id, msg):
+                        affected.add(_sid(msg.get("conversation_id")))
                 for contact in contact_rows.values():
                     self._upsert_contact(conn, platform, account_id, contact)
 
@@ -595,11 +619,7 @@ class ChatStore:
                             updated_at=excluded.updated_at
                     """, (platform, account_id, conversation_id, next_offset, cursor_json, int(complete)))
 
-                # Refresh aggregates for every conversation touched this batch.
-                affected = {
-                    _sid(m.get("conversation_id")) for m in msg_rows.values()
-                }
-                affected.update(conv_rows.keys())
+                # Unchanged batches need neither FTS writes nor aggregate scans.
                 for cid in affected:
                     self._refresh_conversation(conn, platform, account_id, cid)
 
@@ -671,18 +691,9 @@ class ChatStore:
             ),
         )
 
-    def _upsert_message(self, conn, platform, account_id, msg) -> None:
+    def _upsert_message(self, conn, platform, account_id, msg) -> bool:
         cid = _sid(msg.get("conversation_id"))
-        # Guarantee the parent conversation row exists so joins never lose rows.
-        conn.execute(
-            """
-            INSERT INTO conversations (platform, account_id, id, message_count)
-            VALUES (?, ?, ?, 0)
-            ON CONFLICT(platform, account_id, id) DO NOTHING
-            """,
-            (platform, account_id, cid),
-        )
-        conn.execute(
+        result = conn.execute(
             """
             INSERT INTO messages
                 (platform, account_id, id, conversation_id, sender_id, sender_name,
@@ -702,6 +713,14 @@ class ChatStore:
                 raw_type        = excluded.raw_type,
                 preview         = excluded.preview,
                 extra           = excluded.extra
+            WHERE (messages.conversation_id, messages.sender_id, messages.sender_name,
+                   messages.timestamp, messages.type, messages.text, messages.is_self,
+                   messages.media_url, messages.file_name, messages.raw_type,
+                   messages.preview, messages.extra)
+                IS NOT (excluded.conversation_id, excluded.sender_id, excluded.sender_name,
+                        excluded.timestamp, excluded.type, excluded.text, excluded.is_self,
+                        excluded.media_url, excluded.file_name, excluded.raw_type,
+                        excluded.preview, excluded.extra)
             """,
             (
                 platform,
@@ -721,6 +740,7 @@ class ChatStore:
                 _dump_extra(msg),
             ),
         )
+        return result.rowcount > 0
 
     def _upsert_contact(self, conn, platform, account_id, contact) -> None:
         extra = contact.get("extra") if isinstance(contact.get("extra"), dict) else {}
@@ -1146,7 +1166,7 @@ class ChatStore:
         }
 
     def search(self, q, platform="all", type="", start="", end="", limit=100, offset=0,
-               cursor=None, preview_chars=None):
+               cursor=None, preview_chars=None, account_id="", conversation_id=""):
         limit = max(0, int(limit))
         offset = max(0, int(offset))
         where = []
@@ -1155,6 +1175,12 @@ class ChatStore:
         if scope:
             where.append(scope[5:])  # strip leading " AND "
             params += scope_params
+        if account_id:
+            where.append("m.account_id = ?")
+            params.append(_sid(account_id))
+        if conversation_id:
+            where.append("m.conversation_id = ?")
+            params.append(_sid(conversation_id))
         if q:
             if self._fts_enabled and len(q) >= 3:
                 where.append("m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)")
@@ -1166,7 +1192,10 @@ class ChatStore:
             params.append(type)
         self._append_time_bounds(where, params, start, end, alias="m")
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-        decoded_cursor = _decode_cursor(cursor, _cursor_scope([q, platform, type, start, end]))
+        cursor_scope = [q, platform, type, start, end]
+        if account_id or conversation_id:
+            cursor_scope += [_sid(account_id), _sid(conversation_id)]
+        decoded_cursor = _decode_cursor(cursor, _cursor_scope(cursor_scope))
         cursor_sql = ""
         cursor_params = []
         if decoded_cursor:
@@ -1195,15 +1224,19 @@ class ChatStore:
                            WHERE p.platform=m.platform AND p.account_id=m.account_id
                              AND p.id=m.conversation_id LIMIT 1
                        )) AS conversation_avatar_url
-                FROM messages m
+                FROM (
+                    SELECT m.rowid AS page_rowid FROM messages m
+                    {where_sql}
+                    {cursor_sql}
+                    ORDER BY m.timestamp DESC, m.rowid DESC
+                    LIMIT ? OFFSET ?
+                ) page
+                JOIN messages m ON m.rowid=page.page_rowid
                 LEFT JOIN conversations c
                   ON c.platform = m.platform
                  AND c.account_id = m.account_id
                  AND c.id = m.conversation_id
-                {where_sql}
-                {cursor_sql}
                 ORDER BY m.timestamp DESC, m.rowid DESC
-                LIMIT ? OFFSET ?
                 """,
                 params + cursor_params + [limit + 1, 0 if decoded_cursor else offset],
             ).fetchall()
@@ -1212,7 +1245,7 @@ class ChatStore:
         rows = rows[:limit]
         items = self._attach_sender_avatars([self._row_to_message(r) for r in rows])
         next_cursor = _encode_cursor(rows[-1]["timestamp"], rows[-1]["_cursor_rowid"],
-                                     _cursor_scope([q, platform, type, start, end])) if has_more and rows else None
+                                     _cursor_scope(cursor_scope)) if has_more and rows else None
         return {
             "items": items,
             "total": total,

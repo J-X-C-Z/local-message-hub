@@ -5,7 +5,8 @@ const platforms = {
   wechat: {name: '微信', icon: 'message-circle'},
   wecom: {name: '企业微信', icon: 'briefcase-business'},
   qq: {name: 'QQ', icon: 'messages-square'},
-  telegram: {name: 'Telegram', icon: 'send'}
+  telegram: {name: 'Telegram', icon: 'send'},
+  email: {name: '邮件', icon: 'mail'}
 };
 const views = {
   chat: {name: '聊天记录', icon: 'messages-square', index: '01'},
@@ -16,7 +17,8 @@ const views = {
   sources: {name: '数据源', icon: 'database', index: '06'},
   imports: {name: '导入记录', icon: 'file-up', index: '07'},
   settings: {name: '设置', icon: 'settings-2', index: '08'},
-  moments: {name: '朋友圈', icon: 'images', index: '09'}
+  moments: {name: '朋友圈', icon: 'images', index: '09'},
+  campus: {name: '中大学生信息站', icon: 'graduation-cap', index: '10'}
 };
 const typeNames = {text: '文本', image: '图片', sticker: '表情', video: '视频', voice: '语音', file: '文件', link: '链接', location: '位置', system: '系统消息'};
 const qqResources = extra => Array.isArray(extra?.roaming_resources) ? extra.roaming_resources
@@ -41,6 +43,22 @@ const state = {
   theme: localStorage.getItem('hub.theme') || 'light', lastSync: null, backups: [], pendingSends: [], sendReview: null, qqSendReadiness: null, wechatSendReadiness: null, wecomBotIdentity: null, pairReport: null, mcp: null, operations: [], importJobs: [], importFile: null, importPreview: null, importBusy: false, importPlatform: 'all', importAccount: '', moments: {items: [], total: 0}, momentFilter: {q: '', username: '', start: '', end: '', account_id: ''}, momentOffset: 0, momentExporting: false, momentExportFormat: 'json', qqForwardResources: new Map(), qqForwardObjectUrls: new Set()
 };
 state.selfSentDaily = null;
+state.campus = {section: 'selected', briefing: {}, items: [], total: 0, sources: [], profile: {}, refresh: {}, updates: {}, offset: 0,
+  filters: {q: '', category: '', source_id: '', campus: '', relevant: '1', bookmarked: ''}};
+let campusPollTimer = null;
+let lastChatView = 'chat';
+const campusSections = {
+  selected: {name: '精选', icon: 'sparkles', description: '根据你的学生资料与关注主题，筛选可核对的校园信息。'},
+  all: {name: '全部动态', icon: 'rss', description: '按时间浏览已归档信息，同一事件的重复报道合并展示。'},
+  hot: {name: '热点', icon: 'flame', description: '最近 48 小时内的事件，按独立来源与报道数量排序。'},
+  daily: {name: '校园日报', icon: 'calendar-days', description: '按北京时间的发布日期整理，每条摘要均可回到原始报道。'},
+  topics: {name: '主题', icon: 'hash', description: '围绕奖学金、竞赛、选课与其他关注主题阅读。'},
+  bookmarks: {name: '收藏', icon: 'bookmark', description: '你保存的校园信息，随时回看原文与正文。'},
+  sources: {name: '管理来源', icon: 'panels-top-left', description: '控制参与采集的公开来源与本机公众号。'},
+  pipeline: {name: '采集与处理', icon: 'workflow', description: '查看采集、正文、事件合并与模型评分的实际进度。'},
+  services: {name: '学生服务', icon: 'graduation-cap', description: '学校与学院的官方服务入口，需登录的信息请到原系统查看。'},
+  profile: {name: '学生资料', icon: 'user-round', description: '调整校区、培养层次与关注关键词，让精选更贴近你的需要。'}
+};
 let mediaPreviewController = null;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[x]));
 const safeUrl = value => /^\/(?![\\/])/.test(String(value || '')) && !String(value || '').includes('\\') ? String(value) : '';
@@ -160,20 +178,21 @@ function setTheme(theme) {
 function renderShell() {
   if (accountLockTransition) return;
   const enabled = id => state.settings.capabilities?.[id]?.enabled !== false;
-  const mainNav = ['chat', 'search', 'contacts', 'media', 'moments', 'stats'].filter(id => enabled(id === 'stats' ? 'stats' : id));
+  const station = state.view === 'campus';
+  const mainNav = ['chat', 'search', 'contacts', 'media', 'moments', 'stats'].filter(id => enabled(id));
   const manageNav = ['imports', 'sources', 'settings'].filter(id => id !== 'imports' || enabled('imports'));
-  document.querySelector('#app').innerHTML = `<div class="app-shell">
+  document.querySelector('#app').innerHTML = `<div class="app-shell ${station ? 'station-shell' : ''}">
     <header class="topbar">
       <a class="brand" href="#chat" aria-label="消息中枢"><img src="/assets/hub.svg" alt=""><div><div class="brand-name">消息中枢</div><div class="brand-sub">LOCAL ARCHIVE / 001</div></div></a>
       <span class="brand-divider"></span>
-      <div class="platform-switch" role="group" aria-label="聊天平台">${Object.entries(platforms).map(([id, p]) => {
+      <div class="platform-switch" role="group" aria-label="聊天平台与信息站">${Object.entries(platforms).map(([id, p]) => {
         const source = state.sources.find(x => x.id === id);
-        return `<button class="platform-button ${state.platform === id ? 'active' : ''}" data-platform="${id}" aria-pressed="${state.platform === id}">${icon(p.icon)}<span>${p.name}</span>${id !== 'all' ? `<span class="dot ${statusDot(source)}" title="${sourceState(source)}"></span>` : ''}</button>`;
-      }).join('')}</div>
+        return `<button class="platform-button ${!station && state.platform === id ? 'active' : ''}" data-platform="${id}" aria-pressed="${!station && state.platform === id}">${icon(p.icon)}<span>${p.name}</span>${id !== 'all' ? `<span class="dot ${statusDot(source)}" title="${sourceState(source)}"></span>` : ''}</button>`;
+      }).join('')}${enabled('campus') ? `<button class="platform-button station-switch ${station ? 'active' : ''}" data-station="selected" aria-pressed="${station}">${icon('graduation-cap')}<span>信息站</span></button>` : ''}</div>
       <div class="top-actions"><span class="local-tag">${icon('shield-check')}<span>本机数据</span></span><button class="btn" data-action="sync" ${state.busy || !enabled('sync') ? 'disabled aria-disabled="true"' : ''}>${icon('refresh-cw', state.busy ? 'spin' : '')}<span class="sync-text">同步</span></button>${iconButton(document.body.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme', '切换明暗主题')}</div>
     </header>
     <div class="body-grid">
-      <aside class="sidebar"><div class="nav-section"><div class="nav-label">档案 / ARCHIVE</div>${mainNav.map(id => navItem(id)).join('')}</div><div class="nav-section"><div class="nav-label">管理 / MANAGE</div>${manageNav.map(id => navItem(id)).join('')}</div><div class="sidebar-sources">${renderMiniSources()}</div><div class="sidebar-footer">${avatar('本')}<div><div class="small">本地工作区</div><div class="label">WINDOWS / LOCAL</div></div></div></aside>
+      <aside class="sidebar" aria-label="${station ? '信息站导航' : '聊天档案导航'}">${station ? renderCampusNavigation() : `<div class="nav-section"><div class="nav-label">档案 / ARCHIVE</div>${mainNav.map(id => navItem(id)).join('')}</div><div class="nav-section"><div class="nav-label">管理 / MANAGE</div>${manageNav.map(id => navItem(id)).join('')}</div><div class="sidebar-sources">${renderMiniSources()}</div>`}<div class="sidebar-footer">${avatar(station ? '中' : '本')}<div><div class="small">${station ? '中大学生信息站' : '本地工作区'}</div><div class="label">${station ? 'SYSU / CAMPUS' : 'WINDOWS / LOCAL'}</div></div></div></aside>
       <main class="content" id="content" aria-label="${views[state.view].name}"></main>
     </div>
     <footer class="footer"><span id="footer-status">${footerStatus()}</span><span>UTC+08:00 <span class="muted">/</span> 本地档案</span></footer>
@@ -181,8 +200,23 @@ function renderShell() {
   renderView();
 }
 function navItem(id) { return `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" title="${views[id].name}" aria-current="${state.view === id ? 'page' : 'false'}">${icon(views[id].icon)}<span>${views[id].name}</span></button>`; }
-function renderMiniSources() { return ['wechat', 'wecom', 'qq'].map(id => {const s = state.sources.find(x => x.id === id); return `<button class="source-mini" data-platform="${id}" style="width:100%" title="${sourceState(s)}"><span><span class="dot ${statusDot(s)}"></span>${platforms[id].name}</span><span class="mono small">${s?.message_count ? fmt(s.message_count) : '—'}</span></button>`;}).join(''); }
-function footerStatus() { return state.busy ? '正在同步本地记录…' : state.sources.some(x => x.state === 'indexing' || x.state === 'syncing') ? '正在建立本地搜索索引…' : `${state.sources.filter(x => ['connected', 'partial'].includes(x.state)).length} / 3 数据源已连接${state.lastSync ? ' · 更新于 ' + dt(state.lastSync) : ''}`; }
+function renderCampusNavigation() {
+  return [['阅读', ['selected', 'all', 'hot', 'daily', 'topics', 'bookmarks']], ['管理', ['sources', 'pipeline']], ['我的校园', ['services', 'profile']]].map(([label, ids]) => `<nav class="nav-section" aria-label="${label}"><div class="nav-label">${label}</div>${ids.map(id => `<button class="nav-item ${state.campus.section === id ? 'active' : ''}" data-station="${id}" title="${campusSections[id].name}" aria-current="${state.campus.section === id ? 'page' : 'false'}">${icon(campusSections[id].icon)}<span>${campusSections[id].name}</span></button>`).join('')}</nav>`).join('');
+}
+function campusRoute(hash) {
+  const match = /^#campus(?:\/([a-z]+))?$/.exec(hash);
+  return match && (!match[1] || Object.hasOwn(campusSections, match[1])) ? match[1] || 'selected' : '';
+}
+async function navigateCampus(section, updateHash = true) {
+  if (!Object.hasOwn(campusSections, section) || state.settings.capabilities?.campus?.enabled === false) return;
+  if (state.view !== 'campus') lastChatView = state.view;
+  clearMediaSelection();closeModal();
+  state.view = 'campus';state.campus.section = section;state.campus.offset = 0;state.campus.items = [];
+  if (updateHash && typeof history !== 'undefined') history.replaceState(null, '', '#campus/' + section);
+  renderShell();await loadView();
+}
+function renderMiniSources() { return ['wechat', 'wecom', 'qq', 'email'].map(id => {const s = state.sources.find(x => x.id === id); return `<button class="source-mini" data-platform="${id}" style="width:100%" title="${sourceState(s)}"><span><span class="dot ${statusDot(s)}"></span>${platforms[id].name}</span><span class="mono small">${s?.message_count ? fmt(s.message_count) : '—'}</span></button>`;}).join(''); }
+function footerStatus() { return state.busy ? '正在同步本地记录…' : state.sources.some(x => x.state === 'indexing' || x.state === 'syncing') ? '正在建立本地搜索索引…' : `${state.sources.filter(x => ['connected', 'partial'].includes(x.state)).length} / 4 数据源已连接${state.lastSync ? ' · 更新于 ' + dt(state.lastSync) : ''}`; }
 function head(extra = '') {const view = views[state.view];return `<div class="view-head"><div><div class="eyebrow">${view.index} / ${platforms[state.platform].name}</div><h1>${view.name}</h1></div><div class="head-actions">${extra}</div></div>`;}
 function empty(name, text = '', action = '', symbol = 'inbox') { return `<div class="empty">${icon(symbol)}<h3>${esc(name)}</h3>${text ? `<p>${esc(text)}</p>` : ''}${action}</div>`; }
 function loading() { return '<div class="loading-lines" aria-label="加载中">' + '<div class="skeleton"></div>'.repeat(7) + '</div>'; }
@@ -197,6 +231,7 @@ function renderView() {
   content.setAttribute('aria-label', views[state.view].name);
   if (state.view === 'chat') content.innerHTML = renderChat();
   else if (state.view === 'moments') content.innerHTML = renderMoments();
+  else if (state.view === 'campus') content.innerHTML = renderCampus();
   else if (state.view === 'sources') content.innerHTML = renderSources();
   else if (state.view === 'imports') content.innerHTML = renderImports();
   else if (state.view === 'settings') content.innerHTML = renderSettings();
@@ -696,7 +731,7 @@ function renderMediaTile(entry, i) {
   const resource = entry.resource;
   const cachedEmoji = message.platform === 'wechat' && ['47', '11000'].includes(String(message.raw_type || ''));
   const imageUrl = safeUrl(entry.type === 'video'
-    ? message.media_poster_url : resource?.media_url || message.media_url);
+    ? resource?.media_poster_url || message.media_poster_url : resource?.media_url || message.media_url);
   const image = (['image', 'video'].includes(entry.type) || cachedEmoji) && imageUrl;
   const key = mediaEntryKey(entry);
   const available = mediaEntryAvailable(entry);
@@ -704,10 +739,14 @@ function renderMediaTile(entry, i) {
   const sizeLabel = entry.resourceKind === 'qq_cache' && Number.isFinite(size) && size > 0
     ? `<small>${esc(fmtBytes(size))}</small>` : '';
   const canOpenChat = message.conversation_id && message.id != null && !['moment', 'qq_cache', 'wechat_source'].includes(entry.resourceKind);
-  const mimeType = resource?.mime_type || message.extra?.mime_type || message.media_mime_type;
+  const mimeType = entry.type === 'video'
+    ? resource?.media_poster_mime_type || message.media_poster_mime_type
+    : resource?.mime_type || message.extra?.mime_type || message.media_mime_type;
   const preview = image ? `<img src="${esc(localMediaPreviewUrl(imageUrl, mimeType))}" alt="${esc(entry.name)}" loading="lazy">`
     : icon(cachedEmoji ? 'smile' : {video: 'video', voice: 'audio-lines', file: 'file-text', image: 'image'}[entry.type] || 'file');
-  const hint = entry.resourceIndex !== null || ['moment', 'qq_cache'].includes(entry.resourceKind)
+  const hint = entry.type === 'video' && imageUrl
+    ? '<span class="media-hint">视频封面</span>'
+    : entry.resourceIndex !== null || ['moment', 'qq_cache'].includes(entry.resourceKind)
     ? '<span class="media-hint">本机附件 · 点击预览</span>' : '';
   const title = cachedEmoji ? 'title="只读取当前账号已存在的表情缓存"' : '';
   const unavailable = cachedEmoji && !available ? '<small class="muted">本机未缓存表情</small>' : '';
@@ -717,6 +756,7 @@ function renderMediaTile(entry, i) {
     && ['message', 'wechat_source'].includes(entry.resourceKind) && entry.resourceIndex === null && !cachedEmoji
     && message.conversation_id && message.id != null;
   const actions = [
+    entry.type === 'video' && imageUrl ? iconButton('image', `video-poster:${i}`, '查看视频封面') : '',
     canLoadBestWechatImage ? iconButton('maximize-2', `wechat-best-image:${i}`, '读取本机缓存中的最佳画质') : '',
     canOpenChat ? iconButton('message-square-text', `open-media-chat:${i}`, '查看所在聊天') : '',
   ].filter(Boolean).join('');
@@ -739,10 +779,13 @@ async function startMediaPreviews(request = state.request) {
       entry.message.platform === 'wecom' && entry.type === 'image' &&
       (entry.resourceKind || 'message') === 'message' && entry.resourceIndex !== null ||
       entry.message.platform === 'qq' && entry.type === 'image' &&
-      (entry.resourceKind || 'message') === 'message' && entry.resourceIndex !== null) &&
-    !safeUrl(entry.resource?.media_url || (entry.type === 'video'
-      ? entry.message.media_poster_url : entry.message.media_url)) &&
-    entry.message.media_available !== false);
+      (entry.resourceKind || 'message') === 'message' && entry.resourceIndex !== null ||
+      entry.message.platform === 'qq' && entry.type === 'video' && entry.message.extra?.local_database === true &&
+      (entry.resourceKind || 'message') === 'message') &&
+    !safeUrl(entry.type === 'video'
+      ? entry.resource?.media_poster_url || entry.message.media_poster_url
+      : entry.resource?.media_url || entry.message.media_url) &&
+    (entry.type === 'video' || entry.message.media_available !== false));
   if (!pending.length) return;
   const controller = new AbortController();
   const queue = [];
@@ -764,23 +807,31 @@ async function startMediaPreviews(request = state.request) {
             resource_id: message.extra?.resource_id || message.id}
           : {platform: message.platform, account_id: message.account_id, message_id: message.id,
             conversation_id: message.conversation_id,
-            ...(entry.resourceIndex !== null ? {resource_index: entry.resourceIndex}
-              : entry.type === 'video' ? {video_variant: 'poster'} : {image_tier: 'mid'})};
+            ...(entry.resourceIndex !== null ? {resource_index: entry.resourceIndex} : {}),
+            ...(entry.type === 'video' ? {video_variant: 'poster'}
+              : entry.resourceIndex === null ? {image_tier: 'mid'} : {})};
         const result = await api('/api/media/resolve', params, {signal: controller.signal});
         if (controller.signal.aborted || request !== state.request || state.view !== 'media') return;
         const url = safeUrl(result.media_url);
         if (url) {
-          if (entry.resourceIndex !== null) {
+          if (entry.type === 'video') {
+            const target = entry.resource || message;
+            target.media_poster_url = url;
+            target.media_poster_mime_type = result.mime_type;
+          } else if (entry.resourceIndex !== null) {
             entry.resource.media_url = url;
             entry.resource.mime_type = result.mime_type || entry.resource.mime_type;
           }
-          else if (entry.type === 'video') message.media_poster_url = url;
           else {
             message.media_url = url;
             message.media_mime_type = result.mime_type || message.media_mime_type;
           }
           const preview = document.querySelector(`.media-tile[data-media-preview-tile="${index}"] .media-preview`);
-          if (preview) preview.innerHTML = `<img src="${esc(localMediaPreviewUrl(url, result.mime_type))}" alt="${esc(entry.name)}" loading="lazy">`;
+          if (preview) preview.innerHTML = `<img src="${esc(localMediaPreviewUrl(url, result.mime_type))}" alt="${esc(entry.name)}" loading="lazy">${entry.type === 'video' ? '<span class="media-hint">视频封面</span>' : ''}`;
+          if (entry.type === 'video') {
+            const tile = document.querySelector(`.media-tile[data-media-preview-tile="${index}"]`);
+            if (tile?.outerHTML) tile.outerHTML = renderMediaTile(entry, index);
+          }
         } else if (entry.type !== 'video') {
           message.media_available = false;
           const tile = document.querySelector(`.media-tile[data-media-preview-tile="${index}"]`);
@@ -892,7 +943,7 @@ function usesCursorPaging() {return state.view === 'search' || (state.view === '
 function pager() {const hasNext = usesCursorPaging() ? !!state.pageCursors[state.page + 1] : (state.page + 1) * 60 < state.total;return `<div class="pager">${iconButton('chevron-left', 'page-prev', '上一页', state.page === 0 ? 'disabled' : '')}<span>${state.page + 1} / ${Math.ceil(state.total / 60)}</span>${iconButton('chevron-right', 'page-next', '下一页', hasNext ? '' : 'disabled')}</div>`;}
 function renderSources() {
   const syncEnabled = state.settings.capabilities?.sync?.enabled !== false;
-  return `${head('<button class="btn" data-action="sync" ' + (syncEnabled ? '' : 'disabled aria-disabled="true"') + '>' + icon('refresh-cw') + '同步全部</button>')}<div class="view-scroll view-enter"><div class="section-title"><h2>已集成的数据源</h2><span class="label">3 PLATFORMS</span></div><div class="source-list">${['wechat', 'wecom', 'qq'].map(id => {
+  return `${head('<button class="btn" data-action="sync" ' + (syncEnabled ? '' : 'disabled aria-disabled="true"') + '>' + icon('refresh-cw') + '同步全部</button>')}<div class="view-scroll view-enter"><div class="section-title"><h2>已集成的数据源</h2><span class="label">4 PLATFORMS</span></div><div class="source-list">${['wechat', 'wecom', 'qq', 'email'].map(id => {
     const s = state.sources.find(x => x.id === id) || {id, state: 'disconnected'};
     const discovery = s.key_discovery || {};
     const canDiscover = id === 'qq' && ['key_required', 'key_invalid'].includes(s.error_code);
@@ -900,8 +951,8 @@ function renderSources() {
       ['processes', 'tested', 'read_mib'].every(key => Number.isInteger(discovery[key]));
     const scanCounts = hasScanCounts
       ? `<div class="source-detail"><span>扫描 ${fmt(discovery.processes)} 个 QQ 进程</span><span>验证 ${fmt(discovery.tested)} 个候选</span><span>读取 ${fmt(discovery.read_mib)} MiB</span></div>` : '';
-    return `<section class="source-row"><div class="source-logo ${id}">${icon(platforms[id].icon)}</div><div><div class="source-name"><h2>${platforms[id].name}</h2><span class="pill"><span class="dot ${statusDot(s)}"></span>${sourceState(s)}</span></div><div class="source-detail"><span>${id === 'qq' ? '内置 QQ 本地数据库读取' : id === 'wechat' ? '内置本地数据库读取' : '内置企业微信读取'}</span>${s.version ? `<span class="mono">${esc(s.version)}</span>` : ''}</div>${id === 'wechat' && s.image_key_configured ? '<div class="source-detail"><span>图片解密密钥 · 已在本机加密保存</span></div>' : ''}${id === 'wechat' && s.avatar_database?.message ? `<div class="source-detail"><span>头像库 · ${esc(s.avatar_database.message)}</span></div>` : ''}${id === 'qq' && Number.isInteger(s.database_count) ? `<div class="source-detail"><span>${fmt(s.database_count)} 个本地数据库</span></div>` : ''}<div class="source-detail"><span>${fmt(s.conversation_count)} 个会话</span><span>${fmt(s.message_count)} 条已索引消息</span>${s.last_sync ? `<span>更新 ${dt(s.last_sync)}</span>` : ''}</div>${s.error ? `<div class="source-error">${esc(s.error)}</div>` : ''}${canDiscover && discovery.message ? `<div class="source-detail">${esc(discovery.message)}</div>` : ''}${canDiscover ? scanCounts : ''}${s.progress ? `<div class="source-detail mono">${esc(s.progress)}</div>` : ''}</div><div class="head-actions">${canDiscover ? `<button class="btn" data-action="discover-qq-key" ${discovery.state === 'running' || !syncEnabled ? 'disabled aria-disabled="true"' : ''}>${icon(discovery.state === 'running' ? 'loader-circle' : 'key-round')}${discovery.state === 'running' ? '正在只读查找' : '只读发现密钥'}</button>` : ''}${iconButton('refresh-cw', 'sync:' + id, '同步' + platforms[id].name, syncEnabled ? '' : 'disabled')}${iconButton('settings-2', 'configure:' + id, '配置' + platforms[id].name, syncEnabled ? '' : 'disabled')}</div></section>`;
-  }).join('')}</div><div class="source-description">${icon('lock-keyhole')}<span>索引、缓存与连接配置保存在本机。原始数据库只读。</span></div></div>`;
+    return `<section class="source-row"><div class="source-logo ${id}">${icon(platforms[id].icon)}</div><div><div class="source-name"><h2>${platforms[id].name}</h2><span class="pill"><span class="dot ${statusDot(s)}"></span>${sourceState(s)}</span></div><div class="source-detail"><span>${id === 'email' ? 'IMAP 邮箱同步 · EML / MBOX 归档导入' : id === 'qq' ? '内置 QQ 本地数据库读取' : id === 'wechat' ? '内置本地数据库读取' : '内置企业微信读取'}</span>${id === 'email' && s.email_config?.configured ? `<span>${esc(s.email_config.username)} · ${esc(s.email_config.folder || 'INBOX')}</span>` : ''}${s.version ? `<span class="mono">${esc(s.version)}</span>` : ''}</div>${id === 'wechat' && s.image_key_configured ? '<div class="source-detail"><span>图片解密密钥 · 已在本机加密保存</span></div>' : ''}${id === 'wechat' && s.avatar_database?.message ? `<div class="source-detail"><span>头像库 · ${esc(s.avatar_database.message)}</span></div>` : ''}${id === 'qq' && Number.isInteger(s.database_count) ? `<div class="source-detail"><span>${fmt(s.database_count)} 个本地数据库</span></div>` : ''}<div class="source-detail"><span>${fmt(s.conversation_count)} 个会话</span><span>${fmt(s.message_count)} 条已索引消息</span>${s.last_sync ? `<span>更新 ${dt(s.last_sync)}</span>` : ''}</div>${s.error ? `<div class="source-error">${esc(s.error)}</div>` : ''}${canDiscover && discovery.message ? `<div class="source-detail">${esc(discovery.message)}</div>` : ''}${canDiscover ? scanCounts : ''}${s.progress ? `<div class="source-detail mono">${esc(s.progress)}</div>` : ''}</div><div class="head-actions">${canDiscover ? `<button class="btn" data-action="discover-qq-key" ${discovery.state === 'running' || !syncEnabled ? 'disabled aria-disabled="true"' : ''}>${icon(discovery.state === 'running' ? 'loader-circle' : 'key-round')}${discovery.state === 'running' ? '正在只读查找' : '只读发现密钥'}</button>` : ''}${iconButton('refresh-cw', 'sync:' + id, '同步' + platforms[id].name, syncEnabled ? '' : 'disabled')}${iconButton('settings-2', 'configure:' + id, '配置' + platforms[id].name, syncEnabled ? '' : 'disabled')}</div></section>`;
+  }).join('')}</div><div class="source-description">${icon('lock-keyhole')}<span>索引、缓存与连接配置保存在本机。原始数据库与邮箱只读。</span></div></div>`;
 }
 function renderImports() {
   const report = state.importPreview;
@@ -914,20 +965,25 @@ function renderImports() {
     const percent = job.valid ? Math.floor(job.processed * 100 / job.valid) : 100;
     return `<div class="backup-row import-job"><div><strong>${esc(job.filename)}</strong><span class="small muted">${labels[job.state] || job.state} · ${fmt(job.processed)} / ${fmt(job.valid)} 条 · ${new Intl.DateTimeFormat('zh-CN', {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(job.created_at * 1000))}</span>${active ? `<progress max="100" value="${percent}"></progress>` : ''}${job.error ? `<span class="small error-text">${esc(job.error)}</span>` : ''}</div>${active ? iconButton('x', `cancel-import:${encodeURIComponent(job.id)}`, '取消导入') : `<span class="small muted">${fmt(job.messages)} 条处理</span>`}</div>`;
   }).join('') || '<p class="muted small">暂无导入任务</p>';
-  return `${head()}<div class="view-scroll view-enter import-view"><section class="settings-group"><h2>导入 JSON / CSV</h2><p class="muted small">支持消息中枢 JSON/CSV，以及 Telegram Desktop 单个会话 JSON 导出。Telegram 记录为导入数据，不提供原生登录或自动同步。</p><div class="import-fields"><label>默认平台<select id="import-platform">${['all','wechat','wecom','qq','telegram'].map(id => `<option value="${id}" ${state.importPlatform === id ? 'selected' : ''}>${platforms[id].name}</option>`).join('')}</select></label><label>默认账号<input id="import-account" type="text" maxlength="128" placeholder="Telegram 可留空以使用导出账号标识" value="${esc(state.importAccount)}"></label></div><label class="btn import-picker">${icon('paperclip')}选择 JSON 或 CSV 文件<input id="import-file" type="file" accept=".json,.csv,application/json,text/csv"></label><span class="small muted import-filename">${esc(state.importFile?.name || '尚未选择文件')}</span><div class="import-actions"><button class="btn primary" data-action="preview-import" ${!state.importFile || state.importBusy ? 'disabled' : ''}>${icon('scan-search')}预览校验</button><button class="btn" data-action="commit-import" ${!report?.valid || state.importBusy ? 'disabled' : ''}>${icon('database-zap')}创建导入任务</button></div>${report ? `<div class="import-report"><div class="history-metrics"><span>${fmt(report.total)} 条记录</span><span>${fmt(report.valid)} 条有效</span><span>${fmt(report.invalid)} 条待修复</span></div>${warnings}${sample}${errors}${report.invalid > (report.errors?.length || 0) ? `<p class="muted small">其余错误已省略，最多显示 100 条。</p>` : ''}</div>` : ''}</section><section class="settings-group"><h2>导入任务</h2><div class="backup-list">${jobs}</div></section></div>`;
+  return `${head()}<div class="view-scroll view-enter import-view"><section class="settings-group"><h2>导入消息与邮件归档</h2><p class="muted small">支持消息中枢 JSON/CSV，Telegram Desktop 单个会话 JSON 导出，以及 EML / MBOX 邮件归档（自动识别为邮件平台）。Telegram 记录为导入数据，不提供原生登录或自动同步。</p><div class="import-fields"><label>默认平台<select id="import-platform">${['all','wechat','wecom','qq','telegram','email'].map(id => `<option value="${id}" ${state.importPlatform === id ? 'selected' : ''}>${platforms[id].name}</option>`).join('')}</select></label><label>默认账号<input id="import-account" type="text" maxlength="128" placeholder="Telegram 可留空以使用导出账号标识" value="${esc(state.importAccount)}"></label></div><label class="btn import-picker">${icon('paperclip')}选择 JSON、CSV、EML 或 MBOX 文件<input id="import-file" type="file" accept=".json,.csv,.eml,.mbox,application/json,text/csv,message/rfc822,application/mbox"></label><span class="small muted import-filename">${esc(state.importFile?.name || '尚未选择文件')}</span><div class="import-actions"><button class="btn primary" data-action="preview-import" ${!state.importFile || state.importBusy ? 'disabled' : ''}>${icon('scan-search')}预览校验</button><button class="btn" data-action="commit-import" ${!report?.valid || state.importBusy ? 'disabled' : ''}>${icon('database-zap')}创建导入任务</button></div>${report ? `<div class="import-report"><div class="history-metrics"><span>${fmt(report.total)} 条记录</span><span>${fmt(report.valid)} 条有效</span><span>${fmt(report.invalid)} 条待修复</span></div>${warnings}${sample}${errors}${report.invalid > (report.errors?.length || 0) ? `<p class="muted small">其余错误已省略，最多显示 100 条。</p>` : ''}</div>` : ''}</section><section class="settings-group"><h2>导入任务</h2><div class="backup-list">${jobs}</div></section></div>`;
 }
 async function uploadImport(preview) {
   if (!state.importFile || state.importBusy) return;
   state.importPlatform = document.querySelector('#import-platform')?.value || state.importPlatform;
   state.importAccount = document.querySelector('#import-account')?.value || '';
   state.importBusy = true;renderView();
-  const platform = state.importPlatform;
+  const file = state.importFile;
+  const selectedPlatform = state.importPlatform;
+  const extension = file.name.split('.').pop().toLowerCase();
+  const mailArchive = ['eml', 'mbox'].includes(extension);
+  const platform = mailArchive && state.importPlatform === 'all' ? 'email' : state.importPlatform;
   const account = state.importAccount;
-  const format = state.importFile.name.toLowerCase().endsWith('.csv') ? 'csv' : state.importPlatform === 'telegram' ? 'telegram' : 'json';
+  const format = mailArchive ? extension : extension === 'csv' ? 'csv' : state.importPlatform === 'telegram' ? 'telegram' : 'json';
   const query = new URLSearchParams({format, platform, account, filename: state.importFile.name});
   try {
     const response = await fetch(`/api/imports${preview ? '/preview' : ''}?${query}`, {method: 'POST', body: state.importFile, headers: {'Content-Type': 'application/octet-stream'}});
     const result = await response.json();if (!response.ok) throw new Error(result.error || '导入失败');
+    if (preview && (file !== state.importFile || selectedPlatform !== state.importPlatform || account !== state.importAccount)) return;
     state.importPreview = result;
     if (!preview) {state.importFile = null;toast('导入任务已创建');await refreshImportJobs();}
     else toast(`校验完成：${fmt(result.valid)} 条有效记录`);
@@ -992,7 +1048,7 @@ function renderSettings() {
   const autoConfig = autoStatus.config || state.settings.auto_export_config || {};
   const autoEnabled = state.settings.capabilities?.auto_export?.enabled === true;
   const autoLabel = ({idle: '待机', running: '运行中', cancelling: '正在取消', completed: '已完成', cancelled: '已取消', failed: '失败'})[autoStatus.state] || '尚无记录';
-  const autoExportSection = `<section class="settings-group"><div class="section-title"><h2>自动导出</h2><span class="pill ${autoStatus.running ? 'connected' : ''}">${autoLabel}</span></div><form id="auto-export-form" class="auto-export-form"><label>平台<select name="platform">${[['all','全部平台'],['wechat','微信'],['wecom','企业微信'],['qq','QQ'],['telegram','Telegram']].map(([id,name])=>`<option value="${id}" ${autoConfig.platform === id ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>格式<select name="format">${[['json','JSON'],['csv','CSV'],['md','Markdown'],['txt','TXT'],['html','HTML'],['xlsx','Excel / XLSX'],['sql','SQL'],['chatlab','ChatLab JSON'],['chatlab-jsonl','ChatLab JSONL']].map(([id,name])=>`<option value="${id}" ${autoConfig.format === id ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>间隔<select name="interval_hours">${[1,3,6,12,24,168].map(value=>`<option value="${value}" ${Number(autoConfig.interval_hours || 24) === value ? 'selected' : ''}>${value === 168 ? '7 天' : `${value} 小时`}</option>`).join('')}</select></label><label class="auto-export-path">本机输出目录<input name="output_dir" value="${esc(autoConfig.output_dir || '')}" required autocomplete="off" spellcheck="false"></label><div class="auto-export-actions"><label class="check-label"><input type="checkbox" name="enabled" ${autoConfig.enabled ? 'checked' : ''}>定期导出</label><button class="btn" type="submit" ${!autoEnabled ? 'disabled' : ''}>${icon('save')}保存计划</button><button class="btn primary" type="button" data-action="auto-export-run" ${!autoEnabled || autoStatus.running ? 'disabled' : ''}>${icon('download')}立即导出</button>${autoStatus.running ? `<button class="btn danger" type="button" data-action="auto-export-cancel">${icon('x')}取消任务</button>` : ''}</div></form><div class="setting-row"><div><strong>上次执行</strong><p>${autoConfig.last_run_at ? `${dt(autoConfig.last_run_at)} · ${esc(autoConfig.last_status)}${autoConfig.last_file ? ` · ${esc(autoConfig.last_file)}` : ''}` : '尚未执行'}${autoStatus.last_error ? ` · ${esc(autoStatus.last_error)}` : ''}</p></div><span class="pill">最多 ${fmt(autoStatus.max_messages || 250000)} 条 / 次</span></div><p class="muted small">仅从本地索引生成文件，不访问平台源库或网络；功能开关关闭时调度暂停。</p></section>`;
+  const autoExportSection = `<section class="settings-group"><div class="section-title"><h2>自动导出</h2><span class="pill ${autoStatus.running ? 'connected' : ''}">${autoLabel}</span></div><form id="auto-export-form" class="auto-export-form"><label>平台<select name="platform">${[['all','全部平台'],['wechat','微信'],['wecom','企业微信'],['qq','QQ'],['telegram','Telegram'],['email','邮件']].map(([id,name])=>`<option value="${id}" ${autoConfig.platform === id ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>格式<select name="format">${[['json','JSON'],['csv','CSV'],['md','Markdown'],['txt','TXT'],['html','HTML'],['xlsx','Excel / XLSX'],['sql','SQL'],['chatlab','ChatLab JSON'],['chatlab-jsonl','ChatLab JSONL']].map(([id,name])=>`<option value="${id}" ${autoConfig.format === id ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>间隔<select name="interval_hours">${[1,3,6,12,24,168].map(value=>`<option value="${value}" ${Number(autoConfig.interval_hours || 24) === value ? 'selected' : ''}>${value === 168 ? '7 天' : `${value} 小时`}</option>`).join('')}</select></label><label class="auto-export-path">本机输出目录<input name="output_dir" value="${esc(autoConfig.output_dir || '')}" required autocomplete="off" spellcheck="false"></label><div class="auto-export-actions"><label class="check-label"><input type="checkbox" name="enabled" ${autoConfig.enabled ? 'checked' : ''}>定期导出</label><button class="btn" type="submit" ${!autoEnabled ? 'disabled' : ''}>${icon('save')}保存计划</button><button class="btn primary" type="button" data-action="auto-export-run" ${!autoEnabled || autoStatus.running ? 'disabled' : ''}>${icon('download')}立即导出</button>${autoStatus.running ? `<button class="btn danger" type="button" data-action="auto-export-cancel">${icon('x')}取消任务</button>` : ''}</div></form><div class="setting-row"><div><strong>上次执行</strong><p>${autoConfig.last_run_at ? `${dt(autoConfig.last_run_at)} · ${esc(autoConfig.last_status)}${autoConfig.last_file ? ` · ${esc(autoConfig.last_file)}` : ''}` : '尚未执行'}${autoStatus.last_error ? ` · ${esc(autoStatus.last_error)}` : ''}</p></div><span class="pill">最多 ${fmt(autoStatus.max_messages || 250000)} 条 / 次</span></div><p class="muted small">仅从本地索引生成文件，不访问平台源库或网络；功能开关关闭时调度暂停。</p></section>`;
   const management = state.operations.map(item => `<div class="backup-row"><div><strong>${esc(({ 'conversation_metadata.update': '会话整理', 'contact_identity.link': '关联统一身份', 'contact_identity.unlink': '解除身份关联' })[item.action] || item.action)}</strong><span class="small muted">${esc(item.entity_type)} · ${dt(item.timestamp)}</span></div><span class="pill">本地记录</span></div>`).join('') || '<p class="muted small">暂无管理操作</p>';
   const sendHistory = state.pendingSends.map(item => renderSendRequest(item,
     item.platform === 'wechat' ? state.settings.capabilities?.wechat_send?.enabled === true :
@@ -1199,7 +1255,252 @@ function downloadPairReport() {
   downloadCsv(rows, `双人报告-${report.platform}-${report.year == null ? '全部时间' : report.year}.csv`);
 }
 
+const campusOptions = ['南校园', '北校园', '东校园', '珠海校区', '深圳校区'];
+function campusUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443') &&
+      (url.hostname === 'sysu.edu.cn' || url.hostname.endsWith('.sysu.edu.cn') ||
+        url.hostname === 'mp.weixin.qq.com' && (url.pathname === '/s' || url.pathname.startsWith('/s/'))) ? url.href : '';
+  } catch { return ''; }
+}
+function campusDate(value) {
+  if (!value) return '发布日期未提供';
+  const date = new Date(typeof value === 'number' ? value * 1000 : value);
+  return Number.isNaN(date.getTime()) ? '发布日期未提供' : dayFormatter.format(date);
+}
+function campusLink(url, label) {
+  const href = campusUrl(url);
+  return href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}${icon('external-link')}</a>` : `<span>${esc(label)}</span>`;
+}
+function campusContentLabel(item) {
+  return ({title_only: '仅标题，待补充内容', fetch_error: '全文获取失败，保留摘要', full_text: '已获取全文', blocked: '访问受限，保留摘要', failed: '全文获取失败，保留摘要', error: '全文获取失败，保留摘要'}[item.content_status] || (item.content_error || item.fetch_error ? '全文获取失败，保留摘要' : '仅摘要，待获取全文'));
+}
+function campusUpdateStatus() {
+  const u = state.campus.updates, r = state.campus.refresh, counts = u.content_counts || {};
+  const time = value => value ? new Date(typeof value === 'number' ? value * 1000 : value).toLocaleString('zh-CN') : '暂无';
+  return `${u.auto_updates_enabled ? `自动更新已开启 · 每 ${fmt(u.interval_minutes)} 分钟` : '自动更新未开启'} · ${r.state === 'running' ? '正在更新' : u.auto_updates_enabled ? '等待下一次检查' : '已暂停'} · 最近检查 ${time(u.last_check)} · 下次检查 ${u.auto_updates_enabled ? time(u.next_due) : '未安排'} · 已有全文 ${fmt(counts.full_text)} 篇 · 待获取 ${fmt(counts.pending ?? r.backlog)} 篇${r.body_success || r.body_failed ? ` · 最近补充正文 ${fmt(r.body_success)} 篇，未取得 ${fmt(r.body_failed)} 篇` : ''}${u.last_error ? ' · 最近更新未完成，请查看来源状态' : ''}`;
+}
+let campusArticleRequest = 0;
+function renderCampusArticle(item) {
+  modal(item.title || '校园文章', `<article id="campus-article" data-item-id="${esc(item.id)}"><p class="small muted">${esc(item.source_name)} · ${esc(campusContentLabel(item))}</p>${campusLink(item.url, '打开原文')}<div class="campus-article-content">${esc(item.content_status === 'full_text' ? item.content || item.summary || '' : item.summary || '暂无摘要，请打开原文查看。')}</div>${item.content_status !== 'full_text' ? `<p class="small muted">尚未取得完整正文，以上为已归档摘要。访问受限的文章可在微信中打开原文。</p><button class="btn primary" data-action="campus-fetch-article" data-id="${esc(item.id)}">${item.content_error || item.fetch_error ? '重试全文' : '获取全文'}</button>` : ''}</article>`, '', true);
+}
+async function showCampusArticle(id, fetchBody = false, button = null) {
+  if (button?.disabled) return;
+  if (button) {button.disabled = true;button.textContent = '正在获取…';}
+  const sequence = ++campusArticleRequest, request = state.request;
+  if (!fetchBody) modal('校园文章', '<p id="campus-article-loading" role="status">正在读取已归档内容…</p>');
+  const isCurrent = () => sequence === campusArticleRequest && request === state.request && state.view === 'campus' && (fetchBody ? document.querySelector('#overlay')?.innerHTML.includes(`data-item-id="${esc(id)}"`) : document.querySelector('#overlay')?.innerHTML.includes('campus-article-loading'));
+  try {
+    const item = await api('/api/campus/items/' + encodeURIComponent(id) + (fetchBody ? '/fetch' : ''), null, fetchBody ? {method: 'POST', body: '{}'} : {});
+    if (!isCurrent()) return;
+    renderCampusArticle(item);
+    const cached = state.campus.items.find(value => String(value.representative_id || value.id) === id);
+    if (cached) {if (cached.representative_id) {cached.material_status = item.content_status;cached.read = item.read;cached.bookmarked = item.bookmarked;} else Object.assign(cached, item);}
+    if (fetchBody) {renderView();toast(item.content_status === 'full_text' ? '全文已归档' : '暂未获取全文，已保留摘要', item.content_status !== 'full_text');}
+  } catch (error) {
+    if (isCurrent()) {
+      if (!fetchBody) modal('校园文章', '<p role="alert">读取失败，请稍后重试。</p>');
+      toast(error.message, true);
+    }
+  } finally {if (button) {button.disabled = false;button.textContent = '重试全文';}}
+}
+function showCampusUpdates() {
+  const u = state.campus.updates;
+  modal('自动增量更新', `<form id="campus-updates-form" class="metadata-form"><p class="small muted">中枢运行期间，定时同步所选公众号已出现在本机消息索引中的新文章，并刷新公开来源。只补充尚未归档的文章和可获取的正文，不扫描公众号全部历史。</p><label class="check-label"><input type="checkbox" name="auto_updates_enabled" ${u.auto_updates_enabled ? 'checked' : ''}>开启自动更新</label><label>更新间隔（分钟）<input type="number" name="interval_minutes" min="1" max="1440" required value="${esc(u.interval_minutes || 15)}"></label><label class="check-label"><input type="checkbox" name="fetch_full_text" ${u.fetch_full_text !== false ? 'checked' : ''}>自动获取公众号全文</label><label>每轮全文获取上限<input type="number" name="batch_limit" min="1" max="20" required value="${esc(u.batch_limit || 20)}"></label><button type="submit" class="btn primary">保存更新设置</button></form>`);
+}
+async function saveCampusUpdates(form) {
+  if (!form.reportValidity()) return;
+  const values = new FormData(form), button = form.querySelector('[type="submit"]');
+  if (button.disabled) return;
+  const payload = {auto_updates_enabled: !!values.get('auto_updates_enabled'), interval_minutes: Number(values.get('interval_minutes')), fetch_full_text: !!values.get('fetch_full_text'), batch_limit: Number(values.get('batch_limit'))};
+  if (!Number.isInteger(payload.interval_minutes) || payload.interval_minutes < 1 || payload.interval_minutes > 1440 || !Number.isInteger(payload.batch_limit) || payload.batch_limit < 1 || payload.batch_limit > 20) {toast('请填写有效的更新间隔和获取上限', true);return;}
+  button.disabled = true;
+  try {
+    state.campus.updates = await api('/api/campus/updates', null, {method: 'POST', body: JSON.stringify(payload)});
+    closeModal();toast('自动更新设置已保存');
+    if (state.view === 'campus') {renderView();scheduleCampusPoll();}
+  } catch (error) {toast(error.message, true);}
+  finally {button.disabled = false;}
+}
+function campusScoringLabel(model) {
+  return ({'westlake-hpc/deepseek-flash': 'DeepSeek', 'westlake-hpc/glm-flash': 'GLM'}[model] || model || '模型');
+}
+function renderCampusScoring(item) {
+  const s = item.scoring;
+  if (!s || s.status === 'disabled') return '';
+  const basis = s.material_basis === 'full_text' ? '依据正文（最多12000字符）' : '依据现有摘要';
+  if (s.status !== 'completed') return `<div class="station-score-status" role="status">${esc(({pending: '等待双模型评分', error: '评分未完成，等待重试', insufficient: '内容不足，待补充正文后评分'}[s.status] || '等待评分'))}${s.status === 'error' && s.error ? `<span>${esc(s.error)}</span>` : ''}</div>`;
+  return `<details class="station-score"><summary><strong>综合 ${fmt(s.score)} 分</strong><span>西湖双模型 · ${basis} · ${s.selected ? '达到精选标准' : '未达到精选标准'}</span></summary><div class="station-score-models">${(s.models || []).map(model => `<div><strong>${esc(campusScoringLabel(model.model))} ${fmt(model.score)} 分</strong><span>${model.eligible ? '适用当前学生资料' : '不适用当前学生资料'}</span><p>${(model.reasons || []).map(esc).join(' · ')}</p></div>`).join('')}</div></details>`;
+}
+function renderCampusScoringPanel(scoring = {}) {
+  return `<section class="station-panel"><h2>西湖双模型评分</h2><p>DeepSeek 与 GLM 独立阅读公开通知，分别评估奖学金、竞赛、选课等信息与你的相关性。两个模型均认为适用，且平均分达到 70 分时进入精选。</p><p class="small">只发送公开通知及校区、院系、培养层次、关注主题。全文与摘要分别标注，只有标题的材料等待补充内容。</p><div class="station-counts campus-scoring-status" role="status"><span>${scoring.enabled ? scoring.running ? '正在评分' : '自动评分已开启' : '模型评分未开启，当前使用本地规则'}</span>${[['已完成', scoring.completed], ['待评分', scoring.pending], ['待重试', scoring.error], ['内容不足', scoring.insufficient]].map(([label, count]) => `<span>${label} <strong>${fmt(count)}</strong></span>`).join('')}</div>${scoring.last_error ? `<p class="error-text">${esc(scoring.last_error)}</p>` : ''}<div class="station-scoring-actions"><button class="btn" data-action="campus-scoring-toggle" aria-pressed="${!!scoring.enabled}">${scoring.enabled ? '暂停模型评分' : '开启模型评分'}</button><button class="btn primary" data-action="campus-scoring-run" ${!scoring.enabled || scoring.running ? 'disabled' : ''}>${icon('refresh-cw', scoring.running ? 'spin' : '')}${scoring.running ? '正在评分' : '立即评分'}</button></div></section>`;
+}
+async function updateCampusScoring(button, run = false) {
+  if (button.disabled) return;
+  const request = state.request;
+  button.disabled = true;
+  try {
+    const scoring = await api('/api/campus/scoring' + (run ? '/run' : ''), null, {method: 'POST', body: JSON.stringify(run ? {} : {enabled: !state.campus.briefing?.pipeline?.scoring?.enabled})});
+    if (state.view !== 'campus' || request !== state.request) return;
+    state.campus.briefing ||= {};state.campus.briefing.pipeline ||= {};state.campus.briefing.pipeline.scoring = scoring;
+    toast(run ? '评分任务已启动' : scoring.enabled ? '已开启西湖双模型评分' : '模型评分已暂停');
+    await loadView();
+  } catch (error) {toast(error.message, true);}
+  finally {button.disabled = false;}
+}
+function renderCampus() {
+  const c = state.campus, section = c.section, page = campusSections[section], b = c.briefing || {}, f = c.filters;
+  const running = c.refresh.state === 'running';
+  const refreshButton = `<button class="btn primary" data-action="campus-refresh" ${running ? 'disabled' : ''}>${icon('refresh-cw', running ? 'spin' : '')}${running ? '正在刷新' : '刷新公开信息'}</button>`;
+  const topics = b.topics || [];
+  const topicName = id => topics.find(topic => topic.id === id)?.name || id;
+  const topicsBar = topics.length ? `<div class="station-topics" aria-label="主题筛选"><button class="station-chip ${!f.topic ? 'active' : ''}" data-campus-topic="">全部主题</button>${topics.map(topic => `<button class="station-chip ${f.topic === topic.id ? 'active' : ''}" data-campus-topic="${esc(topic.id)}">${esc(topic.name)}<span>${fmt(topic.count)}</span></button>`).join('')}</div>` : '';
+  const search = `<form id="campus-search" class="station-search"><div class="search-field">${icon('search')}<input name="q" aria-label="搜索校园信息" placeholder="搜索通知、奖学金、竞赛、选课…" value="${esc(f.q)}" maxlength="200"></div>${section === 'daily' ? `<input type="date" name="date" aria-label="日报日期" value="${esc(f.date || dateKey(Date.now() / 1000))}">` : ''}<button class="btn" type="submit">搜索</button></form>`;
+  const items = c.items.map(item => {
+    const id = item.representative_id || item.id, reports = item.reports || [], reasons = item.reasons || item.relevance_reasons || [];
+    return `<article class="campus-card station-card ${item.read ? 'is-read' : ''}" data-event-id="${esc(item.id)}"><div class="station-time"><time>${esc(campusDate(item.published_at))}</time>${item.future_date ? '<span class="station-date-note">来源日期待核实</span>' : ''}</div><div class="station-card-body"><div class="campus-meta"><span>${esc(reports[0]?.source_name || item.source_name || '已归档来源')}</span>${section === 'hot' ? `<span class="station-heat">${icon('flame')}${fmt(item.heat)} · ${fmt(item.hot_source_count ?? item.source_count)} 个来源</span>` : ''}<span class="station-material">${esc(campusContentLabel({content_status: item.material_status || item.content_status}))}</span></div><h2>${campusLink(item.url, item.title)}</h2>${item.summary ? `<p class="station-summary">${esc(item.summary)}</p>` : ''}${item.topics?.length ? `<div class="station-tags">${item.topics.map(topic => `<button data-campus-topic="${esc(topic)}"># ${esc(topicName(topic))}</button>`).join('')}</div>` : ''}${renderCampusScoring(item)}${reasons.length && (!item.scoring || item.scoring.status === 'disabled') ? `<div class="campus-reasons">${icon('list-filter')}${section === 'selected' ? '入选依据' : '信息依据'}：${reasons.map(esc).join(' · ')}</div>` : ''}${reports.length ? `<details class="station-reports"><summary>${fmt(item.report_count || reports.length)} 篇报道 · ${fmt(item.source_count || 1)} 个来源</summary>${reports.map(report => `<div><span>${esc(report.source_name)}</span>${campusLink(report.url, report.title)}<button class="btn" data-action="campus-article" data-id="${esc(report.id)}">阅读存档</button></div>`).join('')}${(item.provenance || []).filter(origin => !reports.some(report => report.source_id === origin.source_id)).map(origin => `<div><span>${esc(origin.source_name)}</span>${(origin.urls || []).map((url, index) => campusLink(url, '来源原文' + (index ? ' ' + (index + 1) : ''))).join(' · ')}</div>`).join('')}</details>` : ''}<div class="campus-card-actions"><button class="btn" data-action="campus-article" data-id="${esc(id)}">${icon('book-open')}阅读全文</button><button class="btn" data-action="campus-bookmark" data-id="${esc(id)}" aria-pressed="${!!item.bookmarked}">${icon('bookmark')}${item.bookmarked ? '已收藏' : '收藏'}</button><button class="btn" data-action="campus-read" data-id="${esc(id)}" aria-pressed="${!!item.read}">${icon('check')}${item.read ? '标为未读' : '标为已读'}</button></div></div></article>`;
+  }).join('');
+  const counts = b.counts || {};
+  const sourceCards = c.sources.filter(s => !f.q || (s.name + ' ' + (s.category_name || '')).includes(f.q)).map(s => {
+    const collect = s.kind === 'feed' || s.kind === 'local_wechat';
+    return `<article class="station-source-card"><div class="station-source-heading"><span class="station-source-icon">${icon(s.kind === 'local_wechat' ? 'message-circle' : collect ? 'rss' : 'external-link')}</span><div><h2>${campusLink(s.url, s.name)}</h2><span class="small muted">${esc(s.tier_label || (s.kind === 'local_wechat' ? '已关注公众号' : '学校公开来源'))} · ${esc(s.category_name || s.category || '校园信息')}</span></div>${collect ? `<button class="btn" data-action="campus-source-toggle" data-id="${esc(s.id)}" aria-pressed="${s.enabled !== false}">${s.enabled === false ? '启用采集' : '已启用'}</button>` : '<span class="pill">服务入口</span>'}</div><div class="station-source-meta"><span>${fmt(s.item_count)} 条存档</span><span>${s.last_check ? esc(campusDate(s.last_check)) : '尚未检查'}</span><span>${s.enabled === false ? '已暂停采集' : ({ok: '已更新', success: '已更新', error: '获取失败', empty: '暂无条目', blocked: '访问受限'}[s.status] || (collect ? '等待更新' : '前往官方页面'))}</span></div>${s.error ? `<p class="error-text">${esc(s.error)}</p>` : ''}</article>`;
+  }).join('');
+  let body;
+  if (section === 'sources') body = `${search}<div class="station-source-actions"><button class="btn" data-action="campus-wechat-accounts">${icon('users-round')}选择本机公众号</button><button class="btn" data-action="campus-wechat">${icon('link')}导入文章链接</button></div><div class="station-source-grid">${sourceCards || empty('没有匹配的来源', '调整搜索词后重试。')}</div>`;
+  else if (section === 'pipeline') body = `<div class="station-pipeline">${(b.pipeline?.stages || []).map(stage => `<div>${icon('check-check')}<strong>${fmt(stage.count)}</strong><span>${esc(stage.name)}</span></div>`).join('')}</div><section class="station-panel"><h2>处理方式</h2><p>公开通知与本机公众号 → 正文提取 → 重复事件合并 → 主题归类 → ${b.pipeline?.scoring?.enabled ? '西湖双模型独立评分' : '学生资料规则筛选'}。</p><p class="small muted">${esc(b.pipeline?.description || '摘要来自已归档内容，当前使用本地规则。')}</p></section>${renderCampusScoringPanel(b.pipeline?.scoring)}<section class="station-panel"><h2>自动增量更新</h2><div class="campus-update-status small muted" role="status">${esc(campusUpdateStatus())}</div><button class="btn" data-action="campus-updates">${icon('settings-2')}更新设置</button><div class="campus-status" role="status">${running ? `正在检查 ${fmt(c.refresh.processed)} / ${fmt(c.refresh.total)} 个来源` : '当前没有正在运行的刷新任务'}${c.refresh.errors?.length ? ` · ${fmt(c.refresh.errors.length)} 个来源未完成` : ''}</div></section><div class="station-counts">${[['完整正文', counts.full_text], ['仅摘要', counts.summary_only], ['全文待重试', counts.fetch_error], ['日期未提供', counts.unknown_date]].map(([label, count]) => `<span>${esc(label)} <strong>${fmt(count)}</strong></span>`).join('')}</div>`;
+  else if (section === 'services') body = `<div class="station-service-grid">${c.sources.filter(s => !['feed', 'local_wechat', 'manual'].includes(s.kind)).map(s => `<article class="station-panel"><h2>${campusLink(s.url, s.name)}</h2><p class="small muted">${esc(s.category_name || s.category || '校园服务')} · ${esc(s.scope === 'all' ? '全校' : s.scope || '全校')}</p></article>`).join('') || empty('暂无服务入口')}</div>`;
+  else if (section === 'profile') body = `<section class="station-panel station-profile"><span class="station-source-icon">${icon('graduation-cap')}</span><h2>${esc(c.profile.faculty || '完善学生资料')}</h2><p>${esc(c.profile.level || '未填写培养层次')} · ${esc(c.profile.campus || '未填写校区')}${c.profile.next_campus ? ' → ' + esc(c.profile.next_campus) : ''}</p><div class="station-topics">${(c.profile.keywords || []).map(word => `<span class="station-chip">${esc(word)}</span>`).join('')}</div><button class="btn primary" data-action="campus-profile">${icon('pencil')}编辑学生资料</button><p class="small muted">资料保存在本机；启用模型评分时，仅发送校区、院系、培养层次与关注主题，无需学号与登录凭据。</p></section>`;
+  else body = `${search}${topicsBar}${section === 'daily' ? `<div class="station-daily"><span>${icon('calendar-days')}${esc(b.date || f.date || dateKey(Date.now() / 1000))} 校园日报</span><span class="small muted">北京时间 · ${fmt(c.total)} 个事件 · 摘录自来源原文</span></div>${b.available_dates?.length ? `<div class="station-topics">${b.available_dates.slice(0, 8).map(date => `<button class="station-chip ${date === (f.date || b.date) ? 'active' : ''}" data-campus-date="${esc(date)}">${esc(date)}</button>`).join('')}</div>` : ''}` : ''}<div class="station-result-count">${fmt(c.total)} 个事件${section === 'selected' ? b.pipeline?.scoring?.enabled ? ' · 西湖 DeepSeek 与 GLM 独立评分后精选' : ' · 按学生资料规则筛选，非人工或 AI 评级' : section === 'hot' ? ' · 最近 48 小时，多来源优先' : ' · 同一事件合并展示'}</div><section class="station-timeline" aria-label="校园信息列表">${state.loading ? loading() : items || empty('暂无符合条件的信息', section === 'selected' ? '当前没有达到精选标准的信息，可在全部动态中查看评分进度，或调整学生资料。' : '可调整主题、日期或搜索词，或刷新已接入来源。', `<button class="btn" data-station="all">查看全部动态</button>`, 'graduation-cap')}</section><div class="campus-pagination"><button class="btn" data-action="campus-prev" ${c.offset === 0 || state.loading ? 'disabled' : ''}>上一页</button><span class="small muted">第 ${Math.floor(c.offset / 50) + 1} 页</span><button class="btn" data-action="campus-next" ${c.offset + 50 >= c.total || state.loading ? 'disabled' : ''}>下一页</button></div>`;
+  return `<div class="view-head station-head"><div><div class="eyebrow">中山大学 · 学生信息站</div><h1>${page.name}</h1><p class="subtitle">${page.description}</p></div><div class="head-actions">${section !== 'pipeline' ? `<button class="btn" data-station="pipeline">${icon('activity')}采集状态</button>` : ''}${refreshButton}</div></div><div class="view-scroll view-enter campus-view">${errorStrip()}${body}<p class="campus-coverage station-coverage">覆盖范围以已接入来源为准，不代表学校全部网页；通知适用范围与截止时间请核对原文。</p></div>`;
+}
+
+function showCampusProfile() {
+  const p = state.campus.profile;
+  const options = (values, value) => `<option value="">未填写</option>` + values.map(v => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  modal('学生资料', `<form id="campus-profile-form" class="metadata-form"><p class="muted small">资料保存在本机；启用模型评分时，仅发送校区、院系、培养层次与关注主题，无需填写学号或登录凭据。</p><label>所在校区<select name="campus">${options(campusOptions, p.campus)}</select></label><label>下一阶段校区<select name="next_campus">${options(campusOptions, p.next_campus)}</select></label><label>院系<input name="faculty" maxlength="100" value="${esc(p.faculty)}"></label><label>培养层次<select name="level">${options(['本科', '硕士', '博士'], p.level)}</select></label><label>入学年份<input name="year" type="number" min="1900" max="2100" value="${esc(p.year)}"></label><label>关注关键词（逗号分隔）<input name="keywords" maxlength="1000" placeholder="奖学金, 实习, 讲座" value="${esc((p.keywords || []).join(', '))}"></label><button type="submit" class="btn primary">保存资料</button></form>`);
+}
+function showCampusWechat() {
+  modal('导入公众号文章', `<form id="campus-wechat-form" class="metadata-form"><p class="muted small">粘贴中大相关公众号的公开文章链接，归档后可搜索和收藏。仅支持 mp.weixin.qq.com/s 链接，不登录微信、不绕过验证码，也不扫描公众号全部历史。</p><label>公开文章链接<input name="url" type="url" required maxlength="2048" placeholder="https://mp.weixin.qq.com/s/…"></label><button type="submit" class="btn primary">导入文章</button></form>`);
+}
+let campusAccountsRequest = 0;
+async function showCampusWechatAccounts() {
+  const sequence = ++campusAccountsRequest;
+  const request = state.request;
+  modal('本机公众号', '<div id="campus-wechat-accounts-loading" role="status">正在查询本机已索引的中大相关公众号…</div>');
+  try {
+    const result = await api('/api/campus/wechat-accounts');
+    if (sequence !== campusAccountsRequest || request !== state.request ||
+        !document.querySelector('#overlay')?.innerHTML.includes('campus-wechat-accounts-loading')) return;
+    const items = result.items || [];
+    modal('本机公众号', `<form id="campus-wechat-accounts-form" class="metadata-form"><p class="muted small">以下账号来自本机已索引的微信联系人，包含中大及学院相关公众号。勾选后导入本机缓存的文章标题、摘要和原文链接，不代表已获取文章全文或公众号全部历史；不会使用微信登录凭据，也不请求远程文章。</p>
+      ${items.length ? `<div class="campus-wechat-accounts">${items.map(item => `<label class="campus-wechat-account"><input type="checkbox" name="contact_ids" value="${esc(item.id)}" data-account-id="${esc(item.account_id)}" ${item.selected ? 'checked' : ''}><span><strong>${esc(item.name)}</strong><small>${esc(item.alias || item.id)} · 本机缓存 ${item.article_count == null ? '数量未提供' : fmt(item.article_count) + ' 篇'}</small><small>微信账号：${esc(item.account_id)}</small></span></label>`).join('')}</div><button type="submit" class="btn primary">导入所选公众号的缓存文章</button>` : '<p class="muted">尚未找到已索引的中大相关公众号，请先同步微信联系人和本机消息。</p>'}</form>`);
+  } catch (error) {
+    if (sequence === campusAccountsRequest && request === state.request) toast(error.message, true);
+  }
+}
+async function importCampusWechatAccounts(form) {
+  const selected = [...form.querySelectorAll('input[name="contact_ids"]:checked')];
+  if (!selected.length) {toast('请至少选择一个公众号', true);return;}
+  const button = form.querySelector('[type="submit"]');
+  if (button.disabled) return;
+  button.disabled = true;
+  const accounts = new Map();
+  for (const input of selected) {
+    const ids = accounts.get(input.dataset.accountId) || [];
+    ids.push(input.value);accounts.set(input.dataset.accountId, ids);
+  }
+  try {
+    let added = 0;
+    for (const [account_id, contact_ids] of accounts) {
+      const result = await api('/api/campus/wechat-accounts/import', null,
+        {method: 'POST', body: JSON.stringify({account_id, contact_ids})});
+      added += Number(result.added) || 0;
+    }
+    closeModal();toast(`已导入所选公众号缓存，新增 ${fmt(added)} 篇标题、摘要与链接`);
+    state.campus.offset = 0;
+    if (state.view === 'campus') await loadView();
+  } catch (error) {toast(error.message, true);}
+  finally {button.disabled = false;}
+}
+async function importCampusWechat(form) {
+  if (!form.reportValidity()) return;
+  const url = new FormData(form).get('url').trim();
+  let parsed;
+  try {parsed = new URL(url);} catch {}
+  if (!campusUrl(url) || parsed?.hostname !== 'mp.weixin.qq.com') {toast('请填写公开的 mp.weixin.qq.com/s 文章链接', true);return;}
+  const button = form.querySelector('[type="submit"]');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    await api('/api/campus/wechat', null, {method: 'POST', body: JSON.stringify({url})});
+    closeModal();toast('公众号文章已导入');state.campus.offset = 0;
+    if (state.view === 'campus') await loadView();
+  } catch (error) {toast(error.message, true);}
+  finally {button.disabled = false;}
+}
+function scheduleCampusPoll() {
+  if (campusPollTimer !== null) clearTimeout(campusPollTimer);
+  campusPollTimer = null;
+  const scoring = state.campus.briefing?.pipeline?.scoring;
+  if (state.view !== 'campus' || (!state.campus.updates.auto_updates_enabled && state.campus.refresh.state !== 'running' && !scoring?.enabled && !scoring?.running) || accountLockTransition) return;
+  const request = state.request;
+  campusPollTimer = setTimeout(async () => {
+    if (state.view !== 'campus' || request !== state.request) return;
+    try {
+      const previous = state.campus.refresh;
+      const [result, updates, nextScoring] = await Promise.all([api('/api/campus/refresh'), api('/api/campus/updates'), scoring?.enabled || scoring?.running ? api('/api/campus/scoring') : null]);
+      if (state.view !== 'campus' || request !== state.request) return;
+      state.campus.refresh = result;state.campus.updates = updates;
+      if (nextScoring) {
+        state.campus.briefing.pipeline.scoring = nextScoring;
+        if (['enabled', 'running', 'completed', 'pending', 'error', 'insufficient', 'last_error'].some(key => nextScoring[key] !== scoring[key])) {await loadView();return;}
+      }
+      if (result.state !== 'running' && (previous.state === 'running' || previous.finished_at !== result.finished_at)) {await loadView();return;}
+      const updateStatus = document.querySelector('.campus-update-status');
+      if (updateStatus) updateStatus.textContent = campusUpdateStatus();
+      const status = document.querySelector('.campus-status');
+      if (status && result.state === 'running') status.textContent = `正在检查 ${fmt(result.processed)} / ${fmt(result.total)} 个来源；新增 ${fmt(result.added)} 条`;
+      scheduleCampusPoll();
+    } catch (error) {
+      if (state.view === 'campus' && request === state.request) {state.error = error.message;renderView();}
+    }
+  }, state.campus.refresh.state === 'running' || scoring?.running ? 1500 : 5000);
+}
+async function refreshCampus() {
+  if (state.campus.refresh.state === 'running') return;
+  const request = state.request;
+  try {
+    const result = await api('/api/campus/refresh', null, {method: 'POST', body: '{}'});
+    if (state.view !== 'campus' || request !== state.request) return;
+    state.campus.refresh = result;renderView();scheduleCampusPoll();
+    if (result.state !== 'running') await loadView();
+  } catch (error) {toast(error.message, true);}
+}
+async function setCampusItemState(id, field) {
+  const item = state.campus.items.find(item => String(item.representative_id || item.id) === id);
+  if (!item) return;
+  const request = state.request;
+  try {
+    await api('/api/campus/' + (item.representative_id ? 'events/' : 'items/') + encodeURIComponent(id) + '/state', null,
+      {method: 'POST', body: JSON.stringify({[field]: !item[field]})});
+    if (state.view === 'campus' && request === state.request) await loadView();
+  } catch (error) {toast(error.message, true);}
+}
+async function saveCampusProfile(form) {
+  if (!form.reportValidity()) return;
+  const values = Object.fromEntries(new FormData(form));
+  const profile = {...values, keywords: values.keywords.split(/[,，]/).map(value => value.trim()).filter(Boolean)};
+  try {
+    state.campus.profile = await api('/api/campus/profile', null, {method: 'POST', body: JSON.stringify(profile)});
+    closeModal();toast('学生资料已保存');state.campus.offset = 0;
+    if (state.view === 'campus') await loadView();
+  } catch (error) {toast(error.message, true);}
+}
+
 async function loadView() {
+  if (campusPollTimer !== null) clearTimeout(campusPollTimer);
+  campusPollTimer = null;
   cancelMediaPreviews();
   const request = ++state.request;
   releaseInactiveViewData();
@@ -1224,6 +1525,16 @@ async function loadView() {
         const context = await api('/api/context', {platform: state.selected.platform, account_id: state.selected.account_id, message_id: state.contextMessage, before: 8, after: 8});
         if (request === state.request) {state.messages = context.items;state.messageTotal = context.total;state.messageOffset = 0;state.messageCursor = null;state.messageHasMore = false;state.contextMode = true;}
       } else if (state.selected) await loadMessages(false, request);
+    } else if (state.view === 'campus') {
+      const section = state.campus.section;
+      const [result, sources, profile, refresh, updates] = await Promise.all([
+        api('/api/campus/briefing', {section: ['services', 'profile'].includes(section) ? 'all' : section, q: state.campus.filters.q, topic: state.campus.filters.topic,
+          date: section === 'daily' ? state.campus.filters.date || dateKey(Date.now() / 1000) : '', limit: 50, offset: state.campus.offset}),
+        api('/api/campus/sources'), api('/api/campus/profile'), api('/api/campus/refresh'), api('/api/campus/updates')
+      ]);
+      if (request !== state.request) return;
+      Object.assign(state.campus, {briefing: result, items: result.items || [], total: result.total || 0, sources: result.sources || sources.items || [], profile, refresh, updates});
+      scheduleCampusPoll();
     } else if (state.view === 'moments') {
       const result = await api('/api/moments', {...state.momentFilter, limit: 30, offset: state.momentOffset});
       if (request !== state.request) return;
@@ -1237,13 +1548,12 @@ async function loadView() {
         const scope = selectedAccountScope();
         if (scope) {params.platform = scope.platform;params.account_id = scope.account_id;}
       }
-      if (state.view === 'media') {
-        const accounts = await api('/api/accounts');
-        if (request !== state.request) return;
-        state.accountScopes = accounts.items || [];
-      }
-      const result = state.view === 'search' && !state.filters.q ? {items: [], total: 0} : await api('/api/' + state.view, params);
+      const [result, accounts] = await Promise.all([
+        state.view === 'search' && !state.filters.q ? {items: [], total: 0} : api('/api/' + state.view, params),
+        state.view === 'media' ? api('/api/accounts') : null
+      ]);
       if (request !== state.request) return;
+      if (accounts) state.accountScopes = accounts.items || [];
       state.items = result.items; state.total = result.total;
       if (state.view === 'contacts') state.accountScopes = result.accounts || [];
       if (cursorPaging) state.pageCursors[state.page + 1] = result.next_cursor || null;
@@ -1251,19 +1561,20 @@ async function loadView() {
         state.error = '此缓存目录暂不可用；本地数据库附件可在“聊天附件”中浏览';
       }
     } else if (state.view === 'stats') {
-      const result = await api('/api/stats', {platform: state.platform});
-      if (request !== state.request) return;
-      state.stats = result;
       const capability = state.statsTab === 'annual' ? 'annual_reports' : state.statsTab === 'relationships' ? 'relationship_footprint' : 'advanced_analytics';
       const available = state.settings.capabilities?.[capability]?.available !== false && state.settings.capabilities?.[capability]?.enabled !== false;
-      if (available && state.statsTab !== 'overview') {
-        const tab = state.statsTab;
-        const routes = {private: '/api/analytics/private', groups: '/api/analytics/groups',
-          annual: '/api/reports/annual', relationships: '/api/analytics/relationships', daily: '/api/analytics/self-sent-daily'};
-        const detail = await api(routes[tab], {platform: state.platform,
+      const tab = state.statsTab;
+      const routes = {private: '/api/analytics/private', groups: '/api/analytics/groups',
+        annual: '/api/reports/annual', relationships: '/api/analytics/relationships', daily: '/api/analytics/self-sent-daily'};
+      const [result, detail] = await Promise.all([
+        api('/api/stats', {platform: state.platform}),
+        available && tab !== 'overview' ? api(routes[tab], {platform: state.platform,
           ...(tab === 'annual' ? {year: state.reportYearScope === 'all' ? null : state.reportYear}
-            : ['private', 'groups', 'relationships'].includes(tab) ? {limit: 500, ...(tab === 'groups' ? {member_limit: 12} : {})} : {})});
-        if (request !== state.request) return;
+            : ['private', 'groups', 'relationships'].includes(tab) ? {limit: 500, ...(tab === 'groups' ? {member_limit: 12} : {})} : {})}) : null
+      ]);
+      if (request !== state.request) return;
+      state.stats = result;
+      if (detail) {
         if (tab === 'private') state.privateProfiles = detail.items || [];
         else if (tab === 'groups') {state.groupMemberLists.clear();state.groupProfiles = detail.items || [];}
         else if (tab === 'annual') state.annualReport = detail;
@@ -1274,15 +1585,14 @@ async function loadView() {
     else if (state.view === 'settings') {
       const botIdentityRequest = state.settings.capabilities?.wecom_bot_send?.enabled === true
         ? api('/api/wecom-bot/identity') : Promise.resolve(null);
-      const [result, mcp, operations, botIdentity] = await Promise.all([api('/api/backups'), api('/api/mcp'), api('/api/operations'), botIdentityRequest]);
-      if (request !== state.request) return;
-      state.backups = result.items || []; state.mcp = mcp; state.operations = operations.items || []; state.wecomBotIdentity = botIdentity;
-      const queues = await Promise.all([
+      const [result, mcp, operations, botIdentity, ...queues] = await Promise.all([
+        api('/api/backups'), api('/api/mcp'), api('/api/operations'), botIdentityRequest,
         state.settings.capabilities?.qq_send?.enabled === true ? api('/api/sends', {status: 'all', limit: 100}) : {items: []},
         state.settings.capabilities?.wecom_bot_send?.enabled === true ? api('/api/wecom-bot-sends', {status: 'all', limit: 100}) : {items: []},
         state.settings.capabilities?.wechat_send?.enabled === true ? api('/api/wechat-sends', {status: 'all', limit: 100}) : {items: []}
       ]);
       if (request !== state.request) return;
+      state.backups = result.items || []; state.mcp = mcp; state.operations = operations.items || []; state.wecomBotIdentity = botIdentity;
       state.pendingSends = queues.flatMap(queue => queue.items || []).sort((a, b) => b.created_at - a.created_at);
     } else if (state.view === 'imports') await refreshImportJobs(false);
   } catch (error) { if (request === state.request) state.error = error.message; }
@@ -1339,6 +1649,7 @@ function releaseInactiveViewData() {
   if (state.view !== 'chat') {state.messages = [];state.conversations = [];state.voiceTranscripts.clear();}
   if (!['contacts', 'media', 'search'].includes(state.view)) state.items = [];
   if (state.view !== 'moments') state.moments = {items: [], total: 0};
+  if (state.view !== 'campus') state.campus.items = [];
   if (state.view !== 'stats') {
     state.stats = null;state.privateProfiles = [];state.groupProfiles = [];
     state.relationshipProfiles = [];state.annualReport = null;state.selfSentDaily = null;
@@ -1661,16 +1972,24 @@ async function exportMoments(button) {
   }
 }
 function showConfigure(id) {
+  if (id === 'email') {
+    const config = state.sources.find(source => source.id === 'email')?.email_config || {};
+    modal('配置邮件', `<form id="configure-form" data-source="email"><div class="field"><label for="email-provider">邮箱类型</label><select id="email-provider" name="provider">${[['imap','通用 IMAP'],['gmail','Gmail'],['outlook','Outlook / Microsoft 365']].map(([value,label]) => `<option value="${value}" ${config.provider === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label for="email-host">IMAP 服务器</label><input id="email-host" name="host" value="${esc(config.host || '')}" placeholder="通用 IMAP 必填；Gmail / Outlook 留空使用默认服务器" autocomplete="off"></div><div class="field"><label for="email-port">TLS 端口</label><input id="email-port" name="port" type="number" min="1" max="65535" value="${esc(config.port || 993)}" required></div><div class="field"><label for="email-username">邮箱账号</label><input id="email-username" name="username" type="email" value="${esc(config.email || config.username || '')}" required autocomplete="off"></div><div class="field"><label for="email-auth">认证方式</label><select id="email-auth" name="auth"><option value="password" ${config.auth !== 'oauth2' ? 'selected' : ''}>应用密码 / 授权码</option><option value="oauth2" ${config.auth === 'oauth2' ? 'selected' : ''}>OAuth2 访问令牌</option></select></div><div class="field"><label for="email-password">应用密码 / 授权码</label><input id="email-password" name="password" type="password" autocomplete="off" placeholder="留空保留已保存凭据"><small>使用邮箱服务商提供的应用密码或 IMAP 授权码。</small></div><div class="field"><label for="email-token">OAuth2 访问令牌</label><input id="email-token" name="access_token" type="password" autocomplete="off" placeholder="留空保留已保存凭据"><small>令牌需已授予 IMAP 权限；当前不会自动刷新，过期后需重新填写。</small></div><div class="field"><label for="email-folder">邮件文件夹</label><input id="email-folder" name="folder" value="${esc(config.folder || 'INBOX')}" required autocomplete="off"></div><p class="muted small">凭据不会回显；仅同步读取邮件，不发送邮件或更改已读状态。</p></form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="save-config">' + icon('check') + '保存并同步</button>');
+    return;
+  }
   const directory = `<div class="field"><label for="data-directory">数据目录</label><input id="data-directory" name="data_dir" placeholder="留空保留配置或自动检测" autocomplete="off"><small>${id === 'wecom' ? '首次配置请填写本机绝对路径；已配置时留空保留当前值。' : '填写时使用本机绝对路径；留空保留已配置目录，尚未配置时自动检测。'}</small></div>`;
   const wecom = id === 'wecom' ? `<div class="field"><label for="database-key">数据库密钥</label><input id="database-key" name="key" type="password" placeholder="留空使用本机已保存的密钥" autocomplete="new-password"><small>密钥仅保存在本机配置。</small></div><div class="field"><label for="user-slot-id">账号槽位标识</label><input id="user-slot-id" name="user_slot_id" placeholder="首次配置必填" autocomplete="off"><small>留空时保留已保存的标识。</small></div>` : '';
   const key = id === 'wecom' ? wecom : id === 'qq' ? `<div class="field"><label for="database-key">数据库密钥</label><input id="database-key" name="key" type="password" placeholder="留空保留本机已保存的密钥" autocomplete="new-password"><small>密钥仅保存在本机，不会回显。未解密时不会启动 QQ 或请求扫码。</small></div>` : `<div class="field"><label for="image-key">图片 AES 密钥</label><input id="image-key" name="image_key" type="password" minlength="16" maxlength="16" pattern="[ -~]{16}" placeholder="已有密钥则留空保持不变" autocomplete="new-password"><small>16 位可打印 ASCII。必须能解开本机已有图片缓存；使用 Windows 当前用户 DPAPI 加密保存，按微信账号隔离。不会读取微信进程内存，也不会修改微信文件。</small></div>`;
   modal('配置 ' + platforms[id].name, `<form id="configure-form" data-source="${id}">${directory}${key}</form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="save-config">' + icon('check') + '保存并同步</button>');
 }
 async function saveConfig(button) {
-  button.disabled = true;
   const form = document.querySelector('#configure-form');
+  if (!form.reportValidity()) return;
+  button.disabled = true;
   try {
-    await api('/api/source/' + form.dataset.source + '/configure', null, {method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form)))});
+    const config = Object.fromEntries(new FormData(form));
+    if (form.dataset.source === 'email') {config.email = config.username;if (!config.host) delete config.host;}
+    await api('/api/source/' + form.dataset.source + '/configure', null, {method: 'POST', body: JSON.stringify(config)});
     closeModal();toast('本机配置已保存');await sync(form.dataset.source);
   } catch (e) {toast(e.message, true);button.disabled = false;}
 }
@@ -1948,8 +2267,12 @@ document.addEventListener('click', async event => {
   if (event.target.closest('[data-media-select]')) return;
   const target = event.target.closest('button, input[data-action], [data-item], [data-media-url]');
   if (!target) {if (event.target.classList.contains('overlay-backdrop')) closeModal();return;}
+  if (target.dataset.station) {await navigateCampus(target.dataset.station);return;}
+  if (target.dataset.campusTopic !== undefined) {state.campus.filters.topic = target.dataset.campusTopic;state.campus.offset = 0;await loadView();return;}
+  if (target.dataset.campusDate) {state.campus.filters.date = target.dataset.campusDate;state.campus.offset = 0;await loadView();return;}
   if (target.dataset.platform) {
     clearMediaSelection();
+    if (state.view === 'campus') {state.view = lastChatView;closeModal();if (typeof history !== 'undefined') history.replaceState(null, '', '#' + state.view);}
     state.remembered[state.platform] = state.selected;
     state.platform = target.dataset.platform;state.filters.account_scope = '';state.selected = state.remembered[state.platform] || null;state.contextMessage = null;state.contextMode = false;
     state.messages = [];state.messageCursor = null;state.messageHasMore = false;state.items = [];state.page = 0;state.pageCursors = [null];renderShell();await loadView();return;
@@ -1980,6 +2303,12 @@ document.addEventListener('click', async event => {
   }
   const action = target.dataset.action;
   if (!action) return;
+  if (action.startsWith('video-poster:')) {
+    const entry = mediaEntries()[Number(action.split(':')[1])];
+    if (entry?.type === 'video') previewMedia(entry.resource?.media_poster_url || entry.message.media_poster_url,
+      'image', '视频封面', entry.resource?.media_poster_mime_type || entry.message.media_poster_mime_type);
+    return;
+  }
   else if (action === 'qq-forward-read' || action.startsWith('qq-forward-resource:')) {
     const messageId = target.closest('.message')?.dataset.messageId;
     const message = state.messages.find(item => String(item.id) === String(messageId));
@@ -2015,6 +2344,26 @@ document.addEventListener('click', async event => {
   }
   else if (action === 'download-annual-report') downloadAnnualReport();
   else if (action === 'download-pair-report') downloadPairReport();
+  else if (action === 'campus-article') await showCampusArticle(target.dataset.id);
+  else if (action === 'campus-fetch-article') await showCampusArticle(target.dataset.id, true, target);
+  else if (action === 'campus-updates') showCampusUpdates();
+  else if (action === 'campus-scoring-toggle') await updateCampusScoring(target);
+  else if (action === 'campus-scoring-run') await updateCampusScoring(target, true);
+  else if (action === 'campus-profile') showCampusProfile();
+  else if (action === 'campus-wechat') showCampusWechat();
+  else if (action === 'campus-wechat-accounts') await showCampusWechatAccounts();
+  else if (action === 'campus-refresh') await refreshCampus();
+  else if (action === 'campus-source-toggle') {
+    const source = state.campus.sources.find(item => item.id === target.dataset.id);
+    if (!source) return;
+    const request = state.request;target.disabled = true;
+    try {await api('/api/campus/sources/' + encodeURIComponent(source.id), null, {method: 'POST', body: JSON.stringify({enabled: source.enabled === false})});if (state.view === 'campus' && request === state.request) await loadView();}
+    catch (error) {toast(error.message, true);} finally {target.disabled = false;}
+  }
+  else if (action === 'campus-bookmark') await setCampusItemState(target.dataset.id, 'bookmarked');
+  else if (action === 'campus-read') await setCampusItemState(target.dataset.id, 'read');
+  else if (action === 'campus-prev') {state.campus.offset = Math.max(0, state.campus.offset - 50);await loadView();}
+  else if (action === 'campus-next') {state.campus.offset += 50;await loadView();}
   else if (action === 'moments-prev') {state.momentOffset = Math.max(0, state.momentOffset - 30);await loadView();}
   else if (action === 'moments-next') {state.momentOffset += 30;await loadView();}
   else if (action === 'moments-export') await exportMoments(target);
@@ -2134,6 +2483,11 @@ document.addEventListener('error', event => {
 document.addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.target;
+  if (form.id === 'campus-updates-form') {await saveCampusUpdates(form);return;}
+  if (form.id === 'campus-search') {Object.assign(state.campus.filters, Object.fromEntries(new FormData(form)));state.campus.offset = 0;await loadView();return;}
+  if (form.id === 'campus-profile-form') {await saveCampusProfile(form);return;}
+  if (form.id === 'campus-wechat-form') {await importCampusWechat(form);return;}
+  if (form.id === 'campus-wechat-accounts-form') {await importCampusWechatAccounts(form);return;}
   if (form.id === 'pair-report-range-form') {
     const values = Object.fromEntries(new FormData(form));
     const report = state.pairReport;
@@ -2183,11 +2537,11 @@ document.addEventListener('change', async event => {
   if (event.target.id === 'notification-style') await saveSettings({notification_filters: {...notificationFilters(), style: event.target.value}});
   if (event.target.id === 'import-file') {state.importFile = event.target.files?.[0] || null;state.importPreview = null;renderView();}
   if (event.target.id === 'import-platform') {state.importPlatform = event.target.value;state.importPreview = null;renderView();}
-  if (event.target.id === 'import-account') {state.importAccount = event.target.value;state.importPreview = null;}
+  if (event.target.id === 'import-account') {state.importAccount = event.target.value;state.importPreview = null;const commit = document.querySelector('[data-action="commit-import"]');if (commit) commit.disabled = true;}
   if (event.target.closest('#message-search') && event.target.name === 'type') event.target.form.requestSubmit();
 });
 document.addEventListener('input', event => {
-  if (event.target.id === 'import-account') {state.importAccount = event.target.value;state.importPreview = null;}
+  if (event.target.id === 'import-account') {state.importAccount = event.target.value;state.importPreview = null;const commit = document.querySelector('[data-action="commit-import"]');if (commit) commit.disabled = true;}
   if (event.target.id === 'conversation-roster-search') {
     const results = document.querySelector('#conversation-roster-results');
     if (results) results.innerHTML = renderConversationRoster(state.wechatRoster, state.selected?.platform || 'wechat', event.target.value);
@@ -2231,7 +2585,9 @@ async function init() {
   const notificationToken = /^#notification=([A-Za-z0-9_-]{32})$/.exec(location.hash)?.[1] || '';
   if (notificationToken) history.replaceState(null, '', location.pathname + location.search + '#chat');
   const initialView = location.hash.slice(1);
-  state.view = initialView === 'qq-login' ? 'sources' : Object.hasOwn(views, initialView) ? initialView : 'chat';
+  const section = campusRoute(location.hash);
+  state.view = section ? 'campus' : initialView === 'qq-login' ? 'sources' : Object.hasOwn(views, initialView) ? initialView : 'chat';
+  if (section) state.campus.section = section;
   setTheme(state.theme);renderShell();
   try {await Promise.all([refreshSources(false), api('/api/settings').then(settings => {state.settings = settings;})]);}
   catch (e) {state.error = e.message;}
@@ -2266,6 +2622,12 @@ window.addEventListener('pagehide', () => {
   if (state.settings.account_lock_enabled) document.querySelector('#app')?.replaceChildren();
 });
 window.addEventListener('pageshow', event => {if (event.persisted) location.reload();});
+window.addEventListener('hashchange', async () => {
+  const section = campusRoute(location.hash);
+  if (section) {await navigateCampus(section, false);return;}
+  const view = location.hash.slice(1);
+  if (Object.hasOwn(views, view) && state.view !== view) {state.view = view;closeModal();renderShell();await loadView();}
+});
 let lastActivityPing = 0;
 let accountIdleTimer;
 let accountLockPollTimer = null;

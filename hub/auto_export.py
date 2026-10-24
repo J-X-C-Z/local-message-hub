@@ -83,7 +83,7 @@ class AutoExportManager:
         if format_id not in FORMATS:
             raise ValueError("不支持的自动导出格式")
         platform = str(config.get("platform") or "")
-        if platform not in ("all", "wechat", "wecom", "qq", "telegram"):
+        if platform not in ("all", "wechat", "wecom", "qq", "telegram", "email"):
             raise ValueError("未知导出平台")
         raw_dir = str(config.get("output_dir") or "").strip()
         path = Path(raw_dir).expanduser()

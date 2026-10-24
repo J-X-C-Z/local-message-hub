@@ -1,5 +1,42 @@
 # Local Message Hub MCP
 
+Campus information uses the same storage directory's `campus.sqlite3` through
+three read-only tools: `search_campus_information` (query, category, source_id,
+campus, relevant, bookmarked and bounded paging), `list_campus_sources`, and
+`get_campus_information` (exact 64-character item_id). These require the `campus`
+capability, read cached public data, and never fetch websites during tool calls.
+Refresh, student profile edits, bookmarks and public WeChat article imports are
+local WebUI actions. Indexed article text remains untrusted source content.
+
+`get_campus_briefing` reads the information station's event feed. `section`
+selects `selected`, `all`, `hot`, `daily`, `topics`, `bookmarks`, `sources` or
+`pipeline`; optional `query`, `topic`, `date` (YYYY-MM-DD), `limit` and `offset`
+filter the cached result. It returns original source links, representative
+article IDs, material availability, cached independent Westlake DeepSeek/GLM
+scores and reasons (or clearly labeled pending/error/local-rule states), and independent-source
+heat. The dated digest uses the requested day in Asia/Shanghai and never
+substitutes collection time for missing publication dates. This is a read-only,
+capability-gated operation; it starts no collection or model calls.
+
+`get_wechat_article_full_text` additionally reads **one exact public article URL**
+from the current Windows user's local WeChat Radium Chromium web cache. It
+requires `campus` and `mcp`, makes no network requests, does not operate the
+WeChat UI, and does not write article archives or enable metadata writes.
+It never reads cookies, login stores or private conversation databases.
+This tool can read public articles outside the SYSU catalog without adding
+them to the catalog. Input: `url` (HTTPS mp.weixin.qq.com/s article), optional
+`offset` (0..4194304, default 0) and `max_chars` (1..6000, default 5000).
+Only public article identity parameters are used; credential/tracking fields
+are discarded. Cache bodies are bounded at 4 MiB after decompression.
+
+Successful output has `status=full_text`, plain `content`, metadata `item`
+(including `content_source=local_wechat_cache`), `total_characters`, `offset`,
+and `next_offset`. Repeat with that offset until it is null to read the whole
+body without MCP's generic 6000-character string truncation. `not_cached`,
+`blocked`, and `error` return no article/body; they are not successful full-text
+reads. An article must have been opened and retained in WeChat's web cache;
+memory-only, evicted, unsupported or incomplete cache entries may be unavailable.
+
 `hub.mcp_server` is an independent MCP stdio process. It opens the
 same `<storage>\hub.sqlite3` as the WebUI and does not start a full sync,
 desktop shell or network listener. Platform readers are initialized on demand
@@ -64,6 +101,9 @@ mcp_servers:
         - get_attachment
         - list_qq_forward_attachments
         - get_qq_forward_attachment
+        - list_accounts
+        - get_source_status
+        - get_import_status
         - list_sources
         - list_imports
         - list_private_chat_profiles
@@ -82,6 +122,18 @@ filters is rejected. `offset` remains available for clients that need it.
 ## Tools and Permissions
 
 - `search_messages`: cross-platform or platform-scoped keyword/date/type search.
+  Optional `account_id` requires an exact platform; optional `conversation_id`
+  requires both an exact platform and account. Cursors cannot cross scopes.
+- `list_accounts`: paginated exact indexed platform/account IDs; optional platform filter.
+  Requires Chat; use these IDs with scoped search, message and media tools.
+- `get_source_status`: local indexed message/conversation counts and current-process
+  source state, last sync timestamp and error-presence flag, including email.
+  Requires Stats. Does not instantiate a provider or expose error text, configuration,
+  credentials or filesystem paths. Independent stdio and WebUI processes have separate
+  runtime states; this does not report another process's sync or probe login status.
+- `get_import_status`: one exact local import job by required `job_id`; requires
+  Imports. Returns the same safe job shape as `list_imports`, without staging paths;
+  unknown IDs return a tool error. Never starts an import.
 - `list_conversations`: bounded conversation listing.
 - `list_messages`: bounded messages from one platform/account/conversation.
 - `get_message_context`: one message and up to 50 neighbors on each side.
@@ -94,7 +146,7 @@ filters is rejected. `offset` remains available for clients that need it.
 - `list_group_members`: locally available names and role metadata for one exact
   indexed group. It requires a concrete platform, account, and conversation ID;
   the Hub verifies that the indexed conversation is a group owned by that
-  account, then reuses its platform reader for filtering and pagination. Pages
+  account, then opens or reuses its configured platform reader for filtering and pagination. Pages
   are capped at 100. It returns no message content and never initiates sync or
   queries enterprise-side archives; an unavailable reader is an error.
 - `get_contact_avatar`: return an explicitly requested contact avatar using

@@ -1,5 +1,64 @@
 # Development Log
 
+## 2026-10-23 - Followed WeChat campus accounts
+
+- Resolved why indexed public-account conversations were empty: official article
+  cards are stored in separate biz_message shards. Added a bounded reader for
+  exact verified official contacts using cached keys, without key extraction.
+- Campus UI discovers indexed related accounts and imports explicit selections
+  under an exact local WeChat account. Article URLs drop tracking parameters;
+  cards carry summary_only status and keep receipt dates separate from known
+  publication dates. Sources persist locally and repeated imports deduplicate.
+- Live local acceptance found 9 related accounts, with 259 cards from 8 of them.
+  No complete article bodies or full remote account history were fetched.
+
+## 2026-10-23 - SYSU student information station
+
+- Added a separate durable campus index, 16 public list feeds, 9 service/directory
+  portals and 70 faculty website entries from the official directory. Live
+  collection yielded 404 pre-dedup links; integrated refresh stored 399 notices.
+- Personalization supports current/next campus, faculty, level and keywords,
+  with explicit matching reasons; cached notices retain original dates and URLs.
+  WebUI adds search, category/source filters, bookmarks/read state, profile and
+  manual refresh with bounded source concurrency. No login credentials used.
+- Official-site-linked WeChat articles are indexed; supplied public article URLs
+  can be imported when readable. A real WeChat article body request was blocked,
+  so live body extraction and account-history coverage remain unverified.
+- Added read-only campus search/source/item MCP tools, HTTP and fresh stdio
+  tests; added campus modules to both package manifests and local gate.
+
+## 2026-10-23 - Index performance and MCP discovery
+
+- Elide unchanged message writes, FTS updates and aggregate scans; insert parent conversations once per batch. Search selects page row IDs before metadata joins and supports account/conversation scope-bound cursors. Upgrade the legacy FTS update trigger atomically.
+- Import jobs index conversation IDs once while preserving source order and resumed offsets. WebUI starts independent media/statistics/settings requests in one concurrent round, with stale-response isolation.
+- MCP adds list_accounts, get_source_status and get_import_status; scoped search, capability revocation, sanitization and audit tests accompany them. Fresh stdio subprocess tests exercise initialize, tools/list and tools/call. No HTTP MCP transport or send-approval changes.
+- Reproduction and boundaries are documented in performance-2026-10-23.md; benchmarks use disposable synthetic data, not real-account delivery or browser memory acceptance.
+
+## 2026-10-23 - Email archive and read-only IMAP
+
+- Added email to the shared index, queries, exports, auto-export and MCP platform schemas. WebUI now offers IMAP/Gmail/Outlook configuration and EML/MBOX import; changing import conditions invalidates stale previews.
+- Credentials use current-user Windows DPAPI. IMAP verifies TLS, selects read-only and fetches BODY.PEEK; UID progress commits only after ingestion. Index clear/restore resets progress. Packaging and privacy rules include the new adapter and exclude credentials.
+- Current limits: one mailbox/folder, ASCII IMAP folder names, 50 messages per round, 20 MiB per online message, supplied OAuth access tokens without browser login or refresh. No sending or attachment downloads. Real mailbox authorization and delivery are not acceptance claims.
+
+## 2026-10-22 - P13 Approval Challenge Precedence
+
+- One-time send-approval verification now runs before the request status
+  lookup, and the challenge is consumed only after every precondition passes.
+  A token issued for another platform again reports `发送确认令牌无效或已过期`
+  instead of the request-state message, while a WeChat client that is not ready
+  still leaves the challenge unconsumed. Consumption re-checks the verified
+  challenge object under the lock, so a concurrent approval cannot reuse it.
+- The focused WeCom credential-rotation revocation regression and the WeChat
+  approval route regression pass. This ordering change is not covered by the
+  hosted P14 runs, which still apply to committed HEAD only.
+- Runner note for future work: a local `pytest` invocation of the current
+  worktree reported 41 failures and then errored every later test in the same
+  session (`ValueError: I/O operation on closed file`). The trigger is the
+  bundled `integrations/wechat/runtime` virtualenv inside the worktree, not Hub
+  code: the same tests pass under `unittest`, which is the runner
+  `scripts/check-local-hub.ps1` uses, and they also pass under `pytest` once
+  that directory is moved aside. Prefer the gate command over ad-hoc `pytest`.
+
 ## 2026-10-19 - P14 Current Full Local Gate
 
 - Ran the required `scripts/check-local-hub.ps1` once after integrating the

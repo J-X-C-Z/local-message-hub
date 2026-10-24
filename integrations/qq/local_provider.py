@@ -542,7 +542,7 @@ class LocalQQProvider:
                     break
         return result
 
-    def media(self, row, resource_index=None):
+    def media(self, row, resource_index=None, video_variant=None):
         if self._source is None:
             self._discover()
         extra = row.get('extra') if isinstance(row.get('extra'), dict) else {}
@@ -554,7 +554,17 @@ class LocalQQProvider:
         if account != self.account_id:
             raise LocalQQError('account_mismatch', '附件不属于当前 QQ 本地账号')
         entry = entries[index]
+        if not isinstance(entry, dict):
+            return {'available': False, 'path': None, 'reason': '本地消息没有此附件'}
+        poster = video_variant == 'poster'
+        digest = str(entry.get('md5') or '').lower()
+        if video_variant is not None and (not poster or
+                (entry.get('kind') or entry.get('type')) != 'video' or
+                not re.fullmatch(r'[a-f0-9]{32}', digest)):
+            raise LocalQQError('video_variant_invalid', '视频封面缺少有效的本地视频身份')
         name = str(entry.get('file_name') or '') if isinstance(entry, dict) else ''
+        if poster:
+            name = digest + '_0.png'
         if not name or name != Path(name).name or any(char in name for char in '/\\'):
             return {'available': False, 'path': None, 'reason': '附件缺少安全的本地文件名'}
         account_root = self.account_root.resolve()
@@ -568,15 +578,16 @@ class LocalQQProvider:
         roots = ([data_root / category] if category else [])
         if category == 'Pic':
             roots.append(data_root / 'chatpic')
-        roots.append(data_root / 'chatraw')
+        if not poster:
+            roots.append(data_root / 'chatraw')
         roots = [root for root in roots if root.is_dir() and not root.is_symlink()]
         if not roots:
             return {'available': False, 'path': None, 'reason': 'QQ 尚未将附件缓存到本机'}
-        digest = str(entry.get('md5') or '').lower()
         cache_names = set(_qq_image_cache_names(digest)) if category == 'Pic' else set()
-        expected_size = entry.get('size')
-        matches = lambda candidate: candidate == name or bool(digest and digest in candidate.lower()) or candidate in cache_names
-        indexed, limited = self._media_candidates(account, roots, matches, (name, digest, tuple(sorted(cache_names))))
+        expected_size = None if poster else entry.get('size')
+        matches = (lambda candidate: candidate.lower() == name) if poster else (
+            lambda candidate: candidate == name or bool(digest and digest in candidate.lower()) or candidate in cache_names)
+        indexed, limited = self._media_candidates(account, roots, matches, (name, digest, tuple(sorted(cache_names)), poster))
         for root, relative_path in indexed:
             path = root / relative_path
             if path.is_symlink():
@@ -593,6 +604,21 @@ class LocalQQProvider:
                 continue
             owned_root = self.cache_dir.resolve()
             candidate = path.name
+            content_type = None
+            if poster:
+                try:
+                    with path.open('rb') as source:
+                        if self._media_stat_identity(os.fstat(source.fileno())) != self._media_stat_identity(before):
+                            continue
+                        header = source.read(8)
+                except OSError:
+                    continue
+                content_type = ('image/jpeg' if header.startswith(b'\xff\xd8\xff') else
+                                'image/png' if header == b'\x89PNG\r\n\x1a\n' else None)
+                if content_type is None:
+                    continue
+                # QQ stores JPEG posters with a .png name; serve the actual format.
+                candidate = digest + ('.jpg' if content_type == 'image/jpeg' else '.png')
             destination = owned_root / 'media' / hashlib.sha256((account + ':' + str(path)).encode()).hexdigest() / candidate
             destination.parent.mkdir(parents=True, exist_ok=True)
             if not destination.resolve().is_relative_to(owned_root):
@@ -600,7 +626,7 @@ class LocalQQProvider:
             temporary = destination.with_name(destination.name + '.part')
             if temporary.is_symlink():
                 raise LocalQQError('cache_invalid', 'QQ 附件缓存文件不安全')
-            actual_digest = hashlib.md5() if digest else None
+            actual_digest = hashlib.md5() if digest and not poster else None
             copied = 0
             try:
                 with path.open('rb') as source:
@@ -613,6 +639,8 @@ class LocalQQProvider:
                             chunk = source.read(min(1024 * 1024, MAX_LOCAL_MEDIA_BYTES - copied + 1))
                             if not chunk:
                                 break
+                            if poster and copied == 0 and chunk[:8] != header:
+                                raise LocalQQError('media_changed', 'QQ 视频封面在读取期间发生变化')
                             copied += len(chunk)
                             if copied > MAX_LOCAL_MEDIA_BYTES:
                                 raise LocalQQError('media_changed', 'QQ 附件在读取期间超过大小上限')
@@ -637,7 +665,10 @@ class LocalQQProvider:
             except Exception:
                 temporary.unlink(missing_ok=True)
                 raise
-            return {'available': True, 'path': str(destination), 'content_type': mimetypes.guess_type(candidate)[0] or 'application/octet-stream'}
+            result = {'available': True, 'path': str(destination), 'content_type': content_type or mimetypes.guess_type(candidate)[0] or 'application/octet-stream'}
+            if poster:
+                result.update(video_variant='poster', preview_only=True)
+            return result
         reason = 'QQ 附件尚未缓存到本机，或缓存扫描达到上限' if limited else 'QQ 附件尚未缓存到本机'
         return {'available': False, 'path': None, 'reason': reason}
 

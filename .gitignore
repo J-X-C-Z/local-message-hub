@@ -91,6 +91,8 @@ mmtls/
 .local/
 .runtime/
 qq-local.json
+email.credentials
+email.cursor.json
 output/
 __pycache__/
 *.pyc

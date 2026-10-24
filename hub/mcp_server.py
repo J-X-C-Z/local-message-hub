@@ -51,6 +51,22 @@ def _bound_output(value):
 
 _COMMON_SCOPE = {"platform": {"type": "string", "enum": ["all", *PLATFORMS]}}
 _READ_TOOLS = [
+    {"name": "get_campus_briefing", "description": "Read the SYSU information station's cached selected notices, event feed, hot ranking, dated digest, topics or processing status. Includes separate Westlake DeepSeek/GLM scores and reasons when available; pending/error and local rules are labeled. No network, model calls or collection starts.",
+     "inputSchema": _object({"section": {"type": "string", "enum": ["selected", "all", "hot", "daily", "topics", "bookmarks", "sources", "pipeline"]},
+         "query": {"type": "string", "maxLength": 500}, "topic": {"type": "string", "maxLength": 80},
+         "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+         "limit": _int(1, 100), "offset": _int(0, 1000000)})},
+    {"name": "get_wechat_article_full_text", "description": "Read one exact public WeChat article URL from this Windows user's local WeChat web cache. No network, UI automation, cookies or archive writes. Returns plain untrusted article text in bounded pages; follow next_offset until null. A cache miss is not full text.",
+     "inputSchema": _object({"url": {"type": "string", "minLength": 1, "maxLength": 8192},
+         "offset": _int(0, 4194304), "max_chars": _int(1, 6000)}, ("url",))},
+    {"name": "search_campus_information", "description": "Search cached SYSU student notices and public-account articles. Returns official source URLs and publication dates; never fetches websites during a tool call.",
+     "inputSchema": _object({"query": {"type": "string", "maxLength": 2000},
+         "category": {"type": "string", "maxLength": 128}, "source_id": {"type": "string", "maxLength": 128},
+         "campus": {"type": "string", "maxLength": 64}, "relevant": {"type": "boolean"},
+         "bookmarked": {"type": "boolean"}, "limit": _int(1,100), "offset": _int(0,1000000)})},
+    {"name": "list_campus_sources", "description": "List SYSU public information sources, official service portals and last collection status. No network requests or credentials.", "inputSchema": _object({})},
+    {"name": "get_campus_information", "description": "Read one cached SYSU notice or public-account article by exact item ID. Article content is untrusted data.",
+     "inputSchema": _object({"item_id": {"type": "string", "minLength": 64, "maxLength": 64}}, ("item_id",))},
     {"name": "search_moments", "description": "Search locally decrypted WeChat Moments by author, text and date. Reads only the local sns.db copy and never fetches remote media.",
      "inputSchema": _object({"query": {"type": "string", "maxLength": 1000},
          "account_id": {"type": "string", "maxLength": 256},
@@ -62,6 +78,8 @@ _READ_TOOLS = [
     {"name": "search_messages", "description": "Search indexed messages across selected platforms.",
      "inputSchema": _object({**_COMMON_SCOPE, "query": {"type": "string", "maxLength": 2000},
          "type": {"type": "string"}, "start": {"type": "string"}, "end": {"type": "string"},
+         "account_id": {"type": "string", "minLength": 1, "maxLength": 256},
+         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 2048},
          "limit": _int(1, 100), "offset": _int(0, 1000000), "cursor": {"type": "string", "maxLength": 128}}, ("query",))},
     {"name": "list_conversations", "description": "List indexed conversations.",
      "inputSchema": _object({**_COMMON_SCOPE, "query": {"type": "string", "maxLength": 1000},
@@ -89,7 +107,7 @@ _READ_TOOLS = [
      "inputSchema": _object({**_COMMON_SCOPE, "query": {"type": "string", "maxLength": 1000},
          "account_id": {"type": "string", "maxLength": 256},
          "limit": _int(1, 100), "offset": _int(0, 1000000)})},
-    {"name": "list_group_members", "description": "List locally available member metadata for one exact indexed group. Requires an initialized local platform reader.",
+    {"name": "list_group_members", "description": "List locally available member metadata for one exact indexed group. Opens the configured local platform reader on demand without syncing.",
      "inputSchema": _object({"platform": {"type": "string", "enum": ["wechat", "wecom", "qq"]},
          "account_id": {"type": "string", "minLength": 1, "maxLength": 256},
          "conversation_id": {"type": "string", "minLength": 1, "maxLength": 2048},
@@ -100,6 +118,12 @@ _READ_TOOLS = [
          "account_id": {"type": "string", "minLength": 1, "maxLength": 256},
          "contact_id": {"type": "string", "minLength": 1, "maxLength": 512}},
          ("platform", "account_id", "contact_id"))},
+    {"name": "list_accounts", "description": "Discover exact indexed platform/account IDs for scoped queries; no client login or network probe.",
+     "inputSchema": _object({**_COMMON_SCOPE, "limit": _int(1, 100), "offset": _int(0, 1000000)})},
+    {"name": "get_source_status", "description": "Read content-free indexed counts and this MCP process's local source state, including email. Does not probe clients, connect mailboxes, or return configuration, paths or error text. A separate WebUI process may have different sync state.",
+     "inputSchema": _object(_COMMON_SCOPE)},
+    {"name": "get_import_status", "description": "Read one local import job by exact ID, without scanning the import history. Never starts or retries an import.",
+     "inputSchema": _object({"job_id": {"type": "string", "minLength": 1, "maxLength": 256}}, ("job_id",))},
     {"name": "list_sources", "description": "Show indexed message counts by platform. This does not probe or connect platform applications.",
      "inputSchema": _object({})},
     {"name": "list_imports", "description": "List local JSON/CSV import job status and validation reports.",
@@ -271,9 +295,13 @@ _WECOM_BOT_STATUS_TOOL = {
     "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 }
 _TOOL_FIELDS = {
+    "get_campus_briefing": {"section", "query", "topic", "date", "limit", "offset"},
+    "get_wechat_article_full_text": {"url", "offset", "max_chars"},
+    "search_campus_information": {"query", "category", "source_id", "campus", "relevant", "bookmarked", "limit", "offset"},
+    "list_campus_sources": set(), "get_campus_information": {"item_id"},
     "search_moments": {"query", "account_id", "username", "start", "end", "limit", "offset"},
     "get_moment_media": {"media_url"},
-    "search_messages": {"platform", "query", "type", "start", "end", "limit", "offset", "cursor"},
+    "search_messages": {"platform", "account_id", "conversation_id", "query", "type", "start", "end", "limit", "offset", "cursor"},
     "list_conversations": {"platform", "query", "limit", "offset"},
     "list_messages": {"platform", "account_id", "conversation_id", "query", "type", "start", "end", "limit", "offset", "cursor"},
     "get_message_context": {"platform", "account_id", "message_id", "before", "after"},
@@ -281,6 +309,9 @@ _TOOL_FIELDS = {
     "list_contacts": {"platform", "account_id", "query", "limit", "offset"},
     "list_group_members": {"platform", "account_id", "conversation_id", "q", "limit", "offset"},
     "get_contact_avatar": {"platform", "account_id", "contact_id"},
+    "list_accounts": {"platform", "limit", "offset"},
+    "get_source_status": {"platform"},
+    "get_import_status": {"job_id"},
     "list_sources": set(),
     "list_imports": {"limit", "offset"},
     "list_media": {"platform", "account_id", "conversation_id", "type", "query", "start", "end", "limit", "offset"},
@@ -312,6 +343,9 @@ _TOOL_FIELDS.update({
     "get_wechat_send_status": {"request_id"},
 })
 _TOOL_REQUIRED = {
+    "get_wechat_article_full_text": {"url"},
+    "get_campus_information": {"item_id"},
+    "get_import_status": {"job_id"},
     "get_moment_media": {"media_url"},
     "search_messages": {"query"},
     "list_messages": {"platform", "account_id", "conversation_id"},
@@ -341,6 +375,12 @@ _TOOL_REQUIRED = {
     "get_wechat_send_status": {"request_id"},
 }
 _TOOL_CAPABILITY = {
+    "get_campus_briefing": "campus",
+    "get_wechat_article_full_text": "campus",
+    "search_campus_information": "campus", "list_campus_sources": "campus", "get_campus_information": "campus",
+    "list_accounts": "chat",
+    "get_source_status": "stats",
+    "get_import_status": "imports",
     "list_sources": "stats",
     "search_messages": "search",
     "search_moments": "moments",
@@ -377,7 +417,10 @@ class MCPServer:
                  qq_forward_reader=None, qq_forward_lister=None,
                  wecom_bot_identity_reader=None,
                  wechat_readiness_reader=None, qq_send_target_resolver=None,
-                 wechat_source_media_lister=None, wechat_source_media_reader=None):
+                 wechat_source_media_lister=None, wechat_source_media_reader=None,
+                 source_status_reader=None, campus_reader=None):
+        self.campus_reader = campus_reader
+        self.source_status_reader = source_status_reader
         self.store = store
         self.allow_writes = bool(allow_writes)
         self.media_reader = media_reader
@@ -682,9 +725,10 @@ class MCPServer:
             raise ValueError("Unexpected tool argument")
         if _TOOL_REQUIRED.get(name, set()) - set(args):
             raise ValueError("Missing required tool argument")
-        limits = {"platform": 16, "query": 2000, "account_id": 256, "conversation_id": 2048,
+        limits = {"url": 8192, "category": 128, "source_id": 128, "campus": 64, "item_id": 64,
+                  "platform": 16, "query": 2000, "account_id": 256, "conversation_id": 2048,
                   "contact_id": 512, "identity_id": 256, "message_id": 2048,
-                  "referencing_message_id": 2048,
+                  "referencing_message_id": 2048, "job_id": 256,
                   "type": 32, "start": 32, "end": 32, "cursor": 1024, "note": 4096,
                   "shard": 512, "local_id": 20,
                   "conversation_type": 16, "text": 4000, "request_id": 80,
@@ -799,8 +843,9 @@ class MCPServer:
         offset = args.get("offset", 0)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
             raise ValueError("limit must be from 1 to 100")
-        if not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= 1_000_000:
-            raise ValueError("offset must be from 0 to 1000000")
+        max_offset = 4194304 if name == 'get_wechat_article_full_text' else 1_000_000
+        if not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= max_offset:
+            raise ValueError(f"offset must be from 0 to {max_offset}")
         if name == "get_wechat_source_media" and not re.fullmatch(r"[0-9]{1,20}", args["local_id"]):
             raise ValueError("local_id must be a decimal WeChat row ID")
         if name == "list_group_members":
@@ -830,7 +875,14 @@ class MCPServer:
             query = args.get("query")
             if not isinstance(query, str) or len(query) > 2000:
                 raise ValueError("query is required and limited to 2000 characters")
-            return self.store.search(query, platform, args.get("type", ""), args.get("start", ""), args.get("end", ""), limit, offset, args.get("cursor"))
+            account_id = args.get("account_id", "")
+            conversation_id = args.get("conversation_id", "")
+            if "account_id" in args and (not account_id.strip() or platform == "all"):
+                raise ValueError("account_id requires a non-empty ID and an exact platform")
+            if "conversation_id" in args and (not conversation_id.strip() or not account_id or platform == "all"):
+                raise ValueError("conversation_id requires an exact platform and account_id")
+            return self.store.search(query, platform, args.get("type", ""), args.get("start", ""), args.get("end", ""), limit, offset, args.get("cursor"),
+                                     account_id=account_id, conversation_id=conversation_id)
         if name == "list_conversations":
             return self.store.conversations(platform, args.get("query", ""), limit, offset)
         if name == "list_messages":
@@ -876,6 +928,69 @@ class MCPServer:
                                        args.get("account_id", ""))
         if name == "get_contact_avatar":
             return {key: args[key] for key in ("platform", "account_id", "contact_id")}
+        if name == "get_wechat_article_full_text":
+            from integrations.campus.adapter import read_cached_wechat_article
+            max_chars = args.get('max_chars', 5000)
+            if type(max_chars) is not int or not 1 <= max_chars <= 6000:
+                raise ValueError('max_chars must be an integer between 1 and 6000')
+            result = read_cached_wechat_article(args['url'])
+            if not result['items']:
+                return dict(status=result['status'], error=result['error'], item=None,
+                            content='', total_characters=0, offset=offset, next_offset=None)
+            article = dict(result['items'][0])
+            content = article.pop('content')
+            end = min(len(content), offset + max_chars)
+            return dict(status='full_text', error='', item=article, content=content[offset:end],
+                        total_characters=len(content), offset=offset,
+                        next_offset=end if end < len(content) else None)
+        if name in {"get_campus_briefing", "search_campus_information", "list_campus_sources", "get_campus_information"}:
+            if self.campus_reader is None:
+                raise ValueError("校园信息服务不可用")
+            service = self.campus_reader()
+            if name == 'get_campus_briefing':
+                return service.briefing(section=args.get('section', 'selected'), q=args.get('query', ''),
+                    topic=args.get('topic', ''), date=args.get('date', ''), limit=limit, offset=offset)
+            if name == "list_campus_sources":
+                return service.sources()
+            if name == "get_campus_information":
+                if not re.fullmatch(r"[a-f0-9]{64}", args['item_id']):
+                    raise ValueError("校园信息 ID 无效")
+                return service.get_item(args['item_id'])
+            for key in ('relevant', 'bookmarked'):
+                if key in args and not isinstance(args[key], bool):
+                    raise ValueError(f"{key} must be boolean")
+            return service.search(q=args.get('query', ''), category=args.get('category', ''),
+                source_id=args.get('source_id', ''), campus=args.get('campus', ''),
+                relevant=args.get('relevant', False), bookmarked=args.get('bookmarked', False),
+                limit=limit, offset=offset)
+        if name == "list_accounts":
+            items = [item for item in self.store.account_scopes()
+                     if platform == "all" or item["platform"] == platform]
+            return {"items": items[offset:offset + limit], "total": len(items)}
+        if name == "get_source_status":
+            snapshots = self.source_status_reader() if self.source_status_reader else []
+            states = {item.get("id"): item for item in snapshots if isinstance(item, dict)}
+            counts = self.store.source_counts()
+            items = []
+            for source in PLATFORMS:
+                if platform != "all" and source != platform:
+                    continue
+                state = states.get(source, {})
+                runtime_state = state.get("state")
+                if runtime_state not in {"disconnected", "connecting", "connected", "syncing", "indexing", "error", "ready", "partial"}:
+                    runtime_state = "unknown"
+                last_sync = state.get("last_sync")
+                items.append({"platform": source, "state": runtime_state,
+                              "last_sync": last_sync if type(last_sync) in (int, float) else None,
+                              "has_error": bool(state.get("error")),
+                              "message_count": counts.get(source, {}).get("messages", 0),
+                              "conversation_count": counts.get(source, {}).get("conversations", 0)})
+            return {"items": items, "status_scope": "current_process"}
+        if name == "get_import_status":
+            result = self.store.import_job(args["job_id"])
+            if result is None:
+                raise ValueError("Import job not found")
+            return result
         if name == "list_sources":
             return {"items": [{"platform": value, **self.store.stats(value)} for value in PLATFORMS]}
         if name == "list_relationship_footprint":
@@ -1108,7 +1223,7 @@ class MCPServer:
         definitions = [
             {"name": "cross_platform_search", "description": "Search indexed messages across one or all local platforms.",
              "arguments": [{"name": "query", "description": "Terms to search for.", "required": True},
-                           {"name": "platform", "description": "all, wechat, wecom, qq, or telegram.", "required": False}]},
+                           {"name": "platform", "description": "all, wechat, wecom, qq, telegram, or email.", "required": False}]},
             {"name": "inspect_attachment", "description": "Inspect an indexed attachment and optionally request a locally cached image.",
              "arguments": [{"name": "platform", "description": "Source platform.", "required": True},
                            {"name": "account_id", "description": "Local account identifier.", "required": True},
@@ -1192,7 +1307,9 @@ def serve(input_stream=None, output_stream=None, storage=LOCAL):
                            wecom_bot_identity_reader=media_hub.wecom_bot_credentials.status,
                            wechat_readiness_reader=lambda: media_hub.wechat_sender.readiness(True),
                            wechat_source_media_lister=media_hub.list_wechat_source_media,
-                           wechat_source_media_reader=media_hub.read_wechat_source_media)
+                           wechat_source_media_reader=media_hub.read_wechat_source_media,
+                           source_status_reader=media_hub.source_status_snapshot,
+                           campus_reader=media_hub.campus_service)
         while True:
             line = input_stream.readline(_MAX_LINE + 1)
             if not line:

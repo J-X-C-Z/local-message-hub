@@ -47,6 +47,9 @@ _UIA_ENABLED_PROPERTY = 30010
 _UIA_AUTOMATION_ID_PROPERTY = 30011
 _UIA_EDIT_CONTROL = 50004
 _UIA_VALUE_PATTERN = 10002
+_UIA_OFFSCREEN_PROPERTY = 30022
+_UIA_CHAT_HEADER_ID = ("top_content_h_view.top_spacing_v_view.top_left_info_v_view."
+                       "big_title_line_h_view.current_chat_name_label")
 
 
 class _GUID(ctypes.Structure):
@@ -128,11 +131,27 @@ def _uia_window_class(handle):
             ole32.CoUninitialize()
 
 
-def _uia_set_chat_text(handle, text, expected_names, can_commit, send_enter):
-    """Set text in the uniquely identified Weixin chat input, without clearing drafts."""
+def _uia_target_proven(handle, expected_names):
+    """Read only: require an exact active header and one matching chat input."""
+    try:
+        return _uia_set_chat_text(handle, "", expected_names, None, None,
+                                  probe_only=True) is True
+    except Exception:
+        return False
+
+
+def _uia_set_chat_text(handle, text, expected_names, can_commit, send_enter,
+                       *, probe_only=False):
+    """Probe identity read-only, or write to a unique input without clearing drafts.
+
+    The strict header path is taken from the bundled upstream ChatInfoView
+    binding. Unsupported accessibility layouts deliberately fail closed.
+    """
     ole32 = ctypes.windll.ole32
     automation = root = condition = elements = composer = value_pattern = None
     candidates = []
+    headers = []
+    input_count = 0
     initialized = False
     write_started = False
     send_started = False
@@ -174,20 +193,32 @@ def _uia_set_chat_text(handle, text, expected_names, can_commit, send_enter):
             element = ctypes.c_void_p()
             if _com_slot(elements, 4, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))(
                     elements, ctypes.c_int(index), ctypes.byref(element)) != 0 or not element.value:
-                continue
+                raise WeChatSendError("wechat_uia_composer_unverified")
             try:
                 aid = _uia_property(element, _UIA_AUTOMATION_ID_PROPERTY)
                 control_type = _uia_property(element, _UIA_CONTROL_TYPE_PROPERTY)
                 name = _uia_property(element, _UIA_NAME_PROPERTY)
                 enabled = _uia_property(element, _UIA_ENABLED_PROPERTY)
+                if isinstance(aid, str) and aid.rsplit(".", 1)[-1] == "chat_input_field":
+                    input_count += 1
+                if probe_only and aid == _UIA_CHAT_HEADER_ID:
+                    headers.append(name if control_type == 50020 and enabled is True
+                                   and _uia_property(element, _UIA_OFFSCREEN_PROPERTY) is False
+                                   else None)
                 if _is_chat_composer(aid, control_type, enabled, name, expected_names):
+                    if probe_only and _uia_property(element, _UIA_OFFSCREEN_PROPERTY) is not False:
+                        continue
                     candidates.append(element)
                     element = None
             finally:
                 if element:
                     _com_slot(element, 2)(element)
-        if len(candidates) != 1:
+        if len(candidates) != 1 or input_count != 1:
             raise WeChatSendError("wechat_uia_composer_unverified")
+        if probe_only:
+            if len(headers) != 1 or headers[0] not in expected_names:
+                raise WeChatSendError("wechat_uia_conversation_unverified")
+            return True
         composer = candidates.pop()
         value_pattern = ctypes.c_void_p()
         if _com_slot(composer, 16, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))(
@@ -209,6 +240,8 @@ def _uia_set_chat_text(handle, text, expected_names, can_commit, send_enter):
                 value_pattern, ctypes.byref(read_only)) != 0 or read_only.value:
             raise WeChatSendError("wechat_uia_composer_unverified")
 
+        if not can_commit():
+            raise WeChatSendError("wechat_conversation_changed")
         if _com_slot(composer, 3)(composer) != 0:
             raise WeChatSendError("wechat_uia_composer_unverified")
         sys_alloc_string = ctypes.windll.oleaut32.SysAllocString
@@ -577,13 +610,15 @@ class WeChatGUISender:
     """Deliver exactly one approved text request through a real Weixin window."""
 
     def __init__(self, provider_factory=None, reader_factory=None, timeout=45.0,
-                 win32=None, sleep=time.sleep, uia_set_text=_uia_set_chat_text):
+                 win32=None, sleep=time.sleep, uia_set_text=_uia_set_chat_text,
+                 uia_target_probe=_uia_target_proven):
         self._provider_factory = provider_factory
         self._reader_factory = reader_factory
         self.timeout = min(max(float(timeout), 5.0), 120.0)
         self.win32 = win32 or _Win32()
         self.sleep = sleep
         self.uia_set_text = uia_set_text
+        self.uia_target_probe = uia_target_probe
         self._provider = None
 
     def reader(self):
@@ -654,23 +689,26 @@ class WeChatGUISender:
         return {"message_id": receipt, "account_id": account_id}
 
     def resolve_conversation(self, conversation_id):
-        """Find a dedicated chat window whose title proves the target conversation.
+        """Prefer a main window with a proven active target; otherwise exact title.
 
-        Only a dedicated chat window can have its identity proven without OCR or
-        UI Automation, so a send is only ever attempted there. A title that merely
-        contains the name is not evidence: WeChat appends group members, counts and
-        history suffixes to window titles. So the title must equal the resolved
-        display name, or be exactly ``<display name><history marker>``.
+        Never select another conversation: unavailable or ambiguous UIA evidence
+        leaves the main window ineligible. Dedicated titles retain exact matching.
         """
         titles = self.display_names(conversation_id)
         if not titles:
             raise WeChatSendError("wechat_conversation_unknown")
         matches = []
+        main_matches = []
         for handle, cls, title in self.win32.enumerate_visible():
-            if cls != WINDOW_CLASS or not title or title in MAIN_WINDOW_TITLES:
+            if cls != WINDOW_CLASS or not title:
+                continue
+            if title in MAIN_WINDOW_TITLES:
+                if self._main_target_proven(handle, titles):
+                    main_matches.append((handle, title))
                 continue
             if self._title_proves_target(title, titles):
                 matches.append((handle, title))
+        matches = main_matches or matches
         if not matches:
             raise WeChatSendError("wechat_conversation_not_open")
         if len(matches) > 1:
@@ -682,6 +720,12 @@ class WeChatGUISender:
         if self.win32.input_desktop_locked():
             raise WeChatSendError("wechat_desktop_locked")
         return handle, proof, titles
+
+    def _main_target_proven(self, handle, names):
+        try:
+            return self.uia_target_probe(handle, names) is True
+        except Exception:
+            return False
 
     @staticmethod
     def _title_proves_target(title, titles):
@@ -715,11 +759,19 @@ class WeChatGUISender:
     def _compose_and_send(self, handle, text, proof, expected_names):
         self._focus(handle)
         self._pace("send", 1.0)
+
+        def can_commit():
+            return (not self.win32.input_desktop_locked()
+                    and self.win32.is_foreground(handle) and any(
+                        hwnd == handle and cls == WINDOW_CLASS and title == proof
+                        for hwnd, cls, title in self.win32.enumerate_visible())
+                    and (proof not in MAIN_WINDOW_TITLES
+                         or self._main_target_proven(handle, expected_names)))
+
+        if not can_commit():
+            raise WeChatSendError("wechat_conversation_changed")
         self.uia_set_text(
-            handle, text, expected_names,
-            lambda: (self.win32.is_foreground(handle) and any(
-                hwnd == handle and cls == WINDOW_CLASS and title == proof
-                for hwnd, cls, title in self.win32.enumerate_visible())),
+            handle, text, expected_names, can_commit,
             lambda: self.win32.key(0x0D))
         self.sleep(1.5)
 

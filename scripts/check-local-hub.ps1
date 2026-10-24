@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'test-package-smoke.ps1')
 
 $python = if ($env:LMH_PYTHON) { $env:LMH_PYTHON } else { 'python' }
-& $python -m unittest hub.test_imports hub.test_mcp hub.test_sending hub.test_auto_export hub.test_export_memory hub.test_analytics hub.test_resources hub.test_backups hub.test_account_safety hub.test_voice_transcription hub.test_moments_exports hub.test_startup hub.test_capabilities hub.test_store hub.test_server `
+& $python -m unittest hub.test_mcp_wechat_article integrations.wechat.test_article_cache hub.test_campus_scoring hub.test_campus_scoring_service hub.test_campus_briefing hub.test_campus_updates hub.test_campus_local_wechat integrations.wechat.test_official_accounts hub.test_campus hub.test_campus_integration integrations.campus.test_adapter hub.test_store_performance hub.test_import_performance hub.test_email integrations.email.test_adapter integrations.email.test_provider hub.test_imports hub.test_mcp hub.test_sending hub.test_auto_export hub.test_export_memory hub.test_analytics hub.test_resources hub.test_backups hub.test_account_safety hub.test_voice_transcription hub.test_capabilities hub.test_moments_exports hub.test_startup hub.test_store hub.test_server `
     integrations.wechat.test_cursor integrations.wechat.test_media integrations.wechat.test_moments integrations.wechat.test_provider integrations.wechat.test_sns_media integrations.wecom.test_adapter integrations.wecom.test_config integrations.wecom.test_bot_credentials integrations.wecom.test_bot_media integrations.wecom.test_bot_sender `
     integrations.qq.test_provider integrations.qq.test_sender integrations.qq.test_local_provider integrations.qq.test_local_wal integrations.qq.test_key_reader integrations.qq.test_send_target integrations.telegram.test_adapter integrations.wechat.test_sender hub.test_windows_notifications hub.test_streaming_json -q
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -22,9 +22,13 @@ node --test webui/test-self-sent-daily-render.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --test webui/test-lock-interaction.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node --test webui/test-refresh-performance.cjs webui/test-navigation-init.cjs
+node --test webui/test-refresh-performance.cjs webui/test-navigation-init.cjs webui/test-performance-view-loading.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --check webui/lock.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node --test webui/test-email-support.cjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node --test webui/test-campus.cjs webui/test-campus-scoring.cjs webui/test-campus-updates.cjs webui/test-station-navigation.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $python -m py_compile hub/imports.py hub/mcp_server.py hub/sending.py hub/auto_export.py hub/analytics.py hub/resources.py hub/backups.py hub/account_safety.py hub/voice_transcription.py hub/moments_exports.py hub/capabilities.py hub/store.py hub/server.py `

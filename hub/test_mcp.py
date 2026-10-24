@@ -19,6 +19,73 @@ class MCPServerTest(unittest.TestCase):
     def test_every_mcp_tool_has_an_explicit_capability(self):
         self.assertEqual(set(mcp_module._TOOL_FIELDS), set(mcp_module._TOOL_CAPABILITY))
 
+    def test_accounts_source_status_and_import_lookup_are_scoped_and_sanitized(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as storage:
+            from hub.server import Hub
+            hub = Hub(storage, resume_imports=False)
+            try:
+                hub.email_provider = Mock(side_effect=AssertionError("must not open provider"))
+                hub.store.ingest("email", "mail-a", [{"id": "inbox", "title": "Inbox"}], [
+                    {"id": "m1", "conversation_id": "inbox", "timestamp": 1, "text": "fixture"}])
+                hub.store.ingest("qq", "qq-a", [{"id": "room", "title": "Room"}], [])
+                hub.sources["email"].update(state="error", last_sync=123,
+                    error="private-password-C:/secret", progress="private-progress",
+                    config={"password": "private-password"})
+                server = MCPServer(hub.store, source_status_reader=hub.source_status_snapshot)
+                page = server.call_tool("list_accounts", {"limit": 1})
+                self.assertEqual(page["total"], 2)
+                self.assertEqual(page["items"], [{"platform": "email", "account_id": "mail-a"}])
+                self.assertEqual(server.call_tool("list_accounts", {"platform": "qq"})["items"],
+                                 [{"platform": "qq", "account_id": "qq-a"}])
+                source = server.call_tool("get_source_status", {"platform": "email"})
+                self.assertEqual(source, {"items": [{"platform": "email", "state": "error",
+                    "last_sync": 123, "has_error": True, "message_count": 1,
+                    "conversation_count": 1}], "status_scope": "current_process"})
+                self.assertNotIn("private", json.dumps(source))
+                hub.email_provider.assert_not_called()
+                job = {"id": "test-job", "fingerprint": "a" * 64, "filename": "fixture.eml",
+                       "staging_file": "C:/secret/stage", "created_at": 1,
+                       "total": 1, "valid": 1, "invalid": 0}
+                hub.store.create_import_job(job)
+                result = server.call_tool("get_import_status", {"job_id": "test-job"})
+                self.assertEqual(result["state"], "queued")
+                self.assertNotIn("staging_file", result)
+                with self.assertRaisesRegex(ValueError, "not found"):
+                    server.call_tool("get_import_status", {"job_id": "missing"})
+                for args in ({}, {"job_id": ""}, {"job_id": 1}, {"job_id": "x", "path": "x"}):
+                    with self.subTest(args=args), self.assertRaises(ValueError):
+                        server.call_tool("get_import_status", args)
+                disabled = MCPServer(hub.store, capabilities={"chat": False, "stats": False, "imports": False})
+                for name in ("list_accounts", "get_source_status", "get_import_status"):
+                    self.assertNotIn(name, {tool["name"] for tool in disabled.tools()})
+                    with self.assertRaises(ValueError):
+                        disabled.call_tool(name, {})
+            finally:
+                hub.close()
+
+    def test_search_exact_scope_rejects_ambiguous_filters_and_cursor_reuse(self):
+        with ChatStore(":memory:") as store:
+            for platform, account in (("email", "mail-a"), ("email", "mail-b"), ("qq", "mail-a")):
+                store.ingest(platform, account, [{"id": "inbox"}, {"id": "other"}], [
+                    {"id": str(i), "conversation_id": room, "timestamp": i + 1, "text": "shared fixture"}
+                    for i, room in enumerate(("inbox", "inbox", "other"))])
+            server = MCPServer(store)
+            scope = {"query": "shared", "platform": "email", "account_id": "mail-a",
+                     "conversation_id": "inbox", "limit": 1}
+            first = server.call_tool("search_messages", scope)
+            self.assertEqual(first["total"], 2)
+            self.assertEqual(first["items"][0]["account_id"], "mail-a")
+            second = server.call_tool("search_messages", {**scope, "cursor": first["next_cursor"]})
+            self.assertNotEqual(first["items"][0]["id"], second["items"][0]["id"])
+            with self.assertRaisesRegex(ValueError, "cursor"):
+                server.call_tool("search_messages", {**scope, "account_id": "mail-b", "cursor": first["next_cursor"]})
+            for filters in ({"account_id": "mail-a"}, {"conversation_id": "inbox"},
+                            {"platform": "email", "conversation_id": "inbox"},
+                            {"platform": "email", "account_id": " "}):
+                with self.subTest(filters=filters), self.assertRaises(ValueError):
+                    server.call_tool("search_messages", {"query": "shared", **filters})
+
     def test_list_imports_paginates_beyond_first_hundred_and_reports_full_total(self):
         store = ChatStore(":memory:")
         for index in range(101):
@@ -954,6 +1021,116 @@ class MCPServerTest(unittest.TestCase):
             service.repository.close()
             store.close()
 
+    def test_wechat_approval_http_guards_preserve_challenge_until_ready(self):
+        from contextlib import ExitStack
+        from http.client import HTTPConnection
+        from http.server import HTTPServer
+        from unittest.mock import Mock
+        from hub.sending import SendRepository, SendService
+        from hub.server import Hub, Handler
+        from hub.account_safety import AccountSafety
+
+        with ExitStack() as cleanup:
+            storage = cleanup.enter_context(tempfile.TemporaryDirectory())
+            adapter = Mock()
+            adapter.deliver.return_value = {"message_id": "synthetic-receipt"}
+            repository = SendRepository(f"{storage}/hub.sqlite3")
+            cleanup.callback(repository.close)
+            service = SendService(repository, {"wechat": adapter})
+            hub = Hub.__new__(Hub)
+            hub.send_service = service
+            hub.settings = {"capabilities": {"wechat_send": True}}
+            hub.account_safety = AccountSafety({}, lambda _settings: None)
+            session = hub.account_safety.setup("synthetic-passphrase")
+            hub.send_approval_challenges = {}
+            hub.lock = threading.RLock()
+            hub.wechat_sender = Mock()
+            ready = {"state": "ready", "account_id": "wxid_self0001"}
+            hub.wechat_sender.readiness.return_value = ready
+            request_id = "approval_http_01"
+            service.prepare({
+                "platform": "wechat", "account_id": "wxid_self0001",
+                "conversation_type": "private", "conversation_id": "wxid_friend01",
+                "text": "synthetic test", "request_id": request_id})
+            token = hub.issue_send_approval_challenge(request_id, "wechat")["token"]
+            challenges = dict(hub.send_approval_challenges)
+            sessions = dict(hub.account_safety._sessions)
+
+            with HTTPServer(("127.0.0.1", 0), Handler) as server:
+                setattr(server, "hub", hub)
+                thread = threading.Thread(target=server.serve_forever,
+                                          kwargs={"poll_interval": 0.01}, daemon=True)
+                thread.start()
+
+                def post(approval_token=token, cookie=session, **headers):
+                    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                    try:
+                        connection.request("POST", f"/api/wechat-sends/{request_id}/approve",
+                                           json.dumps({"approval_token": approval_token}), {
+                                               "Content-Type": "application/json",
+                                               "Cookie": f"lmh_session={cookie}", **headers})
+                        response = connection.getresponse()
+                        return response.status, json.loads(response.read())
+                    finally:
+                        connection.close()
+
+                def assert_pending():
+                    pending = service.status(request_id, "wechat")
+                    self.assertIsNotNone(pending)
+                    assert pending is not None
+                    self.assertEqual(pending["status"], "pending_approval")
+                    self.assertEqual(hub.send_approval_challenges, challenges)
+                    self.assertEqual(hub.account_safety._sessions, sessions)
+                    adapter.deliver.assert_not_called()
+
+                try:
+                    self.assertEqual(post(Origin="http://untrusted.invalid")[0], 403)
+                    assert_pending()
+                    self.assertEqual(post(cookie="invalid-session")[0], 423)
+                    assert_pending()
+                    hub.settings["capabilities"]["wechat_send"] = False
+                    self.assertEqual(post()[0], 403)
+                    assert_pending()
+                    hub.settings["capabilities"]["wechat_send"] = True
+                    hub.wechat_sender.readiness.assert_not_called()
+
+                    for readiness, error in (
+                            ({"state": "logged_out", "account_id": "wxid_self0001"},
+                             "微信客户端不可用"),
+                            ({"state": "ready", "account_id": "wxid_other0001"},
+                             "currently logged-in WeChat account"),
+                            ({"state": "ready", "account_id": ""}, "微信客户端不可用"),
+                            ({"state": "ready", "account_id": 123}, "微信客户端不可用"),
+                            (None, "微信客户端不可用")):
+                        with self.subTest(readiness=readiness):
+                            hub.wechat_sender.readiness.return_value = readiness
+                            status, payload = post()
+                            self.assertEqual(status, 400)
+                            self.assertIn(error, payload["error"])
+                            assert_pending()
+
+                    hub.wechat_sender.readiness.return_value = ready
+                    status, payload = post(approval_token="wrong-token")
+                    self.assertEqual(status, 400)
+                    self.assertIn("发送确认令牌", payload["error"])
+                    assert_pending()
+
+                    # A second probe would fail after consuming the valid challenge.
+                    hub.wechat_sender.readiness.reset_mock()
+                    hub.wechat_sender.readiness.side_effect = [ready, {"state": "logged_out"}]
+                    status, payload = post()
+                    self.assertEqual(status, 200, payload)
+                    self.assertEqual(payload["status"], "sent")
+                    self.assertNotIn(request_id, hub.send_approval_challenges)
+                    hub.wechat_sender.readiness.assert_called_once_with(True)
+                    adapter.deliver.assert_called_once()
+                    self.assertEqual(post()[0], 400)
+                    adapter.deliver.assert_called_once()
+                    self.assertEqual(hub.account_safety._sessions, sessions)
+                finally:
+                    server.shutdown()
+                    thread.join(timeout=5)
+
     def test_wechat_mcp_tools_require_enabled_capability_and_ready_client(self):
         from hub.sending import SendRepository, SendService
 
@@ -1220,14 +1397,14 @@ class MCPServerTest(unittest.TestCase):
                          [{"id": "person", "name": "Person"}])
             read_only = MCPServer(store)
             names = [tool["name"] for tool in read_only.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]]
-            self.assertEqual(len(names), 14)
+            self.assertEqual(len(names), 22)
             denied = read_only.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
                 "name": "update_conversation_metadata", "arguments": {"platform": "wechat", "account_id": "account", "conversation_id": "room", "note": "x"}}})
             self.assertTrue(denied["result"]["isError"])
             self.assertEqual(store.conversations("wechat")["items"][0]["note"], "")
             writable = MCPServer(store, allow_writes=True)
             tools = writable.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})["result"]["tools"]
-            self.assertEqual(len(tools), 17)
+            self.assertEqual(len(tools), 25)
             self.assertFalse(next(tool for tool in tools if tool["name"] == "update_conversation_metadata")["annotations"]["readOnlyHint"])
             updated = writable.call_tool("update_conversation_metadata", {
                 "platform": "wechat", "account_id": "account", "conversation_id": "room", "note": "local", "tags": ["keep"], "archived": True})
@@ -1256,7 +1433,7 @@ class MCPServerTest(unittest.TestCase):
             serve(io.BytesIO(("\n".join(json.dumps(item) for item in requests) + "\n").encode()), output, storage)
             tools = json.loads(output.getvalue().splitlines()[0])["result"]["tools"]
             tool_names = {tool["name"] for tool in tools}
-            self.assertEqual(len(tools), 26)
+            self.assertEqual(len(tools), 34)
             self.assertTrue({"list_wechat_source_media", "get_wechat_source_media"} <= tool_names)
 
     def test_stdio_queries_coexist_with_concurrent_wal_writes(self):
@@ -1348,6 +1525,10 @@ class MCPServerTest(unittest.TestCase):
                 {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_messages", "arguments": {"query": "MCP", "platform": "wechat"}}},
                 {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "list_imports", "arguments": {}}},
                 {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "search_messages", "arguments": {"query": "MCP", "limit": 1000}}},
+                {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "list_accounts", "arguments": {"platform": "wechat"}}},
+                {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "get_import_status", "arguments": {"job_id": "mcp-job-fixture"}}},
+                {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "get_source_status", "arguments": {"platform": "email"}}},
+                {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "search_messages", "arguments": {"query": "MCP", "platform": "wechat", "account_id": "synthetic", "conversation_id": "room"}}},
                 {"jsonrpc": "2.0", "method": "exit"},
             ]
             process = subprocess.run(
@@ -1363,7 +1544,7 @@ class MCPServerTest(unittest.TestCase):
             self.assertEqual(output[0]["result"]["protocolVersion"], "2024-11-05")
             tools = output[1]["result"]["tools"]
             tool_names = {tool["name"] for tool in tools}
-            self.assertEqual(len(tools), 23)
+            self.assertEqual(len(tools), 31)
             self.assertTrue({"list_wechat_source_media", "get_wechat_source_media"} <= tool_names)
 
             gated_store = ChatStore(":memory:")
@@ -1386,11 +1567,17 @@ class MCPServerTest(unittest.TestCase):
             imports = json.loads(output[3]["result"]["content"][0]["text"])
             self.assertEqual(imports["items"][0]["filename"], "fixture.json")
             self.assertTrue(output[4]["result"]["isError"])
+            self.assertEqual(output[5]["result"]["structuredContent"]["items"],
+                             [{"platform": "wechat", "account_id": "synthetic"}])
+            self.assertEqual(output[6]["result"]["structuredContent"]["id"], "mcp-job-fixture")
+            self.assertNotIn("staging_file", output[6]["result"]["structuredContent"])
+            self.assertEqual(output[7]["result"]["structuredContent"]["items"][0]["platform"], "email")
+            self.assertEqual(output[8]["result"]["structuredContent"]["total"], 2)
             logged = ChatStore(f"{storage}/hub.sqlite3")
             try:
                 operations = logged.mcp_operations()
-                self.assertEqual([item["tool"] for item in operations], ["search_messages", "list_imports", "search_messages"])
-                self.assertEqual([item["status"] for item in operations], ["error", "success", "success"])
+                self.assertEqual([item["tool"] for item in operations], ["search_messages", "get_source_status", "get_import_status", "list_accounts", "search_messages", "list_imports", "search_messages"])
+                self.assertEqual([item["status"] for item in operations], ["success", "success", "success", "success", "error", "success", "success"])
                 self.assertNotIn("hello MCP", json.dumps(operations))
             finally:
                 logged.close()

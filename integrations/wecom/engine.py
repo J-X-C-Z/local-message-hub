@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from contextlib import closing
 import datetime
 import glob
 import hashlib
@@ -451,7 +452,7 @@ def _cache_file(root: str, filename: str, media_type: str = '') -> tuple[str, st
 
 
 def build_media_context(full_root: str, snapshot_root: str | None = None,
-                        decrypted_files: dict | None = None):
+                        decrypted_files: dict | None = None, *, message_db: str | None = None):
     """Return bounded media metadata and paths linked via local WeCom indexes."""
     media = []
     if os.path.exists(MEDIA_INDEX):
@@ -473,11 +474,16 @@ def build_media_context(full_root: str, snapshot_root: str | None = None,
         r['rel'] = rel_to_media_path(r.get('保存路径', ''))
 
     mids_by_md5 = {}
-    file_db_paths = [path for rel, path in (decrypted_files or {}).items()
-                     if os.path.basename(rel).casefold() == 'file.db']
-    raw_db_root = snapshot_root or full_root
-    file_db_paths.extend(path for path in glob.glob(
-        os.path.join(raw_db_root, '**', 'file.db'), recursive=True) if path not in file_db_paths)
+    if message_db is not None:
+        # Local message IDs can collide between Data and archived Data branches.
+        sibling = os.path.join(os.path.dirname(message_db), 'file.db')
+        file_db_paths = [sibling] if sibling in (decrypted_files or {}).values() else []
+    else:
+        file_db_paths = [path for rel, path in (decrypted_files or {}).items()
+                         if os.path.basename(rel).casefold() == 'file.db']
+        raw_db_root = snapshot_root or full_root
+        file_db_paths.extend(path for path in glob.glob(
+            os.path.join(raw_db_root, '**', 'file.db'), recursive=True) if path not in file_db_paths)
     for path in file_db_paths:
         for mid, md5 in _iter_readonly_rows(path, 'file_table4', ('message_id', 'md5')):
             normalized = str(md5 or '').lower()
@@ -895,6 +901,52 @@ class SyncEngine:
         with CONFIG_LOCK:
             return self._run_once_locked(do_viewer)
 
+    def restore_cached_media_context(self):
+        """Restore only media from the last completed, profile-bound snapshot."""
+        from pathlib import Path
+
+        state = load_state()
+        marker = state.get('media_snapshot')
+        profile = hashlib.sha256(str(Path(self.cache_root).resolve()).encode('utf-8')).hexdigest()
+        if (not isinstance(marker, dict) or marker.get('version') != 1 or
+                marker.get('profile') != profile):
+            return None
+        name, relative = marker.get('snapshot'), marker.get('message_db')
+        if (not isinstance(name, str) or not re.fullmatch(r'run_\d{8}_\d{6}', name) or
+                not isinstance(relative, str) or '\\' in relative):
+            return None
+        parts = relative.split('/')
+        if (len(parts) != 2 or parts[1] != 'message.db' or
+                not (parts[0] == 'Data' or re.fullmatch(r'Data\.\d+\.old', parts[0]))):
+            return None
+        snapshot = Path(SNAP_ROOT) / name
+        message_db = snapshot / '__dec__' / parts[0] / parts[1]
+        file_db = message_db.with_name('file.db')
+        paths = (Path(SNAP_ROOT), snapshot, snapshot / '__dec__', snapshot / 'CacheMapping', message_db.parent,
+                 message_db, file_db)
+        try:
+            if any(path.is_symlink() for path in paths) or not message_db.is_file() or not file_db.is_file():
+                return None
+            if any(path.is_symlink() for path in (snapshot / 'CacheMapping').rglob('*')):
+                return None
+            with closing(sqlite3.connect(message_db.resolve().as_uri() + '?mode=ro', uri=True)) as connection:
+                connection.execute('SELECT message_id FROM message_table LIMIT 0')
+                decs = {relative: str(message_db), str(file_db.relative_to(snapshot / '__dec__')): str(file_db)}
+                _media, by_mid = build_media_context(self.cache_root, str(snapshot), decs,
+                                                     message_db=str(message_db))
+                # Read identities only, never message bodies, and reject unrelated file rows.
+                valid = {}
+                keys = list(by_mid)
+                for start in range(0, len(keys), 500):
+                    batch = keys[start:start + 500]
+                    placeholders = ','.join('?' for _ in batch)
+                    for (mid,) in connection.execute(
+                            f'SELECT message_id FROM message_table WHERE message_id IN ({placeholders})', batch):
+                        valid[str(mid)] = by_mid[mid]
+            return valid
+        except (OSError, ValueError, sqlite3.Error):
+            return None
+
     def _run_once_locked(self, do_viewer=False) -> list:
         if self._uses_config_root:
             self.full_root = WXROOT
@@ -915,7 +967,8 @@ class SyncEngine:
             return []
 
         names, convs = load_names_convs(decs)
-        media, by_mid = build_media_context(os.path.join(self.full_root, MYVID), snap, decs)
+        media, by_mid = build_media_context(os.path.join(self.full_root, MYVID), snap, decs,
+                                           message_db=msgdb)
 
         state = load_state()
         seen = set(state.get('seen', []))
@@ -964,6 +1017,12 @@ class SyncEngine:
         st['runs'] = st.get('runs', 0) + 1
         st['last'] = _now()
         st['msg_total'] = len(allmsgs)
+        st['media_snapshot'] = {
+            'version': 1,
+            'profile': hashlib.sha256(os.path.realpath(self.cache_root).encode('utf-8')).hexdigest(),
+            'snapshot': os.path.basename(snap),
+            'message_db': os.path.relpath(msgdb, os.path.join(snap, '__dec__')).replace('\\', '/'),
+        }
         save_state(st)
 
         self._emit({

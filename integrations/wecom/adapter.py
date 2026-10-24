@@ -84,6 +84,17 @@ class WeComAdapter:
         self._messages_released = True
         return {"released": True, **summary, "media_messages": len(media)}
 
+    def restore_cached_media(self) -> bool:
+        """Open a completed media snapshot without refreshing source databases."""
+        media = self.engine.restore_cached_media_context()
+        if media is None:
+            return False
+        self._released_media = media
+        self._released_ids = set(media)
+        self._messages_released = True
+        self._loaded = True
+        return True
+
     def iter_message_batches(self, batch_size: int = 500) -> Iterator[list[dict[str, Any]]]:
         """Refresh once, then yield bounded batches for ingestion by the hub."""
         if batch_size < 1:
@@ -260,7 +271,7 @@ class WeComAdapter:
             message = ({"media": self._released_media.get(message_id, [])}
                        if message_id in self._released_ids else None)
         else:
-            message = next((m for m in self._messages()
+            message = next((m for m in self._raw_messages()
                            if str(m.get("message_id")) == message_id), None)
         if message is None:
             return {"available": False, "path": None, "reason": "message_not_found"}

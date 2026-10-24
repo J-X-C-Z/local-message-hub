@@ -289,7 +289,7 @@ function Copy-PublicTree([string]$Source, [string]$Destination, [switch]$Preserv
 }
 
 try {
-    foreach ($directory in @('hub', 'webui', 'integrations/wechat', 'integrations/wecom', 'integrations/telegram')) {
+    foreach ($directory in @('hub', 'webui', 'integrations/wechat', 'integrations/wecom', 'integrations/telegram', 'integrations/email', 'integrations/campus')) {
         Copy-PublicTree (Join-Path $repo $directory) (Join-Path $stage $directory)
     }
     foreach ($relativePath in @('integrations/wecom/bot_credentials.py',
@@ -389,6 +389,7 @@ try {
         '--add-data', ((Join-Path $stage 'webui') + ';webui'),
         '--add-data', ((Join-Path $stage 'integrations') + ';integrations'),
         '--hidden-import', 'integrations.wechat.provider',
+        '--hidden-import', 'integrations.wechat.official_accounts',
         '--hidden-import', 'integrations.wecom.adapter',
         '--hidden-import', 'hub.auto_export',
         '--hidden-import', 'hub.resources',
@@ -400,6 +401,14 @@ try {
         '--hidden-import', 'integrations.qq.key_store',
         '--hidden-import', 'integrations.qq.send_target',
         '--hidden-import', 'integrations.telegram.adapter',
+        '--hidden-import', 'integrations.email.adapter',
+        '--hidden-import', 'integrations.email.provider',
+        '--hidden-import', 'integrations.campus.catalog',
+        '--hidden-import', 'integrations.campus.adapter',
+        '--hidden-import', 'integrations.wechat.article_cache',
+        '--hidden-import', 'hub.campus',
+        '--hidden-import', 'hub.campus_briefing',
+        '--hidden-import', 'hub.campus_scoring',
         '--collect-all', 'qrcode', '--collect-all', 'pilk_nogil', '--collect-binaries', 'Crypto',
         '--collect-all', 'ijson',
         '--add-binary', ($ffmpegBinary + ';media')

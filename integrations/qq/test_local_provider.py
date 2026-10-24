@@ -225,6 +225,78 @@ class LocalProviderTests(unittest.TestCase):
             self.provider.media({'account_id': '10002', 'media': [{'file_name': 'fixture.png'}]})
         self.assertFalse(self.provider.media({'media': [{'file_name': '../secret.png'}]})['available'])
 
+    def test_video_poster_uses_exact_indexed_digest_and_sniffed_image_format(self):
+        self.fixture()
+        digest = 'ab' * 16
+        cached = self.account / 'nt_qq' / 'nt_data' / 'Video' / 'year' / (digest + '_0.png')
+        cached.parent.mkdir(parents=True)
+        row = {'account_id': '10001', 'media': [{
+            'kind': 'video', 'type': 'video', 'file_name': digest + '.mp4',
+            'md5': digest, 'size': 1234567}]}
+        for payload, mime, suffix in ((b'\xff\xd8\xffposter', 'image/jpeg', '.jpg'),
+                                      (b'\x89PNG\r\n\x1a\nposter', 'image/png', '.png')):
+            with self.subTest(mime=mime):
+                cached.write_bytes(payload)
+                result = self.provider.media(row, resource_index=0, video_variant='poster')
+                self.assertTrue(result['available'])
+                self.assertTrue(result['preview_only'])
+                self.assertEqual(result['video_variant'], 'poster')
+                self.assertEqual(result['content_type'], mime)
+                self.assertEqual(Path(result['path']).suffix, suffix)
+                self.assertEqual(Path(result['path']).read_bytes(), payload)
+                self.assertEqual(cached.read_bytes(), payload)
+                self.assertFalse(self.provider.media(row)['available'], 'a poster is never the original movie')
+        with self.assertRaises(LocalQQError):
+            self.provider.media({**row, 'account_id': '10002'}, video_variant='poster')
+        with self.assertRaises(LocalQQError):
+            self.provider.media({**row, 'media': [{**row['media'][0], 'kind': 'image'}]}, video_variant='poster')
+
+    def test_video_poster_rejects_wrong_names_signatures_and_unsafe_paths(self):
+        self.fixture()
+        digest = 'ab' * 16
+        root = self.account / 'nt_qq' / 'nt_data' / 'Video'
+        root.mkdir(parents=True)
+        row = {'media': [{'kind': 'video', 'md5': digest, 'file_name': 'movie.mp4'}]}
+        (root / (digest + '_1.png')).write_bytes(b'\xff\xd8\xffwrong-frame')
+        (root / ('prefix-' + digest + '_0.png')).write_bytes(b'\xff\xd8\xffwrong-name')
+        cached = root / (digest + '_0.png')
+        cached.write_bytes(b'<html>not an image</html>')
+        self.assertFalse(self.provider.media(row, video_variant='poster')['available'])
+        cached.write_bytes(b'\xff\xd8\xffposter')
+        with patch('integrations.qq.local_provider.MAX_LOCAL_MEDIA_BYTES', 3):
+            self.assertFalse(self.provider.media(row, video_variant='poster')['available'])
+        outside = self.root / 'outside.png'
+        outside.write_bytes(b'\xff\xd8\xffoutside')
+        cached.unlink()
+        try:
+            cached.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f'symlink unavailable: {exc}')
+        self.assertFalse(self.provider.media(row, video_variant='poster')['available'])
+
+    def test_video_poster_change_during_read_preserves_complete_cache(self):
+        self.fixture()
+        digest = 'ab' * 16
+        cached = self.account / 'nt_qq' / 'nt_data' / 'Video' / (digest + '_0.png')
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b'\xff\xd8\xffposter')
+        row = {'media': [{'kind': 'video', 'md5': digest}]}
+        first = self.provider.media(row, video_variant='poster')
+        original_open, opens = Path.open, []
+
+        def grow_on_copy(path, *args, **kwargs):
+            if path == cached and args and args[0] == 'rb':
+                opens.append(path)
+                if len(opens) == 2:
+                    with original_open(path, 'ab') as writer:
+                        writer.write(b'changed')
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, 'open', grow_on_copy):
+            self.assertFalse(self.provider.media(row, video_variant='poster')['available'])
+        self.assertEqual(Path(first['path']).read_bytes(), b'\xff\xd8\xffposter')
+        self.assertFalse(Path(first['path'] + '.part').exists())
+
     def test_media_growth_after_size_check_does_not_replace_complete_cache(self):
         self.fixture()
         media = self.account / 'nt_qq' / 'nt_data' / 'chatraw' / 'year' / 'fixture.png'
