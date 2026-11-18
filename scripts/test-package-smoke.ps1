@@ -147,7 +147,7 @@ if ($portableScript -notmatch "'--collect-binaries', 'Crypto'" -or
     $portableScript -match "'--collect-all', 'Crypto'") {
     throw 'Portable package must include Crypto native binaries without its development test-key fixtures.'
 }
-foreach ($qqModule in @('local_provider', 'local_wal', 'key_reader', 'key_store', 'send_target')) {
+foreach ($qqModule in @('downloads', 'local_provider', 'local_wal', 'key_reader', 'key_store', 'send_target')) {
     if ($portableScript -notmatch [regex]::Escape("integrations/qq/$qqModule.py") -or
         $portableScript -notmatch [regex]::Escape("integrations.qq.$qqModule")) {
         throw "Portable package must stage and import the QQ $qqModule module."
@@ -259,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
             body = b'<html lang="zh-CN"></html>'
             content_type = 'text/html'
         elif path == '/api/sources':
-            body = json.dumps({'sources': [{}, {}, {}]}).encode()
+            body = json.dumps({'sources': [{}, {}, {}, {}]}).encode()
             content_type = 'application/json'
         elif path == '/api/settings':
             reported = str(storage / 'wrong') if os.environ.get('LMH_FIXTURE_WRONG_STORAGE') else str(storage)
