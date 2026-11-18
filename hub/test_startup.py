@@ -57,9 +57,20 @@ class HubStartupTests(unittest.TestCase):
             spawn.assert_not_called()
             install.assert_not_called()
 
+    def test_background_launcher_reuses_hub_without_opening_browser(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(start_hub, 'LOCAL', Path(folder)), \
+                patch.object(start_hub, '_running_hub_url', return_value='http://127.0.0.1:8765'), \
+                patch.object(start_hub.webbrowser, 'open') as browser, \
+                patch.object(start_hub.subprocess, 'Popen') as spawn:
+            start_hub.main(['--background'])
+            browser.assert_not_called()
+            spawn.assert_not_called()
+
     def test_portable_launcher_reuses_hub_even_without_browser(self):
         for arguments, opens_browser in [(['LocalMessageHub'], True),
-                                         (['LocalMessageHub', '--no-browser'], False)]:
+                                         (['LocalMessageHub', '--no-browser'], False),
+                                         (['LocalMessageHub', '--background'], False)]:
             with self.subTest(arguments=arguments), \
                     patch.object(windows_portable, '_configure_runtime'), \
                     patch.object(windows_portable, '_running_hub_url', return_value='http://127.0.0.1:8765'), \

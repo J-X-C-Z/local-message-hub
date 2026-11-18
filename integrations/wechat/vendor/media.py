@@ -2049,6 +2049,96 @@ class MediaDownloader:
         return self._copy_cached_attachment(
             source, base, "%s_%s%s.jpg" % (user, local_id, suffix), save_dir)
 
+    @staticmethod
+    def _clean_resource_filename(value: str) -> Optional[str]:
+        name = re.sub(r"[\r\n\x00-\x1f\x7f]+", "", value or "").strip()
+        if not name or len(name) > 512:
+            return None
+        name = name.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        return name if name not in ("", ".", "..") else None
+
+    @staticmethod
+    def _protobuf_fields(payload: bytes):
+        """Yield length-delimited protobuf fields without requiring protobuf."""
+        index = 0
+        while index < len(payload):
+            key = 0
+            shift = 0
+            while index < len(payload):
+                byte = payload[index]
+                index += 1
+                key |= (byte & 0x7F) << shift
+                if not byte & 0x80:
+                    break
+                shift += 7
+                if shift > 63:
+                    return
+            else:
+                return
+            field_number, wire_type = key >> 3, key & 0x07
+            if not field_number:
+                return
+            if wire_type == 0:
+                while index < len(payload):
+                    byte = payload[index]
+                    index += 1
+                    if not byte & 0x80:
+                        break
+            elif wire_type == 1:
+                index += 8
+            elif wire_type == 2:
+                length = 0
+                shift = 0
+                while index < len(payload):
+                    byte = payload[index]
+                    index += 1
+                    length |= (byte & 0x7F) << shift
+                    if not byte & 0x80:
+                        break
+                    shift += 7
+                    if shift > 63:
+                        return
+                else:
+                    return
+                if length < 0 or index + length > len(payload):
+                    return
+                yield field_number, payload[index:index + length]
+                index += length
+            elif wire_type == 5:
+                index += 4
+            else:
+                return
+
+    @classmethod
+    def _resource_filename(cls, payload: bytes) -> Optional[str]:
+        """Decode file names from WeChat 4 resource protobuf or older plain text."""
+        if not isinstance(payload, bytes) or not payload:
+            return None
+        try:
+            plain = payload.decode("utf-8").strip()
+            if plain and not any(ord(char) < 32 for char in plain):
+                return cls._clean_resource_filename(plain)
+        except UnicodeDecodeError:
+            pass
+        candidates = []
+        # Current 4.1.x: field 7 -> field 1 -> field 2 is the cache file name.
+        for field, nested in cls._protobuf_fields(payload):
+            if field != 7:
+                continue
+            for inner_field, inner in cls._protobuf_fields(nested):
+                if inner_field != 1:
+                    continue
+                for leaf_field, leaf in cls._protobuf_fields(inner):
+                    if leaf_field != 2:
+                        continue
+                    try:
+                        name = cls._clean_resource_filename(leaf.decode("utf-8"))
+                    except UnicodeDecodeError:
+                        continue
+                    if name:
+                        candidates.append(name)
+        return candidates[0] if candidates else None
+
     def _file_name(self, row: dict) -> Optional[str]:
         if not row["server_id"]:
             return None
@@ -2066,11 +2156,7 @@ class MediaDownloader:
             finally:
                 conn.close()
             if r and r["packed_info"]:
-                name = r["packed_info"].decode("utf-8", "replace").strip()
-                name = re.sub(r"[\r\n\x00]+", "", name)
-                if "/" in name or "\\" in name:
-                    name = name.split("/")[-1].split("\\")[-1]
-                return name or None
+                return self._resource_filename(r["packed_info"])
             break
         return None
 

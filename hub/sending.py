@@ -315,6 +315,13 @@ class SendService:
             record, _ = self.repository.finish(request_id, status, error_code=str(code)[:64])
         return self.public_record(record)
 
+    def prepare_and_deliver(self, payload):
+        """Create an idempotent request and deliver it without a UI approval step."""
+        prepared = self.prepare(payload)
+        if prepared["status"] != "pending_approval":
+            return prepared
+        return self.approve_and_deliver(prepared["request_id"], prepared["platform"])
+
     def status(self, request_id, platform=None):
         record = self.repository.get(request_id)
         if record and platform and record["platform"] != platform:

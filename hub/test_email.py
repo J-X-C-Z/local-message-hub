@@ -65,15 +65,15 @@ class EmailIntegrationTest(unittest.TestCase):
     def test_sync_commits_only_after_successful_ingest(self):
         records = parse_import(MAIL, 'eml', 'email', 'me@example.test')
         provider = Mock()
-        provider.status.return_value = {'configured': True}
-        provider.sync.return_value = {'records': records, 'checkpoint': {'uid': 1}}
+        provider.status.return_value = {'configured': True, 'accounts': [{'id': 'a' * 24, 'email': 'me@example.test'}]}
+        provider.sync.return_value = {'account_id': 'a' * 24, 'records': records,
+                                      'checkpoint': {'uid': 1}, 'has_more': False}
         self.hub.providers['email'] = provider
         with patch.object(self.hub.store, 'ingest', side_effect=RuntimeError('synthetic')):
-            with self.assertRaises(RuntimeError):
-                self.hub.sync_email()
+            self.assertEqual(self.hub.sync_email(), 'partial')
         provider.commit_checkpoint.assert_not_called()
         self.hub.sync_email()
-        provider.commit_checkpoint.assert_called_once_with({'uid': 1})
+        provider.commit_checkpoint.assert_called_once_with({'uid': 1}, account_id='a' * 24)
         self.assertEqual(self.hub.store.search('searchable', platform='email')['total'], 1)
 
     def test_unconfigured_and_cancelled_sync_never_advances_checkpoint(self):
@@ -82,12 +82,31 @@ class EmailIntegrationTest(unittest.TestCase):
         self.hub.providers['email'] = provider
         self.assertEqual(self.hub.sync_email(), 'unavailable')
         provider.sync.assert_not_called()
-        provider.status.return_value = {'configured': True}
-        provider.sync.return_value = {'records': parse_import(MAIL, 'eml', 'email'), 'checkpoint': {}}
+        provider.status.return_value = {'configured': True, 'accounts': [{'id': 'a' * 24, 'email': 'me@example.test'}]}
+        provider.sync.return_value = {'account_id': 'a' * 24,
+                                      'records': parse_import(MAIL, 'eml', 'email'), 'checkpoint': {},
+                                      'has_more': False}
         cancel = threading.Event()
         cancel.set()
         self.hub.sync_email(cancel)
         provider.commit_checkpoint.assert_not_called()
+
+    def test_one_mailbox_failure_does_not_block_other_mailboxes(self):
+        records = parse_import(MAIL, 'eml', 'email', 'second@example.test')
+        provider = Mock()
+        provider.status.return_value = {'configured': True, 'accounts': [
+            {'id': 'a' * 24, 'email': 'first@example.test'},
+            {'id': 'b' * 24, 'email': 'second@example.test'},
+        ]}
+        provider.sync.side_effect = [RuntimeError('private server detail'),
+                                     {'account_id': 'b' * 24, 'records': records,
+                                      'checkpoint': {'uid': 7}, 'has_more': False}]
+        self.hub.providers['email'] = provider
+        self.assertEqual(self.hub.sync_email(), 'partial')
+        self.assertEqual(provider.sync.call_count, 2)
+        provider.commit_checkpoint.assert_called_once_with({'uid': 7}, account_id='b' * 24)
+        self.assertEqual(self.hub.store.search('searchable', platform='email')['total'], 1)
+        self.assertNotIn('private server detail', self.hub.sources['email']['error'])
 
     def test_mail_import_rejects_other_platform(self):
         with self.assertRaises(ValueError):

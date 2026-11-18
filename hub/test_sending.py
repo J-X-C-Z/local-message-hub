@@ -84,6 +84,17 @@ class SendServiceTest(unittest.TestCase):
         self.assertEqual(again["status"], "sent")
         self.assertEqual(self.adapter.calls, 1)
 
+    def test_prepare_and_deliver_is_idempotent(self):
+        first = self.service.prepare_and_deliver(self.payload)
+        replay = self.service.prepare_and_deliver(self.payload)
+        self.assertEqual(first["status"], "sent")
+        self.assertEqual(first["message_id"], "synthetic-1")
+        self.assertEqual(replay["status"], "sent")
+        self.assertEqual(self.adapter.calls, 1)
+        self.assertEqual([item["action"] for item in
+                          self.service.status(first["request_id"])["audit"]],
+                         ["prepared", "approved", "sent"])
+
     def test_source_conversation_id_is_review_only_and_never_a_target(self):
         # A resolved local uid is reported for review but is neither stored nor
         # replayed as a different request, so a replay cannot retarget a send.

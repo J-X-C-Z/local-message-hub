@@ -1,4 +1,5 @@
 """Bootstrap the bundled local service without requiring PowerShell scripts."""
+import argparse
 from pathlib import Path
 import json
 import os
@@ -48,12 +49,18 @@ def _hub_environment():
     return environment
 
 
-def main():
+def main(argv=()):
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--background', action='store_true')
+    parser.add_argument('--no-browser', action='store_true')
+    args = parser.parse_args(argv)
+    open_browser = not (args.background or args.no_browser)
     LOCAL.mkdir(exist_ok=True)
     statefile = LOCAL / 'server.json'
     running_url = _running_hub_url(statefile)
     if running_url:
-        webbrowser.open(running_url)
+        if open_browser:
+            webbrowser.open(running_url)
         return
     if not PYTHON.is_file():
         subprocess.run([sys.executable, '-m', 'venv', str(PYTHON.parents[1])], check=True)
@@ -79,11 +86,12 @@ def main():
             raise RuntimeError('Local service failed; see .local/hub.err.log')
         if statefile.exists() and statefile.stat().st_mtime_ns != old_mtime:
             state = json.loads(statefile.read_text())
-            webbrowser.open(state['url'])
+            if open_browser:
+                webbrowser.open(state['url'])
             return
         time.sleep(.25)
     raise RuntimeError('Local service startup timed out')
 
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv[1:])

@@ -152,14 +152,23 @@ def snapshot_qq_database(source_db, target_db, decrypt_page, header_bytes=1024,
         if payload_size <= 0 or payload_size % page_size:
             raise LocalWALError("qq_database_invalid", "QQ database encrypted page layout is invalid")
         plain = folder / "plain.db"
+        database_pages = payload_size // page_size
         with copied.open("rb") as reader, plain.open("w+b") as writer:
             reader.seek(header_bytes)
             page1_prefix = reader.read(16)
             reader.seek(header_bytes)
             for page_no in range(1, payload_size // page_size + 1):
-                page = decrypt_page(reader.read(page_size), page_no)
+                encrypted = reader.read(page_size)
+                # SQLite can preallocate zero pages beyond its authenticated logical size.
+                page = (encrypted if page_no > database_pages and not any(encrypted)
+                        else decrypt_page(encrypted, page_no))
                 if len(page) != page_size:
                     raise LocalWALError("qq_database_invalid", "QQ database decrypted page has invalid size")
+                if (page_no == 1 and page[:16] == b"SQLite format 3\x00"
+                        and page[24:28] == page[92:96]):
+                    logical_pages = int.from_bytes(page[28:32], "big")
+                    if 0 < logical_pages <= database_pages:
+                        database_pages = logical_pages
                 writer.write(page)
             metadata = _apply_wal(wal, writer, decrypt_page, page_size, folder / "frames.bin", page1_prefix)
             writer.flush()

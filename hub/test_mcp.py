@@ -64,6 +64,29 @@ class MCPServerTest(unittest.TestCase):
             finally:
                 hub.close()
 
+    def test_source_status_exposes_email_account_ids_but_not_config_or_credentials(self):
+        from hub.server import Hub
+        with tempfile.TemporaryDirectory() as storage:
+            hub = Hub(storage, resume_imports=False)
+            try:
+                accounts = [
+                    {"email": "jxcz2689@qq.com", "synced_uid": 1536, "password": "private"},
+                    {"email": "zhaoshj26@mail2.sysu.edu.cn", "synced_uid": 1786733209,
+                     "host": "private-host", "access_token": "private-token"},
+                ]
+                server = MCPServer(hub.store, source_status_reader=hub.source_status_snapshot,
+                                   email_accounts_reader=lambda: accounts)
+                result = server.call_tool("get_source_status", {"platform": "email"})
+                self.assertEqual(result["items"][0]["email_accounts"], [
+                    {"account_id": "jxcz2689@qq.com", "synced_uid": 1536},
+                    {"account_id": "zhaoshj26@mail2.sysu.edu.cn", "synced_uid": 1786733209},
+                ])
+                serialized = json.dumps(result)
+                for private in ("private", "private-host", "private-token"):
+                    self.assertNotIn(private, serialized)
+            finally:
+                hub.close()
+
     def test_search_exact_scope_rejects_ambiguous_filters_and_cursor_reuse(self):
         with ChatStore(":memory:") as store:
             for platform, account in (("email", "mail-a"), ("email", "mail-b"), ("qq", "mail-a")):
@@ -85,6 +108,46 @@ class MCPServerTest(unittest.TestCase):
                             {"platform": "email", "account_id": " "}):
                 with self.subTest(filters=filters), self.assertRaises(ValueError):
                     server.call_tool("search_messages", {"query": "shared", **filters})
+
+    def test_wait_for_new_messages_uses_monotonic_event_cursor(self):
+        with ChatStore(":memory:") as store:
+            store.ingest(
+                "wechat", "account",
+                [{"id": "room", "title": "Room", "kind": "direct"}],
+                [{"id": "old", "conversation_id": "room", "sender_id": "friend",
+                  "sender_name": "Friend", "timestamp": 1, "type": "text",
+                  "text": "old", "is_self": False}])
+            server = MCPServer(store)
+
+            initial = server.call_tool("wait_for_new_messages", {})
+            self.assertEqual(initial["messages"], [])
+            self.assertTrue(initial["initialized"])
+            self.assertEqual(initial["cursor"], store.message_rowid())
+
+            store.ingest(
+                "wechat", "account",
+                [{"id": "room", "title": "Room", "kind": "direct"}],
+                [
+                    {"id": "new", "conversation_id": "room", "sender_id": "friend",
+                     "sender_name": "Friend", "timestamp": 2, "type": "text",
+                     "text": "new", "is_self": False},
+                    {"id": "self", "conversation_id": "room", "sender_id": "account",
+                     "sender_name": "Me", "timestamp": 3, "type": "text",
+                     "text": "outgoing", "is_self": True},
+                ])
+            waited = server.call_tool("wait_for_new_messages", {
+                "after_event_id": initial["cursor"], "timeout_seconds": 1,
+            })
+            self.assertFalse(waited["timed_out"])
+            self.assertEqual([message["id"] for message in waited["messages"]], ["new"])
+            self.assertEqual(waited["messages"][0]["conversation_title"], "Room")
+            self.assertGreater(waited["cursor"], initial["cursor"])
+
+            empty = server.call_tool("wait_for_new_messages", {
+                "after_event_id": waited["cursor"], "timeout_seconds": 0,
+            })
+            self.assertTrue(empty["timed_out"])
+            self.assertEqual(empty["messages"], [])
 
     def test_list_imports_paginates_beyond_first_hundred_and_reports_full_total(self):
         store = ChatStore(":memory:")
@@ -1021,6 +1084,55 @@ class MCPServerTest(unittest.TestCase):
             service.repository.close()
             store.close()
 
+    def test_wechat_mcp_auto_send_is_gated_and_idempotent(self):
+        from hub.sending import SendRepository, SendService
+
+        with tempfile.TemporaryDirectory() as storage:
+            store = ChatStore(f"{storage}/hub.sqlite3")
+            deliveries = []
+            readiness = {"state": "ready", "account_id": "wxid_self0001"}
+
+            class Adapter:
+                def deliver(self, request):
+                    deliveries.append(request)
+                    return {"message_id": "synthetic-auto-receipt"}
+
+            service = SendService(SendRepository(f"{storage}/hub.sqlite3"),
+                                  {"wechat": Adapter()})
+            server = MCPServer(
+                store, send_service=service,
+                capabilities={"qq_send": False, "wechat_send": True,
+                              "wechat_auto_send": False},
+                wechat_readiness_reader=lambda: readiness)
+            self.assertNotIn("send_wechat_message",
+                             {tool["name"] for tool in server.tools()})
+
+            server.capabilities["wechat_auto_send"] = True
+            self.assertIn("send_wechat_message",
+                          {tool["name"] for tool in server.tools()})
+            args = {
+                "account_id": "wxid_self0001",
+                "conversation_type": "private",
+                "conversation_id": "wxid_friend01",
+                "text": "synthetic automatic test",
+                "request_id": "test_wechat_auto_01",
+            }
+            sent = server.call_tool("send_wechat_message", args)
+            replay = server.call_tool("send_wechat_message", args)
+            self.assertEqual(sent["status"], "sent")
+            self.assertEqual(sent["message_id"], "synthetic-auto-receipt")
+            self.assertEqual(replay["status"], "sent")
+            self.assertEqual(len(deliveries), 1)
+
+            readiness["state"] = "window_not_found"
+            self.assertIn("send_wechat_message",
+                          {tool["name"] for tool in server.tools()})
+            with self.assertRaisesRegex(ValueError, "微信客户端不可用"):
+                server.call_tool("send_wechat_message", {**args,
+                                                         "request_id": "test_wechat_auto_02"})
+            service.repository.close()
+            store.close()
+
     def test_wechat_approval_http_guards_preserve_challenge_until_ready(self):
         from contextlib import ExitStack
         from http.client import HTTPConnection
@@ -1397,14 +1509,14 @@ class MCPServerTest(unittest.TestCase):
                          [{"id": "person", "name": "Person"}])
             read_only = MCPServer(store)
             names = [tool["name"] for tool in read_only.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]]
-            self.assertEqual(len(names), 22)
+            self.assertEqual(len(names), 23)
             denied = read_only.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
                 "name": "update_conversation_metadata", "arguments": {"platform": "wechat", "account_id": "account", "conversation_id": "room", "note": "x"}}})
             self.assertTrue(denied["result"]["isError"])
             self.assertEqual(store.conversations("wechat")["items"][0]["note"], "")
             writable = MCPServer(store, allow_writes=True)
             tools = writable.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})["result"]["tools"]
-            self.assertEqual(len(tools), 25)
+            self.assertEqual(len(tools), 26)
             self.assertFalse(next(tool for tool in tools if tool["name"] == "update_conversation_metadata")["annotations"]["readOnlyHint"])
             updated = writable.call_tool("update_conversation_metadata", {
                 "platform": "wechat", "account_id": "account", "conversation_id": "room", "note": "local", "tags": ["keep"], "archived": True})
@@ -1433,7 +1545,7 @@ class MCPServerTest(unittest.TestCase):
             serve(io.BytesIO(("\n".join(json.dumps(item) for item in requests) + "\n").encode()), output, storage)
             tools = json.loads(output.getvalue().splitlines()[0])["result"]["tools"]
             tool_names = {tool["name"] for tool in tools}
-            self.assertEqual(len(tools), 34)
+            self.assertEqual(len(tools), 35)
             self.assertTrue({"list_wechat_source_media", "get_wechat_source_media"} <= tool_names)
 
     def test_stdio_queries_coexist_with_concurrent_wal_writes(self):
@@ -1544,7 +1656,7 @@ class MCPServerTest(unittest.TestCase):
             self.assertEqual(output[0]["result"]["protocolVersion"], "2024-11-05")
             tools = output[1]["result"]["tools"]
             tool_names = {tool["name"] for tool in tools}
-            self.assertEqual(len(tools), 31)
+            self.assertEqual(len(tools), 32)
             self.assertTrue({"list_wechat_source_media", "get_wechat_source_media"} <= tool_names)
 
             gated_store = ChatStore(":memory:")

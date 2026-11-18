@@ -7,12 +7,16 @@ $ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'test-package-smoke.ps1')
 
 $python = if ($env:LMH_PYTHON) { $env:LMH_PYTHON } else { 'python' }
+& $python -m unittest hub.test_attachment_download integrations.qq.test_downloads integrations.wechat.test_downloads -q
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $python -m unittest hub.test_mcp_wechat_article integrations.wechat.test_article_cache hub.test_campus_scoring hub.test_campus_scoring_service hub.test_campus_briefing hub.test_campus_updates hub.test_campus_local_wechat integrations.wechat.test_official_accounts hub.test_campus hub.test_campus_integration integrations.campus.test_adapter hub.test_store_performance hub.test_import_performance hub.test_email integrations.email.test_adapter integrations.email.test_provider hub.test_imports hub.test_mcp hub.test_sending hub.test_auto_export hub.test_export_memory hub.test_analytics hub.test_resources hub.test_backups hub.test_account_safety hub.test_voice_transcription hub.test_capabilities hub.test_moments_exports hub.test_startup hub.test_store hub.test_server `
     integrations.wechat.test_cursor integrations.wechat.test_media integrations.wechat.test_moments integrations.wechat.test_provider integrations.wechat.test_sns_media integrations.wecom.test_adapter integrations.wecom.test_config integrations.wecom.test_bot_credentials integrations.wecom.test_bot_media integrations.wecom.test_bot_sender `
     integrations.qq.test_provider integrations.qq.test_sender integrations.qq.test_local_provider integrations.qq.test_local_wal integrations.qq.test_key_reader integrations.qq.test_send_target integrations.telegram.test_adapter integrations.wechat.test_sender hub.test_windows_notifications hub.test_streaming_json -q
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 node --check webui/app.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node --test webui/test-attachment-download.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --experimental-strip-types --test scripts/test-source-mutation-gate.cjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

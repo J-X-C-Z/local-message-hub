@@ -6,9 +6,14 @@ CAPABILITIES = {
     "chat": {"name": "聊天记录", "available": True, "default": True, "reason": ""},
     "contacts": {"name": "联系人", "available": True, "default": True, "reason": ""},
     "media": {"name": "媒体库", "available": True, "default": True, "reason": ""},
+    "attachment_download": {"name": "主动下载附件", "available": True, "default": False,
+                            "reason": "邮件支持从已配置邮箱下载附件；QQ 文件需同账号在线 QCE；微信文件会短暂使用已登录客户端和交互桌面。单附件最多 32 MiB，不执行文件。"},
     "stats": {"name": "基础统计", "available": True, "default": True, "reason": ""},
     "imports": {"name": "文件导入", "available": True, "default": True, "reason": ""},
     "sync": {"name": "本机同步", "available": True, "default": True, "reason": ""},
+    "wechat_live_receive": {"name": "个人微信实时接收", "available": True, "default": True,
+                            "reason": "以低频文件变更探测发现微信会话变化，再按稳定游标增量读取新消息；"
+                                      "只读取本机已解密数据库，不注入或修改微信客户端。"},
     "export": {"name": "聊天导出", "available": True, "default": True, "reason": ""},
     "organization": {"name": "本地整理", "available": True, "default": True, "reason": ""},
     "qq_history": {"name": "QQ 在线漫游历史", "available": False, "default": False,
@@ -35,9 +40,12 @@ CAPABILITIES = {
     "anti_recall": {"name": "防撤回拦截", "available": False, "default": False,
                     "reason": "需要修改或拦截客户端数据库行为，尚未完成独立风险评估。"},
     "wechat_send": {"name": "个人微信文本发送", "available": True, "default": False,
-                    "reason": "通过 GUI 拟人操作本机已登录的微信客户端真实发送；依赖本机微信窗口、"
-                              "输入焦点与会话标题可读，风控风险由使用者承担；每条消息仍需本机审批，"
-                              "MCP 不能直接投递。"},
+                    "reason": "优先通过已配置的本机回环 Hook 原生发送，并在数据库验证新回执；"
+                              "未配置 Hook 时回退到 GUI 操作。每次请求仍需幂等审计和账号/目标校验，"
+                              "风控风险由使用者承担；MCP 默认不能直接投递。"},
+    "wechat_auto_send": {"name": "个人微信自动发送", "available": True, "default": False,
+                         "reason": "启用后，MCP 和中枢 API 可在微信客户端就绪时跳过逐条审批并直接投递；"
+                                   "每次请求仍使用幂等 request_id、校验当前账号与目标，并保留发送审计记录。"},
 }
 
 

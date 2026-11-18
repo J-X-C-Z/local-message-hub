@@ -1109,6 +1109,45 @@ class ServerTest(unittest.TestCase):
                           [item['request_id'] for item in json.load(response)['items']])
         self.assertEqual(self.send_adapter.calls, [])
 
+    def test_wechat_auto_send_delivers_immediately_and_is_idempotent(self):
+        headers = {'Content-Type': 'application/json'}
+        wx = FakeWeChatSender()
+        self.hub.wechat_sender = wx
+        self.hub.send_service.adapters['wechat'] = wx
+        payload = {'account_id': 'wxid_self0001', 'conversation_type': 'private',
+                   'conversation_id': 'wxid_friend01', 'text': 'synthetic automatic test',
+                   'request_id': 'wechat-auto-send-0001'}
+
+        with self.assertRaisesRegex(ValueError, '请先启用'):
+            self.hub.set_capabilities({'wechat_auto_send': True})
+        self.hub.set_capabilities({'wechat_send': True})
+        with self.assertRaises(HTTPError) as disabled:
+            self.request('/api/wechat-sends/send-now', headers,
+                         json.dumps(payload).encode())
+        self.assertEqual(disabled.exception.code, 403)
+        self.assertEqual(wx.calls, [])
+
+        self.hub.set_capabilities({'wechat_auto_send': True})
+        with self.request('/api/wechat-sends/send-now', headers,
+                          json.dumps(payload).encode()) as response:
+            sent = json.load(response)
+        with self.request('/api/wechat-sends/send-now', headers,
+                          json.dumps(payload).encode()) as response:
+            replay = json.load(response)
+        self.assertEqual(sent['status'], 'sent')
+        self.assertEqual(replay['status'], 'sent')
+        self.assertEqual(len(wx.calls), 1)
+        self.assertEqual(Handler.capability_for_path('/api/wechat-sends/send-now'),
+                         'wechat_auto_send')
+
+        mismatch = {**payload, 'account_id': 'wxid_other0001',
+                    'request_id': 'wechat-auto-send-mismatch'}
+        with self.assertRaises(HTTPError) as wrong_account:
+            self.request('/api/wechat-sends/send-now', headers,
+                         json.dumps(mismatch).encode())
+        self.assertEqual(wrong_account.exception.code, 400)
+        self.assertEqual(len(wx.calls), 1)
+
     def test_wechat_group_conversation_must_use_the_chatroom_suffix(self):
         headers = {'Content-Type': 'application/json'}
         self.hub.wechat_sender = FakeWeChatSender()
@@ -3329,12 +3368,24 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(result.exception.code, 403)
 
     def test_settings_persist_without_secrets(self):
-        with self.request('/api/settings', {'Content-Type': 'application/json'}, b'{"auto_sync":false,"sync_interval":3}') as response:
-            settings = json.load(response)
-            self.assertFalse(settings['auto_sync'])
+        startup_status = {'supported': True, 'installed': True,
+                          'command': '"C:\\LocalMessageHub.exe" --background'}
+        with patch('hub.server.windows_autostart.set_enabled',
+                   return_value=startup_status) as set_enabled, \
+                patch('hub.server.windows_autostart.status',
+                      return_value=startup_status):
+            with self.request(
+                    '/api/settings', {'Content-Type': 'application/json'},
+                    b'{"auto_sync":false,"sync_interval":3,"auto_index_at_login":true}'
+            ) as response:
+                settings = json.load(response)
+                self.assertFalse(settings['auto_sync'])
+                self.assertTrue(settings['auto_index_status']['installed'])
+            set_enabled.assert_called_once()
         with self.request('/api/settings') as response:
             settings = json.load(response)
             self.assertIn('fts_enabled', settings)
+            self.assertIn('auto_index_status', settings)
         self.assertEqual(json.loads(self.hub.settings_path.read_text())['sync_interval'], 3)
 
     def test_account_lock_gates_home_api_and_local_media_until_unlock(self):

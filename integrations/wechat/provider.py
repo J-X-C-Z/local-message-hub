@@ -204,6 +204,37 @@ class WeChatProvider:
                            "message_count": counts.get(hashlib.md5(username.encode()).hexdigest(), 0)})
         return result
 
+    def session_snapshot(self, previous_signature=None) -> dict[str, Any]:
+        """Return session metadata only when the local session database changed.
+
+        The live receiver calls this frequently, so unchanged polls are limited to
+        a few file checks and never decrypt or query every conversation.
+        """
+        session_files = [
+            (rel, path) for rel, path, _size in self.reader._db_files
+            if Path(path).name.casefold() == "session.db"
+        ]
+        signature = []
+        for rel, path in session_files:
+            values = [rel]
+            for candidate in (path, path + "-wal"):
+                try:
+                    info = os.stat(candidate)
+                    values.extend((int(info.st_mtime_ns), int(info.st_size)))
+                except OSError:
+                    values.extend((0, 0))
+            signature.append(tuple(values))
+        if previous_signature is not None and signature == previous_signature:
+            return {"changed": False, "signature": signature, "sessions": []}
+        sessions = [{
+            "username": row["username"],
+            "unread": row["unread"],
+            "summary": row["summary"],
+            "last_time": row["last_time"],
+            "last_sender": row["last_sender"],
+        } for row in self.reader.get_sessions(limit=100000)]
+        return {"changed": True, "signature": signature, "sessions": sessions}
+
     def message_counts(self) -> dict[str, int]:
         counts = {}
         for rel in self.reader._message_dbs():

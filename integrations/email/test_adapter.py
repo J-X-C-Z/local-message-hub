@@ -37,6 +37,20 @@ class EmailExportAdapterTest(unittest.TestCase):
         self.assertEqual(item["media_url"], "")
         self.assertEqual(item["file_name"], "")
         self.assertFalse(item["is_self"])
+        self.assertEqual(item["attachments"], [{
+            "type": "file", "name": "报告.exe", "size": len(b"never execute"),
+            "mime_type": "application/octet-stream", "available": False,
+        }])
+
+    def test_attached_email_is_preserved_as_a_nonempty_file(self):
+        outer = _mail()
+        nested = _mail(**{"Subject": "转发邮件", "Message-ID": "<nested@example.com>"})
+        outer.add_attachment(nested, filename="forwarded.eml")
+        attachment = parse_email_export(
+            outer.as_bytes(), "eml", "me@example.com")["messages"][0]["attachments"][0]
+        self.assertEqual(attachment["name"], "forwarded.eml")
+        self.assertEqual(attachment["mime_type"], "message/rfc822")
+        self.assertGreater(attachment["size"], 0)
 
     def test_html_is_text_without_scripts_links_or_remote_requests(self):
         message = _mail()

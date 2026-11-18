@@ -95,6 +95,40 @@ class LocalWALTests(unittest.TestCase):
             self.snapshot(decrypt)
         self.assertFalse(self.target.exists())
 
+    def test_zero_preallocation_requires_authenticated_logical_size(self):
+        header = bytearray(b'A' * PAGE)
+        header[:16] = b'SQLite format 3\x00'
+        header[24:28] = header[92:96] = struct.pack('>I', 7)
+        header[28:32] = struct.pack('>I', 1)
+        zero = bytes(PAGE)
+        self.source.write_bytes(b'H' * 1024 + header + zero)
+
+        def decrypt(page, _number):
+            if not any(page):
+                raise ValueError('uninitialized page has no HMAC')
+            return page
+
+        self.wal.write_bytes(_wal([(2, 2, b'C' * PAGE)]))
+        self.snapshot(decrypt)
+        self.assertEqual(self.target.read_bytes(), header + b'C' * PAGE)
+        self.wal.unlink()
+        self.snapshot(decrypt)
+        self.assertEqual(self.target.read_bytes(), header + zero)
+
+        for count, counter in ((2, 7), (0, 7), (1, 8)):
+            header[28:32] = struct.pack('>I', count)
+            header[92:96] = struct.pack('>I', counter)
+            self.source.write_bytes(b'H' * 1024 + header + zero)
+            with self.assertRaisesRegex(ValueError, 'HMAC'):
+                self.snapshot(decrypt)
+
+        header[28:32] = struct.pack('>I', 1)
+        header[92:96] = struct.pack('>I', 7)
+        self.source.write_bytes(b'H' * 1024 + header + zero)
+        self.wal.write_bytes(_wal([(2, 2, zero)]))
+        with self.assertRaisesRegex(ValueError, 'HMAC'):
+            self.snapshot(decrypt)
+
     def test_busy_database_retries_and_fails_closed(self):
         with patch("integrations.qq.local_wal._stamp", side_effect=lambda _path: object()), \
                 patch("integrations.qq.local_wal._copy_file"), \

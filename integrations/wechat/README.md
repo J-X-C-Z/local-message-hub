@@ -28,6 +28,10 @@ media = provider.media(messages[0]["session_id"], messages[0]["local_id"],
   kind (`group`/`direct`), unread, last_message, last_timestamp, message_count.
   Counts use aggregate SQL per table, across every message shard. They do not
   enumerate message bodies. `include_counts=False` avoids aggregate work.
+- `session_snapshot(previous_signature=None)` stats the local `session.db` and
+  WAL before doing work. An unchanged signature returns no rows; a changed one
+  returns bounded session metadata used by the Hub live receiver. This lets the
+  receiver avoid decrypting or scanning message shards when nothing changed.
 - `contacts()` returns id, platform, name, nickname, and alias. During Hub
   sync, the reader first checks `head_image.db` using exact contact usernames;
   only the verified `head_image(username, md5, image_buffer, update_time)`
@@ -54,11 +58,27 @@ media = provider.media(messages[0]["session_id"], messages[0]["local_id"],
   retains the original path with `playable=False` and a `voice_decode_failed`
   or `voice_decoder_unavailable` reason. The Hub may serve that original file
   only through the exact indexed message's local media token after validating
-  SILK signature and cache-root containment. It never drives the GUI.
+  SILK signature and cache-root containment. Ordinary `media()` calls never
+  drive the GUI. The separate explicit `downloads.download_attachment()` path
+  handles ordinary files up to 32 MiB: it verifies an existing account-cache
+  file, or uses the logged-in 4.1.x client's file-menu **下载** action when the
+  cache is missing. That action may show or focus WeChat, change the current
+  chat, move the pointer, and scroll history; it is not claimed as a fully
+  background operation. Downloaded bytes must match the indexed size and MD5
+  before atomic publication to Hub-owned storage. `packed_info` file names are
+  decoded as protobuf, including WeChat duplicate names such as `(2).pdf`.
 
 Local keys and discovered account settings stay in ignored `.local/wechat.json`;
 decrypted databases, media and the private development venv stay under ignored
 `integrations/wechat/runtime/`. Do not log returned chat records or key files.
+
+The optional `WeChatHookTextSender` uses
+`.local/wechat-hook.json` with a loopback `base_url` and a private `token_file`.
+It requires the Hook health endpoint to report integration `WeChatAgent-1`, the
+configured client version and exactly one logged-in database account. Hook
+acceptance is not treated as delivery: the sender still waits for a new matching
+self-sent row and returns its stable database receipt. Missing receipts remain
+unknown and must not be retried automatically.
 
 Moments media resolution is read-only and offline. The provider checks the
 WeFlow-compatible `Documents/WeFlow/sns_cache` directory by default; set

@@ -333,6 +333,9 @@ class LocalQQProvider:
             snapshot_qq_database(source, target, lambda page, number: _decrypt_page(page, number, key, mac_key))
         except LocalWALError as exc:
             raise LocalQQError(exc.code, 'QQ 本地数据库快照校验失败或文件正在变化，请稍后重试') from None
+        with closing(sqlite3.connect(target.as_uri() + '?mode=ro', uri=True)) as conn:
+            if conn.execute('PRAGMA quick_check(1)').fetchone() != ('ok',):
+                raise LocalQQError('database_invalid', 'QQ 本地数据库快照完整性校验失败')
 
     def _open(self):
         if self._conn is not None:

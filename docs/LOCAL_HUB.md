@@ -8,6 +8,24 @@ Alternatively run `integrations/wechat/runtime/venv/Scripts/python.exe -m hub.se
 Default URL: `http://127.0.0.1:8765`; if occupied, the service selects a free port.
 The actual URL/PID are recorded in ignored `.local/server.json`.
 
+Automatic indexing starts immediately when the service launches and repeats at
+the configured interval. Settings can install a current-user Windows login
+entry that runs `start_hub.py --background`; this starts the same loopback-only
+service without opening or focusing the WebUI. The entry stores only the local
+launcher command under the current user's `Run` key and can be removed with the
+same setting.
+
+The default **个人微信实时接收** capability adds a separate incremental tail
+without shortening the full-source interval. It checks the local `session.db`
+and WAL file signatures at a short cadence; when the signature changes it reads
+only changed conversations through the existing source cursor. New rows feed
+the same store and body-free SSE event stream as normal indexing. A failed read
+stays pending, a completed ingest advances the durable checkpoint, and the
+receiver pauses while the regular WeChat full sync is running. The capability
+is always read-only and never injects into or modifies the WeChat client. Once
+the live receiver is ready, the heavier full WeChat reconciliation runs at most
+every 30 minutes; an error falls back to the configured full-sync interval.
+
 The current machine's Python environment, icon library and NapCat release are
 already provided. A fresh source checkout bootstraps Python packages and Lucide
 only when absent; Python 3.12 and Node/npm are prerequisites for that bootstrap.
@@ -29,7 +47,7 @@ search, pagination, concurrent WAL write, and backup/restore results.
 
 | 平台 | 可读历史范围 | 媒体能力 | 恢复与对账 | 导出边界 |
 |---|---|---|---|---|
-| 微信 | 当前 Windows 用户本机 WeChat 4.x 数据库快照；不访问云端归档 | 仅本机数据库/缓存中可解析的内容 | 按 `(sort_seq, shard, local_id)` 持久续读；source keyset 不会发现游标之前的回填 | 可导出本工具索引中的标准消息记录，不导出/改写微信原始数据库 |
+| 微信 | 当前 Windows 用户本机 WeChat 4.x 数据库快照；不访问云端归档 | 本机缓存内容；显式下载文件时由已登录客户端接收 | 会话库变化触发增量读取；按 `(sort_seq, shard, local_id)` 持久续读，source keyset 不会发现游标之前的回填 | 可导出本工具索引中的标准消息记录，不导出/改写微信原始数据库 |
 | 企业微信 | 当前用户本机本地缓存快照；不包含企业后台会话存档或未缓存文件 | 本地快照能解析或定位的附件；缺失缓存不可恢复 | 每次完整重读本地快照；按消息 ID 幂等更新，不因快照缺行删除既有索引 | 可导出本工具索引中的标准消息记录，不导出/改写企业微信原始数据库 |
 | QQ | 本机 QQNT 消息数据库与已提交 WAL；加密库需有效本地密钥，不扫码或请求在线漫游 | 当前账号本机缓存中可定位的附件；缺失缓存不在线下载 | 每次新建只读快照，从第一页重读并按稳定消息 ID 对账 | 仅导出统一索引记录；不写入 QQ 数据库，不保证涵盖未缓存历史 |
 | Telegram | Telegram Desktop 用户主动导入的单个会话 JSON；不是原生客户端或自动同步 | 保留安全的相对附件路径元数据；不读取本机导出目录中的附件文件 | 不适用；由用户导入新导出 | 仅统一索引导出，不回写 Telegram |
@@ -44,6 +62,15 @@ JSON/CSV/Markdown/TXT/HTML 导出都来自统一索引，不代表原始
 WeChat: direct bundled read-only reader for local WeChat 4.x. Keep the client
 logged in for key discovery. Per-database keys are saved in `.local/wechat.json`.
 The UI can override the data directory; it never exposes saved keys.
+
+On this machine the optional native sender uses the isolated
+`.runtime/wechat/4.1.10.27-hook` client and a loopback-only Hook token. Private
+routing lives in ignored `.local/wechat-hook.json`; it contains a `token_file`
+path, not the token itself. The sender checks the Hook version and exact logged-in
+database account before submission, then requires a brand-new matching self row
+in the local database before reporting `sent`. An accepted Hook response without
+a database receipt is `unknown` and is not retried. The original
+`C:\Program Files\Tencent\Weixin` installation remains untouched.
 
 Enterprise WeChat: user's own local account, directly integrated source under
 `integrations/wecom`. Ignored `.local` configuration contains the selected slot,
@@ -83,6 +110,27 @@ was partial, and Tencent server-side completeness cannot be proven even when
 the scan finishes without a partial result.
 
 ## Unified WebUI And Optional Modules
+
+### Explicit attachment downloads
+
+Enable **主动下载附件** in Settings to add an explicit **下载到中枢** action.
+Email supports downloading an indexed attachment from its configured TLS IMAP
+mailbox and optionally saving attachments during subsequent syncs with the
+separate **邮件同步时自动保存附件** setting. QQ supports an indexed file only
+when an online QCE bridge uses the same account and the file has an indexed
+MD5 and size; private/group peers are preserved and downloaded bytes must
+match that identity. WeChat supports indexed ordinary files up to 32 MiB. A
+cached file is copied and verified directly. A cache miss uses the logged-in
+4.1.x desktop client to trigger its own **下载** action, waits for the complete
+cache file, verifies the declared size and MD5, and atomically copies it into
+Hub storage. This action may show or focus WeChat, move the pointer, scroll the
+target conversation, and requires an unlocked interactive desktop; it is not a
+fully background download. WeCom still requires an existing client cache.
+Ordinary preview and MCP `get_attachment` remain cache reads; MCP
+`download_attachment` performs an explicit download. Downloaded attachments
+are not automatically executed. Email/QQ/WeChat download directories are not
+yet included in media backups. See `docs/email.md` for email limits and
+older-record behavior.
 
 The WebUI provides platform selection and cross-platform search, conversations,
 contacts and groups, sender labels, date/type/text filters, cursor paging,

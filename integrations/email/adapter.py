@@ -86,12 +86,37 @@ def _body(message) -> str:
     return text.strip()
 
 
+def _attachment_parts(message) -> list[tuple[dict[str, Any], bytes]]:
+    """Return filename-bearing MIME parts without filesystem side effects."""
+    attachments = []
+    for part in message.walk():
+        filename = part.get_filename()
+        if not filename:
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None and part.get_content_type() == "message/rfc822":
+            nested = part.get_payload()
+            if isinstance(nested, list) and len(nested) == 1:
+                payload = nested[0].as_bytes(policy=part.policy)
+        if not isinstance(payload, bytes):
+            continue
+        metadata = {
+            "type": "file",
+            "name": str(filename),
+            "size": len(payload),
+            "mime_type": part.get_content_type(),
+            "available": False,
+        }
+        attachments.append((metadata, payload))
+    return attachments
+
+
 def parse_email_export(payload: bytes, file_format: str = "eml", account_id: str = "") -> dict[str, Any]:
     """Parse EML/MBOX bytes using stdlib MIME decoding and account-scoped IDs.
 
     From is required; Date, Subject and recipient headers may be absent in real
     archived mail. Missing/invalid dates use zero, never the current clock.
-    Attachments contribute their names only and are never saved or opened.
+    Attachments contribute metadata only and are never saved or opened.
     """
     if len(payload) > _MAX_PAYLOAD_BYTES:
         raise ValueError("导入文件超过 256 MiB 限制")
@@ -130,7 +155,8 @@ def parse_email_export(payload: bytes, file_format: str = "eml", account_id: str
             except (ValueError, TypeError, OverflowError, OSError):
                 if len(warnings) < _MAX_ERRORS:
                     warnings.append({"row": total, "warning": "邮件日期缺失或无效，时间设为 0"})
-            names = [str(part.get_filename()) for part in message.walk() if part.get_filename()]
+            attachments = [metadata for metadata, _ in _attachment_parts(message)]
+            names = [attachment["name"] for attachment in attachments]
             to = ", ".join(str(v) for v in message.get_all("To", []))
             cc = ", ".join(str(v) for v in message.get_all("Cc", []))
             text = f"主题: {subject}\n发件人: {sender}\n收件人: {to}\n抄送: {cc}\n\n{_body(message)}"
@@ -143,6 +169,7 @@ def parse_email_export(payload: bytes, file_format: str = "eml", account_id: str
                 "sender_id": sender_id, "sender_name": sender_name, "timestamp": timestamp,
                 "type": "text", "text": text, "is_self": sender_id.casefold() == account.casefold(),
                 "media_url": "", "file_name": "", "raw_type": "email", "preview": "",
+                "attachments": attachments,
             })
         except (ValueError, TypeError, OverflowError, RecursionError, MessageError) as exc:
             if len(errors) < _MAX_ERRORS:

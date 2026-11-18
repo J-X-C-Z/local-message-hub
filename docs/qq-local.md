@@ -69,6 +69,11 @@ Unknown elements remain explicit placeholders. Attachments use the selected
 account's existing local cache and an owned copy, never online downloads.
 QQ schema and media-cache formats can vary by client version.
 
+Fully zero preallocated pages beyond the authenticated SQLite header's valid
+logical page count are preserved without decryption. Logical pages, nonzero
+tail pages and all current WAL frames still require authentication. The merged
+encrypted-database snapshot must also pass SQLite `quick_check` before use.
+
 The QQNT_Export schema/cache reference adds row-level group ID fallbacks,
 repeated quoted elements, media MD5 variants and hashed local avatars. Peer/time
 indexes are created only in the owned snapshot, never in QQ's database.

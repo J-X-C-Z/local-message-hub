@@ -92,6 +92,7 @@ mcp_servers:
         - search_messages
         - list_conversations
         - list_messages
+        - wait_for_new_messages
         - get_message_context
         - get_quoted_message_context
         - list_contacts
@@ -136,6 +137,11 @@ filters is rejected. `offset` remains available for clients that need it.
   unknown IDs return a tool error. Never starts an import.
 - `list_conversations`: bounded conversation listing.
 - `list_messages`: bounded messages from one platform/account/conversation.
+- `wait_for_new_messages`: waits up to 30 seconds for newly indexed incoming
+  messages. Call it once without `after_event_id` to get a starting cursor;
+  pass that cursor on later calls. The cursor advances only over events read,
+  so platform filtering does not replay old messages. It never marks messages
+  read and returns the same normalized message records as other chat tools.
 - `get_message_context`: one message and up to 50 neighbors on each side.
 - `get_quoted_message_context`: resolve a WeChat quote using only the exact
   indexed reference message, account, and conversation, then return the uniquely

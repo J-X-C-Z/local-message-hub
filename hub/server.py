@@ -39,6 +39,7 @@ from .auto_export import AutoExportManager
 from .resources import ResourceJobManager
 from .backups import create_media_backup, restore_media_backup
 from .account_safety import AccountSafety
+from . import autostart as windows_autostart
 from .voice_transcription import VoiceTranscriber
 from .streaming_json import iter_export_messages
 from integrations.qq.provider import DEFAULT_BUNDLE, QQProvider, QQProviderError
@@ -58,6 +59,7 @@ MOMENT_MEDIA_TOKEN_TTL_SECONDS = 15 * 60
 MEDIA_TOKEN_LIMIT = 4096
 MAX_SYNC_CONVERSATION_ID_LENGTH = 512
 MCP_MEDIA_MAX_BYTES = 8 * 1024 * 1024
+WECHAT_LIVE_RECONCILE_SECONDS = 30 * 60
 
 
 def _avatar_format(payload):
@@ -141,7 +143,7 @@ class _LazyWeChatSender:
     """
 
     def __init__(self, sender_factory=None):
-        self._sender_factory = sender_factory or WeChatGUISender
+        self._sender_factory = sender_factory or default_wechat_sender
         self._sender = None
         self._lock = threading.Lock()
 
@@ -162,6 +164,11 @@ class _LazyWeChatSender:
             return {"capability_enabled": bool(capability_enabled), "window_found": False,
                     "window_foreground": False, "input_available": False,
                     "account_id": None, "state": "unavailable"}
+
+
+def default_wechat_sender():
+    from integrations.wechat.hook import WeChatHookTextSender, hook_configured
+    return WeChatHookTextSender() if hook_configured() else WeChatGUISender()
 
 
 def read_json(path, default=None):
@@ -307,6 +314,33 @@ def message_emoji_md5(content):
     return value.lower() if re.fullmatch(r'[a-fA-F0-9]{32}', value) else None
 
 
+def normalize_wechat_rows(rows, conversation_id, names):
+    """Convert source rows into the normalized records accepted by ChatStore."""
+    messages = []
+    for row in rows:
+        raw_type = int(row.get('local_type') or 1) & 0xffffffff
+        source_id = source_message_id(row.get('server_id'))
+        kind, body, filename = message_body(row.get('content'), raw_type)
+        emoji_md5 = message_emoji_md5(row.get('content')) if raw_type in (47, 11000) else None
+        location = message_location(row.get('content')) if raw_type == 48 else None
+        quote = message_quote(row.get('content'), raw_type)
+        sender_id = row.get('sender_id')
+        messages.append({
+            **row,
+            'conversation_id': conversation_id,
+            'type': kind,
+            'text': body,
+            'sender_name': names.get(sender_id, sender_id),
+            'file_name': filename,
+            'raw_type': str(raw_type),
+            **({'_hub_wechat_server_id': source_id} if source_id else {}),
+            **({'emoji_md5': emoji_md5} if emoji_md5 else {}),
+            **({'wechat_quote': quote} if quote else {}),
+            **({'location': location} if location else {}),
+        })
+    return messages
+
+
 def qq_login_result(result):
     payload = result.get('qr_url')
     result = {key: result.get(key) for key in ('started', 'login_phase')}
@@ -377,6 +411,7 @@ class Hub:
         self.import_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = self.storage / 'settings.json'
         self.settings = {'auto_sync': True, 'sync_interval': 5, 'mcp_write_enabled': False,
+                         'auto_download_attachments': False,
                          'notification_filters': {'platforms': list(NATIVE_PLATFORMS),
                                                   'muted_conversations': []},
                          **read_json(self.settings_path)}
@@ -404,6 +439,7 @@ class Hub:
         self.jobs = set()
         self.sync_cancellations = {}
         self.attempts = {}
+        self.wechat_live_receiver = None
         self.qq_history_job = None
         self.qq_key_discovery = {'state': 'idle', 'message': ''}
         self.import_cancellations = {}
@@ -426,6 +462,8 @@ class Hub:
 
     def close(self):
         self.stop.set()
+        if self.wechat_live_receiver is not None:
+            self.wechat_live_receiver.stop()
         if self._campus_service is not None:
             self._campus_service.close()
         self.auto_exports.close()
@@ -455,6 +493,27 @@ class Hub:
                 self.send_approval_challenges.pop(oldest, None)
             self.send_approval_challenges[request_id] = (token, now + 60, platform)
         return {'token': token, 'expires_in': 60}
+
+    def ensure_wechat_send_ready(self, account_id):
+        self.require_capability('wechat_send')
+        readiness = self.wechat_sender.readiness(True)
+        if (not isinstance(readiness, dict) or readiness.get('state') != 'ready'
+                or not isinstance(readiness.get('account_id'), str)
+                or not readiness['account_id']):
+            raise ValueError('本机微信客户端不可用；请在已登录的 Windows 主机上打开微信')
+        if account_id != readiness['account_id']:
+            raise ValueError('account_id must match the currently logged-in WeChat account')
+        return readiness
+
+    def send_wechat_now(self, payload):
+        self.require_capability('wechat_auto_send')
+        self.ensure_wechat_send_ready(payload.get('account_id'))
+        fields = ('account_id', 'conversation_type', 'conversation_id',
+                  'text', 'request_id', 'source_conversation_id')
+        return self.send_service.prepare_and_deliver({
+            'platform': 'wechat',
+            **{key: payload.get(key) for key in fields},
+        })
 
     def consume_send_approval_challenge(self, request_id, token, platform=None):
         # Verify the one-time challenge before any state lookup so a token that
@@ -617,6 +676,11 @@ class Hub:
                 updated[name] = enabled
             previous = self.settings['capabilities']
             normalized = normalize_capabilities(updated)
+            if normalized.get('wechat_auto_send') and not normalized.get('wechat_send'):
+                raise ValueError('请先启用个人微信文本发送，再启用自动发送')
+            if previous.get('wechat_send', False) and not normalized.get('wechat_send') \
+                    and normalized.get('wechat_auto_send'):
+                raise ValueError('请先关闭个人微信自动发送，再关闭文本发送')
             disabling_sync = previous.get('sync', True) and not normalized['sync']
             disabling_imports = previous.get('imports', True) and not normalized['imports']
             if any(previous.get(name, False) and not normalized[name]
@@ -1057,25 +1121,42 @@ class Hub:
 
     def sync_email(self, cancel=None):
         provider = self.email_provider()
-        if not provider.status().get('configured'):
+        accounts = provider.status().get('accounts', [])
+        if not accounts:
             self.update('email', state='disconnected', progress='', error='请先配置邮箱账号')
             return 'unavailable'
-        result = provider.sync(cancel=lambda: self._sync_cancelled(cancel))
-        records = result['records']
-        messages = records['messages']
-        if messages:
-            account = messages[0]['account_id']
-            if not self._sync_ingest(cancel, 'email', account, records['conversations'], messages):
-                return
-        with self.sync_gate_lock:
+        problems = []
+        partial = False
+        for account_config in accounts:
             if self._sync_cancelled(cancel):
                 return
-            provider.commit_checkpoint(result['checkpoint'])
-        if records.get('invalid') or records.get('warnings') or result.get('oversized'):
-            self.update('email', error='部分邮件暂未完整归档，请检查邮件大小或格式')
-            return 'partial'
-        if result.get('has_more'):
-            self.update('email', error='本批邮件已归档；仍有历史邮件待同步，可再次同步继续')
+            account_id = account_config['id']
+            try:
+                download_options = ({'download_attachments': True} if
+                    self.settings.get('auto_download_attachments') is True and
+                    self.capability_enabled('attachment_download') and self.capability_enabled('media') else {})
+                result = provider.sync(cancel=lambda: self._sync_cancelled(cancel), account_id=account_id,
+                                       **download_options)
+                records = result['records']
+                messages = records['messages']
+                if messages and not self._sync_ingest(cancel, 'email', messages[0]['account_id'],
+                                                      records['conversations'], messages):
+                    return
+                with self.sync_gate_lock:
+                    if self._sync_cancelled(cancel):
+                        return
+                    provider.commit_checkpoint(result['checkpoint'], account_id=account_id)
+                if records.get('invalid') or records.get('warnings') or result.get('has_more'):
+                    partial = True
+                    problems.append(f"{account_config['email']}：仍有邮件待同步或部分邮件未归档")
+            except Exception as exc:
+                from integrations.email.provider import EmailProviderError
+                partial = True
+                reason = str(exc) if isinstance(exc, EmailProviderError) else '同步失败，请检查配置'
+                problems.append(f"{account_config['email']}：{reason}")
+        if problems:
+            self.update('email', error='；'.join(problems)[:1500])
+        if partial:
             return 'partial'
 
     def sync_wechat(self, cancel=None):
@@ -1122,21 +1203,7 @@ class Hub:
                     rows = page.get('messages', [])
                     next_cursor = page.get('next_cursor')
                     complete = not page.get('has_more', False)
-                    messages = []
-                    for row in rows:
-                        raw_type = int(row.get('local_type') or 1) & 0xffffffff
-                        source_id = source_message_id(row.get('server_id'))
-                        kind, body, filename = message_body(row.get('content'), raw_type)
-                        emoji_md5 = message_emoji_md5(row.get('content')) if raw_type in (47, 11000) else None
-                        location = message_location(row.get('content')) if raw_type == 48 else None
-                        quote = message_quote(row.get('content'), raw_type)
-                        messages.append({**row, 'conversation_id': cid, 'type': kind, 'text': body,
-                                         'sender_name': names.get(row['sender_id'], row['sender_id']),
-                                         'file_name': filename, 'raw_type': str(raw_type),
-                                         **({'_hub_wechat_server_id': source_id} if source_id else {}),
-                                         **({'emoji_md5': emoji_md5} if emoji_md5 else {}),
-                                         **({'wechat_quote': quote} if quote else {}),
-                                         **({'location': location} if location else {})})
+                    messages = normalize_wechat_rows(rows, cid, names)
                     if not rows and not complete and next_cursor == cursor:
                         raise RuntimeError('WeChat source cursor did not advance')
                     if self._sync_cancelled(cancel):
@@ -1166,21 +1233,7 @@ class Hub:
                 rows = provider.messages(cid, limit=2000, offset=offset)
                 if not rows:
                     break
-                messages = []
-                for row in rows:
-                    raw_type = int(row.get('local_type') or 1) & 0xffffffff
-                    source_id = source_message_id(row.get('server_id'))
-                    kind, body, filename = message_body(row.get('content'), raw_type)
-                    emoji_md5 = message_emoji_md5(row.get('content')) if raw_type in (47, 11000) else None
-                    location = message_location(row.get('content')) if raw_type == 48 else None
-                    quote = message_quote(row.get('content'), raw_type)
-                    messages.append({**row, 'conversation_id': cid, 'type': kind, 'text': body,
-                                     'sender_name': names.get(row['sender_id'], row['sender_id']),
-                                     'file_name': filename, 'raw_type': str(raw_type),
-                                     **({'_hub_wechat_server_id': source_id} if source_id else {}),
-                                     **({'emoji_md5': emoji_md5} if emoji_md5 else {}),
-                                     **({'wechat_quote': quote} if quote else {}),
-                                     **({'location': location} if location else {})})
+                messages = normalize_wechat_rows(rows, cid, names)
                 next_offset = offset + len(rows)
                 complete = next_offset >= total or len(rows) < 2000
                 if self._sync_cancelled(cancel):
@@ -1788,9 +1841,23 @@ class Hub:
             if self.capability_enabled('sync') and self.settings.get('auto_sync', True):
                 for p, source in list(self.sources.items()):
                     interval = 30 if p == 'qq' and source['state'] != 'connected' else self.settings.get('sync_interval', 5) * 60
+                    live = source.get('live_receive') or {}
+                    if (p == 'wechat' and live.get('state') == 'ready'
+                            and self.capability_enabled('wechat_live_receive')):
+                        interval = max(interval, WECHAT_LIVE_RECONCILE_SECONDS)
                     if now - self.attempts.get(p, 0) >= interval:
                         # Retry login-dependent sources without interrupting the logged-in client.
                         self.start_sync(p)
+
+    def start_wechat_live_receive(self):
+        if self.wechat_live_receiver is not None:
+            return self.wechat_live_receiver
+        from .wechat_live import WeChatLiveReceiver
+        with self.lock:
+            if self.wechat_live_receiver is None:
+                self.wechat_live_receiver = WeChatLiveReceiver(self)
+                self.wechat_live_receiver.start()
+        return self.wechat_live_receiver
 
     def configure(self, platform, values):
         if platform == 'email':
@@ -1843,6 +1910,95 @@ class Hub:
                     config['key'] = protect_key(key)
                 save_json(config_path, config)
         self.start_sync(platform)
+
+    def remove_email_account(self, account_id):
+        with self.sync_gate_lock, self.lock:
+            if 'email' in self.jobs:
+                raise ValueError('邮件同步正在运行，请稍后移除账号')
+            return self.email_provider().remove(account_id)
+
+    def download_attachment(self, params):
+        """Explicit network download; ordinary media reads remain cache-only."""
+        self.require_capability('media')
+        self.require_capability('attachment_download')
+        allowed = {'platform', 'account_id', 'conversation_id', 'message_id', 'resource_index'}
+        if not isinstance(params, dict) or set(params) - allowed:
+            raise ValueError('附件身份参数无效')
+        if not all(isinstance(params.get(key), str) and 0 < len(params[key]) <= 512
+                   for key in ('platform', 'account_id', 'conversation_id', 'message_id')):
+            raise ValueError('请提供完整的附件身份')
+        row = self.store.get_message(params['platform'], params['account_id'], params['message_id'])
+        if not row or row['conversation_id'] != params['conversation_id']:
+            raise ValueError('消息不存在')
+        index = params.get('resource_index')
+        if index is None:
+            extra = row.get('extra') if isinstance(row.get('extra'), dict) else {}
+            if params['platform'] == 'email':
+                resources = row.get('attachments', extra.get('attachments'))
+            elif params['platform'] == 'qq':
+                resources = extra.get('roaming_resources', extra.get('media'))
+            elif params['platform'] == 'wechat':
+                index = 0
+                resources = [row]
+            else:
+                resources = None
+            if not isinstance(resources, list) or len(resources) != 1:
+                raise ValueError('请指定要下载的附件序号')
+            if index is None:
+                index = 0
+        if type(index) is not int or not 0 <= index <= 100:
+            raise ValueError('附件序号无效')
+        if params['platform'] == 'email':
+            from integrations.email.provider import EmailProviderError
+            try:
+                result = self.email_provider().download_attachment(row, resource_index=index)
+                if result.get('available'):
+                    self.store.set_attachment_available(
+                        'email', params['account_id'], params['message_id'], index, True)
+            except EmailProviderError as exc:
+                raise ValueError(str(exc)) from None
+        elif params['platform'] == 'qq':
+            from integrations.qq.downloads import download_attachment, QQDownloadError
+            conversation = self.store.get_conversation('qq', params['account_id'], params['conversation_id'])
+            if not conversation or conversation.get('kind') not in ('private', 'group'):
+                raise ValueError('QQ 会话身份不完整，请重新同步')
+            provider = self.providers.get('qq')
+            if provider is None:
+                provider = QQProvider()
+                with self.lock:
+                    self.providers['qq'] = provider
+            try:
+                result = download_attachment(provider, row, resource_index=index, storage=self.storage,
+                                             conversation_kind=conversation['kind'])
+            except QQDownloadError as exc:
+                raise ValueError(exc.safe_message) from None
+        elif params['platform'] == 'wechat':
+            from integrations.wechat.downloads import download_attachment, WeChatDownloadError
+            provider = self.providers.get('wechat')
+            if provider is None:
+                from integrations.wechat.provider import WeChatProvider
+                provider = WeChatProvider()
+                with self.lock:
+                    self.providers['wechat'] = provider
+            conversation = self.store.get_conversation(
+                'wechat', params['account_id'], params['conversation_id'])
+            if not conversation:
+                raise ValueError('微信会话身份不完整，请重新同步')
+            try:
+                result = download_attachment(
+                    provider, row, resource_index=index, storage=self.storage,
+                    conversation_title=conversation.get('title') or '')
+            except WeChatDownloadError as exc:
+                raise ValueError(exc.safe_message) from None
+        else:
+            raise ValueError('此平台尚无已接入的主动下载通道；请先在客户端接收文件')
+        if not result.get('available') or not result.get('path'):
+            return {'available': False, 'message': result.get('message') or '附件未能下载'}
+        return {'available': True,
+                'media_url': '/local-media/' + self.register_media_path(Path(result['path'])) +
+                             '?download_name=' + quote(result.get('name') or 'attachment', safe=''),
+                'download_name': result.get('name') or 'attachment',
+                'mime_type': result.get('mime_type') or 'application/octet-stream'}
 
     def resolve_media(self, params):
         platform = params.get('platform')
@@ -1927,6 +2083,13 @@ class Hub:
             if mime:
                 result['mime_type'] = mime
             return result
+        if platform in ('qq', 'email') and params.get('resource_index') is not None:
+            index = params['resource_index']
+            if isinstance(index, str) and index.isascii() and index.isdecimal() and len(index) <= 3:
+                index = int(index)
+            if type(index) is not int or not 0 <= index <= 100:
+                raise ValueError('附件序号无效')
+            params = {**params, 'resource_index': index}
         image_tier = params.get('image_tier', 'mid')
         if image_tier not in ('mid', 'best', 'thumb', 'original'):
             raise ValueError('图片质量选项无效')
@@ -1934,6 +2097,42 @@ class Hub:
         if row is None or row['conversation_id'] != params.get('conversation_id'):
             raise ValueError('消息不存在')
         row = {**row.get('extra', {}), **row}
+        if platform == 'qq':
+            from integrations.qq.downloads import cached_attachment
+            index = params.get('resource_index')
+            index = 0 if index is None else index
+            downloaded = cached_attachment(row, resource_index=index, storage=self.storage)
+            if downloaded.get('available'):
+                return {'media_url': '/local-media/' + self.register_media_path(Path(downloaded['path'])) +
+                                     '?download_name=' + quote(downloaded.get('name') or 'attachment', safe=''),
+                        'available': True, 'download_name': downloaded.get('name') or 'attachment',
+                        'mime_type': downloaded.get('mime_type') or 'application/octet-stream'}
+        if platform == 'email':
+            index = params.get('resource_index')
+            index = 0 if index is None else index
+            if type(index) is not int or not 0 <= index < 50:
+                raise ValueError('附件序号无效')
+            result = self.email_provider().cached_attachment(row, resource_index=index)
+            if not result.get('available') or not result.get('path'):
+                return {'media_url': None, 'available': False,
+                        'message': '附件尚未保存到中枢，可使用主动下载'}
+            return {'media_url': '/local-media/' + self.register_media_path(Path(result['path'])) +
+                                 '?download_name=' + quote(result.get('name') or 'attachment', safe=''),
+                    'available': True, 'download_name': result.get('name') or 'attachment',
+                    'mime_type': result.get('mime_type') or 'application/octet-stream'}
+        if platform == 'wechat' and row.get('type') == 'file':
+            from integrations.wechat.downloads import cached_attachment
+            downloaded = cached_attachment(row, resource_index=0, storage=self.storage)
+            if downloaded.get('available'):
+                return {
+                    'media_url': '/local-media/' +
+                                 self.register_media_path(Path(downloaded['path'])) +
+                                 '?download_name=' +
+                                 quote(downloaded.get('name') or 'attachment', safe=''),
+                    'available': True,
+                    'download_name': downloaded.get('name') or 'attachment',
+                    'mime_type': downloaded.get('mime_type') or 'application/octet-stream',
+                }
         if platform == 'wechat' and str(row.get('raw_type') or '') in ('47', '11000'):
             provider = self.providers.get('wechat')
             reader = getattr(provider, 'reader', None)
@@ -2203,7 +2402,7 @@ class Hub:
         if row['type'] != 'voice':
             raise ValueError('只能转写语音消息')
         resolved = self.resolve_media(params)
-        token = (resolved.get('media_url') or '').rsplit('/', 1)[-1]
+        token = urlsplit(resolved.get('media_url') or '').path.rsplit('/', 1)[-1]
         if not token:
             return {'available': False, 'reason': 'audio_not_cached',
                     'message': resolved.get('message') or '本机未缓存此语音。'}
@@ -2280,6 +2479,11 @@ class Hub:
             raise ValueError('消息不存在')
         row = {**row.get('extra', {}), **row}
         if params.get('_local_only') and params['platform'] == 'qq':
+            from integrations.qq.downloads import cached_attachment
+            downloaded = cached_attachment(row, resource_index=params.get('resource_index') or 0,
+                                           storage=self.storage)
+            if downloaded.get('available'):
+                return Path(downloaded['path']), downloaded.get('name') or 'attachment'
             provider = self.providers.get('qq')
             if provider is None:
                 provider = QQProvider()
@@ -2289,6 +2493,13 @@ class Hub:
             if not resolved.get('available') or not resolved.get('path'):
                 raise FileNotFoundError('QQ 媒体未在本机缓存')
             return Path(resolved['path']), resolved.get('name') or row.get('file_name') or 'qq-media'
+        if params.get('_local_only') and params['platform'] == 'wechat':
+            from integrations.wechat.downloads import cached_attachment
+            downloaded = cached_attachment(
+                row, resource_index=params.get('resource_index') or 0, storage=self.storage)
+            if downloaded.get('available'):
+                return Path(downloaded['path']), downloaded.get('name') or 'wechat-file'
+            raise FileNotFoundError('微信文件尚未下载到中枢')
         if params['platform'] == 'wechat' and str(row.get('raw_type') or '') in ('47', '11000'):
             if not row.get('emoji_md5'):
                 raise FileNotFoundError('本机没有该微信表情的已缓存文件')
@@ -2307,7 +2518,7 @@ class Hub:
             except (IndexError, TypeError):
                 raise ValueError('漫游附件不存在') from None
             resolved = self.resolve_media(params)
-            token = (resolved.get('media_url') or '').rsplit('/', 1)[-1]
+            token = urlsplit(resolved.get('media_url') or '').path.rsplit('/', 1)[-1]
             if not token:
                 raise FileNotFoundError
             with self.lock:
@@ -2315,7 +2526,7 @@ class Hub:
             if path is None or not Path(path).is_file():
                 raise FileNotFoundError
             return Path(path), resource.get('name') or f"attachment-{row['id']}"
-        wecom_index = params.get('resource_index') if params['platform'] == 'wecom' else None
+        wecom_index = params.get('resource_index') if params['platform'] in ('wecom', 'email') else None
         if wecom_index is not None:
             try:
                 index = int(wecom_index)
@@ -2332,21 +2543,21 @@ class Hub:
         if params['platform'] == 'wechat' and row.get('type') == 'image':
             resolve_params.setdefault('image_tier', 'best')
         resolved = self.resolve_media(resolve_params)
-        token = (resolved.get('media_url') or '').rsplit('/', 1)[-1]
+        token = urlsplit(resolved.get('media_url') or '').path.rsplit('/', 1)[-1]
         if not token:
             raise FileNotFoundError
         with self.lock:
             path = self.media_paths.pop(token, None)
         if path is None or not Path(path).is_file():
             raise FileNotFoundError
-        name = resolved.get('name') or row.get('file_name') or f"{row.get('type') or 'attachment'}-{row['id']}"
+        name = resolved.get('download_name') or resolved.get('name') or row.get('file_name') or f"{row.get('type') or 'attachment'}-{row['id']}"
         return Path(path), name
 
     def read_cached_image(self, message, resource_index=None):
         """Return one bounded attachment from an already-local cache for MCP."""
         platform = message.get('platform')
         media_type = message.get('type')
-        if platform not in NATIVE_PLATFORMS or media_type not in ('image', 'video', 'voice', 'file'):
+        if platform not in (*NATIVE_PLATFORMS, 'email') or media_type not in ('image', 'video', 'voice', 'file'):
             raise ValueError('仅支持读取已索引的图片、视频、语音或文件附件')
         indexed = (self.store.get_message('qq', message.get('account_id', ''),
                                           message.get('id', ''))
@@ -2362,6 +2573,8 @@ class Hub:
                 from integrations.wecom.adapter import WeComAdapter
                 provider = WeComAdapter(voice_cache_dir=self.storage / 'media' / 'decoded-voice')
                 provider.refresh()
+            elif platform == 'email':
+                provider = self.email_provider()
             elif qq_local:
                 provider = self.qq_local_provider()
             else:
@@ -2382,7 +2595,11 @@ class Hub:
                     str(message.get('resource_id') or ''), str(message.get('account_id') or ''))
                 resolved = {'available': True, 'path': path}
             else:
-                resolved = provider.cached_media(message, resource_index=resource_index)
+                from integrations.qq.downloads import cached_attachment
+                resolved = cached_attachment(indexed or message, resource_index=resource_index or 0,
+                                             storage=self.storage)
+                if not resolved.get('available'):
+                    resolved = provider.cached_media(message, resource_index=resource_index)
             if not resolved.get('available') or not resolved.get('path'):
                 raise ValueError('本机没有可读取的图片缓存')
             path = Path(resolved['path'])
@@ -2404,7 +2621,7 @@ class Hub:
             media_url = resolved.get('media_url')
             if not media_url:
                 raise ValueError(resolved.get('message') or '本机没有可读取的图片缓存')
-            token = media_url.rsplit('/', 1)[-1]
+            token = urlsplit(media_url).path.rsplit('/', 1)[-1]
             with self.lock:
                 path = self.media_paths.pop(token, None)
             if path is None:
@@ -2415,19 +2632,23 @@ class Hub:
         path = source_path.resolve()
         if platform == 'wechat':
             from integrations.wechat.provider import RUNTIME
-            cache_roots = [Path(RUNTIME) / 'media']
+            cache_roots = [Path(RUNTIME) / 'media',
+                           self.storage / 'attachment-downloads' / 'wechat']
             provider = self.providers.get('wechat')
             reader = getattr(provider, 'reader', None)
             reader_account = str(getattr(reader, 'wxid', None) or
                                  getattr(reader, 'account', None) or '')
             if provider and message.get('account_id') == reader_account:
                 cache_roots.append(provider.emoji_cache_account_dir())
+        elif platform == 'email':
+            cache_roots = [self.storage / 'email-attachments']
         elif platform == 'wecom':
             from integrations.wecom.engine import OUT
             cache_roots = [Path(OUT)]
         else:
             from integrations.qq.provider import QQProvider
             cache_roots = [QQProvider._media_cache_dir(), self.storage / 'qq-roaming',
+                           self.storage / 'attachment-downloads' / 'qq',
                            self.storage / 'integrations' / 'qq-local' / 'media']
         if not any(path.is_relative_to(root.resolve()) for root in cache_roots):
             raise ValueError('图片不在本机缓存目录中')
@@ -3508,6 +3729,7 @@ class Handler(BaseHTTPRequestHandler):
                       'account_lock_idle_timeout_seconds': self.hub.account_safety.idle_seconds,
                       'storage_dir': str(self.hub.storage),
                       'fts_enabled': self.hub.store._fts_enabled,
+                      'auto_index_status': windows_autostart.status(ROOT),
                       'auto_export_status': self.hub.auto_exports.status(),
                       'capabilities': describe_capabilities(self.hub.settings.get('capabilities'))})
         elif path == '/api/wecom-bot/identity':
@@ -3593,6 +3815,7 @@ class Handler(BaseHTTPRequestHandler):
                 source_status_reader=self.hub.source_status_snapshot,
                 campus_reader=self.hub.campus_service,
                 media_reader=self.hub.read_cached_image,
+                attachment_downloader=self.hub.download_attachment,
                 capabilities=self.hub.settings.get('capabilities'),
                 capability_reader=lambda: self.hub.settings.get('capabilities'),
                 send_service=self.hub.send_service,
@@ -4146,14 +4369,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('缺少拒绝确认')
                 result = self.hub.send_service.reject(path.split('/')[-2], 'qq')
             elif path == '/api/wechat-sends/prepare':
-                readiness = self.hub.wechat_sender.readiness(True)
-                if (not isinstance(readiness, dict) or readiness.get('state') != 'ready'
-                        or not isinstance(readiness.get('account_id'), str)
-                        or not readiness['account_id']):
-                    raise ValueError('本机微信客户端不可用；请在已登录的 Windows 主机上打开微信')
-                if body.get('account_id') != readiness['account_id']:
-                    raise ValueError('account_id must match the currently logged-in WeChat account')
+                self.hub.ensure_wechat_send_ready(body.get('account_id'))
                 result = self.hub.send_service.prepare({**body, 'platform': 'wechat'})
+            elif path == '/api/wechat-sends/send-now':
+                result = self.hub.send_wechat_now(body)
             elif re.fullmatch(r'/api/wechat-sends/[A-Za-z0-9_-]{8,80}/approve', path):
                 self.hub.require_capability('wechat_send')
                 request_id = path.split('/')[-2]
@@ -4242,10 +4461,16 @@ class Handler(BaseHTTPRequestHandler):
                         self.hub.set_capabilities(capability_changes)
                     if 'auto_sync' in body:
                         self.hub.settings['auto_sync'] = bool(body['auto_sync'])
+                    if 'auto_index_at_login' in body:
+                        windows_autostart.set_enabled(ROOT, body['auto_index_at_login'])
                     if 'mcp_write_enabled' in body:
                         if not isinstance(body['mcp_write_enabled'], bool):
                             raise ValueError('MCP 写入开关无效')
                         self.hub.settings['mcp_write_enabled'] = body['mcp_write_enabled']
+                    if 'auto_download_attachments' in body:
+                        if type(body['auto_download_attachments']) is not bool:
+                            raise ValueError('自动下载附件开关无效')
+                        self.hub.settings['auto_download_attachments'] = body['auto_download_attachments']
                     if 'sync_interval' in body:
                         interval = int(body['sync_interval'])
                         if interval not in (1, 3, 5, 10, 30):
@@ -4260,6 +4485,7 @@ class Handler(BaseHTTPRequestHandler):
                     result.update({'account_lock_enabled': self.hub.account_safety.configured,
                               'account_lock_idle_timeout_seconds': self.hub.account_safety.idle_seconds,
                               'storage_dir': str(self.hub.storage),
+                              'auto_index_status': windows_autostart.status(ROOT),
                               'auto_export_status': self.hub.auto_exports.status(),
                               'capabilities': describe_capabilities(
                                   self.hub.settings.get('capabilities'))})
@@ -4272,6 +4498,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/auto-export/cancel':
                 self.hub.require_capability('auto_export')
                 result = self.hub.auto_exports.cancel()
+            elif path == '/api/attachments/download':
+                result = self.hub.download_attachment(body)
             elif path == '/api/resource-jobs':
                 items = body.get('items')
                 if isinstance(items, list) and any(isinstance(item, dict) and item.get('resource_kind') == 'moment'
@@ -4292,6 +4520,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('会话导出平台无效')
                 result = self.hub.resource_jobs.start_bundle(
                     lambda work, cancel: self._build_export_bundle(query, work, cancel))
+            elif re.fullmatch(r'/api/source/email/accounts/[a-f0-9]{24}/remove', path):
+                if body.get('confirmation') != 'REMOVE_EMAIL_ACCOUNT':
+                    raise ValueError('缺少移除邮箱账号确认')
+                result = self.hub.remove_email_account(path.split('/')[-2])
             elif path.startswith('/api/source/') and path.endswith('/configure'):
                 self.hub.configure(path.split('/')[3], body)
                 result = {'message': '配置已保存，正在同步'}
@@ -4694,6 +4926,15 @@ class Handler(BaseHTTPRequestHandler):
             self.json({'error': '文件不存在'}, 404)
             return
         mime = mimetypes.guess_type(str(path))[0] or 'application/octet-stream'
+        if urlpath.startswith('/local-media/') and any(path.resolve().is_relative_to(root.resolve()) for root in (
+                self.hub.storage / 'email-attachments',
+                self.hub.storage / 'attachment-downloads' / 'qq',
+                self.hub.storage / 'attachment-downloads' / 'wechat')):
+            name = str(params.get('download_name') or 'attachment').replace('\\', '/').rsplit('/', 1)[-1]
+            name = ''.join(char for char in name if ord(char) >= 32 and ord(char) != 127)[:240] or 'attachment'
+            self.send_local_media(path, 'application/octet-stream', self.headers.get('Range'), {
+                'Content-Disposition': "attachment; filename*=UTF-8''" + quote(name, safe='')})
+            return
         if path.suffix.lower() in ('.heic', '.heif'):
             mime = 'image/heic'
         if urlpath.startswith('/local-media/'):
@@ -4750,7 +4991,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ('/api/conversations', '/api/messages', '/api/context',
                     '/api/quoted-message', '/api/conversation-members'):
             return 'chat'
-        if path in ('/api/accounts', '/api/media', '/api/media/resolve', '/api/resource-jobs') or path.startswith('/api/resource-jobs/'):
+        if path in ('/api/accounts', '/api/media', '/api/media/resolve', '/api/attachments/download', '/api/resource-jobs') or path.startswith('/api/resource-jobs/'):
             return 'media'
         if path == '/api/qq/forward-resources' or path.startswith('/api/qq/forward-resources/'):
             return 'media'
@@ -4771,6 +5012,8 @@ class Handler(BaseHTTPRequestHandler):
             return 'annual_reports'
         if path == '/api/sends' or path.startswith('/api/sends/'):
             return 'qq_send'
+        if path == '/api/wechat-sends/send-now':
+            return 'wechat_auto_send'
         if path == '/api/wechat-sends' or path.startswith('/api/wechat-sends/'):
             return 'wechat_send'
         if path == '/api/qq/send-readiness':
@@ -4787,7 +5030,9 @@ class Handler(BaseHTTPRequestHandler):
             return 'export'
         if path == '/api/export/bundle':
             return 'media' if method == 'POST' else 'export'
-        if path == '/api/sync' or (path.startswith('/api/source/') and path.endswith('/configure')):
+        if (path == '/api/sync' or
+                (path.startswith('/api/source/') and path.endswith('/configure')) or
+                re.fullmatch(r'/api/source/email/accounts/[a-f0-9]{24}/remove', path)):
             return 'sync'
         if path.startswith('/api/auto-export'):
             return 'auto_export'
@@ -4823,6 +5068,7 @@ def main():
     save_json(hub.storage / 'server.json', {'pid': os.getpid(), 'url': f'http://127.0.0.1:{server.server_port}'})
     if not args.no_autosync:
         threading.Thread(target=hub.autosync, daemon=True).start()
+        hub.start_wechat_live_receive()
         hub.campus_service().start_updates(lambda: hub.capability_enabled('campus'))
     print(f'LocalChatHub http://127.0.0.1:{server.server_port}', flush=True)
     try:

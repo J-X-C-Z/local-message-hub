@@ -165,12 +165,12 @@ def message_resource_requests(message):
     account_id = str(message.get("account_id") or "")
     message_id = str(message.get("id") or "")
     conversation_id = str(message.get("conversation_id") or "")
-    if platform not in {"wechat", "wecom", "qq"} or not all(
+    if platform not in {"wechat", "wecom", "qq", "email"} or not all(
             (account_id, message_id, conversation_id)):
         return []
 
     extra = message.get("extra") if isinstance(message.get("extra"), dict) else {}
-    resource_field = {"wecom": "attachments", "qq": "roaming_resources"}.get(platform)
+    resource_field = {"wecom": "attachments", "email": "attachments", "qq": "roaming_resources"}.get(platform)
     entries = extra.get(resource_field) if resource_field else None
     if not isinstance(entries, list) and resource_field:
         entries = message.get(resource_field)

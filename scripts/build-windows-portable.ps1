@@ -394,6 +394,7 @@ try {
         '--hidden-import', 'hub.auto_export',
         '--hidden-import', 'hub.resources',
         '--hidden-import', 'integrations.qq.provider',
+        '--hidden-import', 'integrations.qq.downloads',
         '--hidden-import', 'integrations.qq.sender',
         '--hidden-import', 'integrations.qq.local_provider',
         '--hidden-import', 'integrations.qq.local_wal',

@@ -5,3 +5,5 @@ pilk-nogil==0.4.3
 qrcode==8.2
 pypng==0.20220715.0
 ijson==3.4.0.post0
+uiautomation>=2.0.18,<3
+pywin32>=305,<400

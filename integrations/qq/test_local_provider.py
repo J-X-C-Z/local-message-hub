@@ -208,6 +208,12 @@ class LocalProviderTests(unittest.TestCase):
         self.assertEqual(json.loads(self.config.read_text(encoding='utf-8'))['key'],
                          'IncorrectKey1234', 'an unverified legacy key must not be migrated')
 
+    def test_authenticated_but_invalid_sqlite_snapshot_is_rejected(self):
+        page = self.encrypted_page()
+        self.source.write_bytes((b'SQLite header 3\x00' + b'\x00' * 16 + b'QQ_NT DB').ljust(HEADER, b'\x00') + page)
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.provider._snapshot(self.source, 'SyntheticKey1234', self.root / 'invalid.db')
+
     def test_foreign_user_ciphertext_does_not_fall_back_to_environment_key(self):
         self.fixture()
         self.config.write_text(json.dumps({'data_dir': str(self.account),

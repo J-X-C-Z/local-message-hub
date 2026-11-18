@@ -14,7 +14,7 @@ import uuid
 import zipfile
 
 
-PLATFORMS = {"wechat", "wecom", "qq"}
+PLATFORMS = {"wechat", "wecom", "qq", "email"}
 MAX_ITEMS = 100
 MAX_ITEM_BYTES = 50 * 1024 * 1024
 MAX_TOTAL_BYTES = 512 * 1024 * 1024

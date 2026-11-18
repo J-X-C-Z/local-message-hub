@@ -31,6 +31,7 @@ function normalizeMediaType(value) {
 let notificationStream = null;
 let accountLockTransition = false;
 const MESSAGE_WINDOW_LIMIT = 500;
+const attachmentDownloads = new Set();
 let sourcePollTimer = null;
 let sourcePollBusy = false;
 let messageLoadSequence = 0;
@@ -331,7 +332,7 @@ function renderMessage(m) {
   const mediaUrl = safeUrl(m.media_url);
   const unsupportedWechatEmoji = m.platform === 'wechat' && ['47', '11000'].includes(String(m.raw_type || ''));
   const roaming = m.platform === 'qq' ? qqResources(m.extra) : m.extra?.roaming_resources || [];
-  const resources = (roaming.length ? roaming : (m.platform === 'wecom' ? (m.extra?.attachments || []) : []))
+  const resources = (roaming.length ? roaming : (['wecom', 'email'].includes(m.platform) ? (m.extra?.attachments || []) : []))
     .map((resource, index) => ({resource, index}))
     .filter(({resource}) => resource?.quoted !== true);
   const voiceKey = JSON.stringify([m.platform, m.account_id, m.id]);
@@ -344,11 +345,11 @@ function renderMessage(m) {
   else if (mediaUrl && m.type === 'video') attachment = `<video src="${esc(mediaUrl)}" controls preload="none"></video>`;
   else if (mediaUrl && m.type === 'voice') attachment = `<audio src="${esc(mediaUrl)}" controls preload="none"></audio>`;
   else if (m.type === 'location') {const place = m.extra?.location || {};const lat = Number(place.latitude);const lng = Number(place.longitude);const coords = Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lng) && lng >= -180 && lng <= 180 ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : '';attachment = `<div class="wechat-location-card"><strong>${icon('map-pin')}${esc(place.title || '位置')}</strong>${place.address ? `<span>${esc(place.address)}</span>` : ''}${coords ? `<small>${coords}</small>` : ''}</div>`;}
-  else if (m.type === 'file' && !resources.length) attachment = `<${mediaUrl ? 'a href="' + esc(mediaUrl) + '" download' : 'div'} class="file-attachment">${icon('file-text')}<span>${esc(m.file_name || m.text || '文件')}${mediaUrl ? '' : iconButton('download', 'resolve-media:' + encodeURIComponent(m.id), '读取文件')}</span></${mediaUrl ? 'a' : 'div'}>`;
+  else if (m.type === 'file' && !resources.length) attachment = `<${mediaUrl ? 'a href="' + esc(mediaUrl) + '" download' : 'div'} class="file-attachment">${icon('file-text')}<span>${esc(m.file_name || m.text || '文件')}${mediaUrl ? '' : iconButton('download', 'resolve-media:' + encodeURIComponent(m.id), '读取文件')}</span>${mediaUrl ? '' : renderAttachmentDownload(m)}</${mediaUrl ? 'a' : 'div'}>`;
   else if (unsupportedWechatEmoji && mediaUrl) attachment = `<img class="media-img" src="${esc(mediaUrl)}" alt="微信表情" loading="lazy" data-media-url="${esc(mediaUrl)}" data-media-type="image">`;
   else if (unsupportedWechatEmoji) attachment = `<div class="file-attachment" title="只读取当前账号已存在的表情缓存">${icon('smile')}<span>表情 <span class="muted small">· 仅本机缓存</span>${iconButton('eye', 'resolve-media:' + encodeURIComponent(m.id), '读取表情缓存')}</span></div>`;
   else if (['image', 'video', 'voice'].includes(m.type) && !resources.length) attachment = `<div class="file-attachment">${icon({image: 'image', video: 'video', voice: 'audio-lines'}[m.type])}<span>${typeNames[m.type]} <span class="muted small">${m.media_available === false ? '· 本机未缓存' : '· 打开时读取'}</span>${iconButton('eye', 'resolve-media:' + encodeURIComponent(m.id), '读取媒体')}</span></div>`;
-  if (resources.length) attachment += `<div class="roaming-resources">${resources.map(({resource, index}) => {const kind = normalizeMediaType(resource.type);const url = safeUrl(resource.media_url);const name = resource.name || resource.n || typeNames[kind] || '附件';const size = Number(resource.size);const sizeLabel = Number.isFinite(size) && size > 0 ? ` <small>${esc(size < 1024 ? `${size} B` : size < 1048576 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1048576).toFixed(1)} MB`)}</small>` : '';if (url && kind === 'image') return `<a class="roaming-image-link" href="${esc(url)}" target="_blank" rel="noreferrer"><img class="media-img" src="${esc(url)}" alt="${esc(name)}" loading="lazy"></a>`;if (url && kind === 'video') return `<video src="${esc(url)}" controls preload="none"></video>`;if (url && kind === 'voice') return `<audio src="${esc(url)}" controls preload="none"></audio>`;if (url) return `<a class="roaming-resource" href="${esc(url)}" download>${icon('file-text')}${esc(name)}${sizeLabel}</a>`;const glyph = icon({image: 'image', video: 'video', voice: 'audio-lines', file: 'file-text'}[kind] || 'paperclip');return resource.available === false ? `<span class="roaming-resource unavailable" title="附件未能下载到本机">${glyph}${esc(name)}${sizeLabel}<small>未缓存</small></span>` : `<button type="button" class="roaming-resource" data-action="resolve-media:${encodeURIComponent(m.id)}:${index}" title="${esc(typeNames[kind] || '附件')} · ${esc(name)}">${glyph}<span>${esc(name)}${sizeLabel}</span></button>`;}).join('')}</div>`;
+  if (resources.length) attachment += `<div class="roaming-resources">${resources.map(({resource, index}) => renderMessageAttachment(m, resource, index)).join('')}</div>`;
   const richContent = m.platform === 'qq' ? renderQQRoamingContent(m,
     roaming.length > 0 || (Array.isArray(m.extra?.media) && m.extra.media.length > 0)) : '';
   const quoteData = m.platform === 'wechat' && m.extra?.wechat_quote && typeof m.extra.wechat_quote === 'object'
@@ -367,6 +368,54 @@ function renderMessage(m) {
     : `<blockquote class="qq-rich-reply">${quoteContent}</blockquote>` : '';
   const text = richContent || (attachment ? (m.type === 'file' && !roaming.length) || /^\[.+\]$/.test(m.text || '') ? '' : `<div>${highlight(m.text)}</div>` : highlight(m.text || '[' + (typeNames[m.type] || '消息') + ']'));
   return `<div class="message ${m.is_self ? 'self' : ''} ${m.id === state.contextMessage ? 'context-target' : ''}" data-message-id="${esc(m.id)}">${avatar(m.sender_name || (m.is_self ? '我' : '?'), m.platform, m.sender_avatar_url)}<div class="message-body"><div class="message-meta"><span>${esc(m.sender_name || (m.is_self ? '我' : m.sender_id || '未知发送人'))}${m.extra?.roaming_metadata?.recalled ? ' · 已撤回' : ''}</span><time>${timeOnly(m.timestamp || 1)}</time></div><div class="bubble">${attachment}${quote}${text}${voiceControl}</div></div></div>`;
+}
+
+function renderMessageAttachment(message, resource, index) {
+  const kind = normalizeMediaType(resource.type);
+  const url = safeUrl(resource.media_url);
+  const name = resource.name || resource.n || typeNames[kind] || '附件';
+  const size = Number(resource.size);
+  const sizeLabel = Number.isFinite(size) && size > 0
+    ? ` <small>${esc(size < 1024 ? `${size} B` : size < 1048576 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1048576).toFixed(1)} MB`)}</small>` : '';
+  if (url && kind === 'image') return `<a class="roaming-image-link" href="${esc(url)}" target="_blank" rel="noreferrer"><img class="media-img" src="${esc(url)}" alt="${esc(name)}" loading="lazy"></a>`;
+  if (url && kind === 'video') return `<video src="${esc(url)}" controls preload="none"></video>`;
+  if (url && kind === 'voice') return `<audio src="${esc(url)}" controls preload="none"></audio>`;
+  if (url) return `<a class="roaming-resource" href="${esc(url)}" download>${icon('file-text')}${esc(name)}${sizeLabel}</a>`;
+  const glyph = icon({image: 'image', video: 'video', voice: 'audio-lines', file: 'file-text'}[kind] || 'paperclip');
+  const canSupplement = message.platform === 'email'
+    || (message.platform === 'qq' || message.platform === 'wechat') && kind === 'file';
+  if (!canSupplement && resource.available === false) {
+    return `<span class="roaming-resource unavailable" title="附件未能下载到本机">${glyph}${esc(name)}${sizeLabel}<small>未缓存</small></span>`;
+  }
+  const resolve = `<button type="button" class="roaming-resource" data-action="resolve-media:${encodeURIComponent(message.id)}:${index}" title="${esc(typeNames[kind] || '附件')} · ${esc(name)}">${glyph}<span>${esc(name)}${sizeLabel}${message.platform === 'email' && resource.available === false ? ' <small>未缓存</small>' : ''}</span></button>`;
+  return resolve + (canSupplement ? renderAttachmentDownload(message, index, resource) : '');
+}
+
+function canDownloadAttachment(message, resource = null) {
+  const capabilities = state.settings.capabilities || {};
+  if (capabilities.attachment_download?.enabled !== true || capabilities.media?.enabled !== true) return false;
+  if (message.platform === 'email') {
+    const size = Number(resource?.size);
+    return resource?.too_large !== true && (!Number.isFinite(size) || size <= 32 * 1024 * 1024);
+  }
+  if (message.platform === 'wechat') {
+    return normalizeMediaType(message.type) === 'file';
+  }
+  if (message.platform !== 'qq') return false;
+  const selected = resource || qqResources(message.extra)[0] || message;
+  const kind = normalizeMediaType(selected.type || message.type);
+  const size = Number(selected.size);
+  return kind === 'file' && /^[a-f0-9]{32}$/i.test(String(selected.md5 || '')) &&
+    Number.isInteger(size) && size >= 0 && size <= 32 * 1024 * 1024;
+}
+
+function renderAttachmentDownload(message, resourceIndex = null, resource = null) {
+  if (!canDownloadAttachment(message, resource)) return '';
+  const source = message.platform === 'wechat'
+    ? '通过本机微信客户端（会短暂使用交互桌面）'
+    : message.platform === 'qq' ? '通过 QQ Chat Exporter' : '通过邮件连接';
+  const index = resourceIndex === null ? '' : `:${resourceIndex}`;
+  return `<button type="button" class="roaming-resource" data-action="download-attachment:${encodeURIComponent(message.id)}${index}" title="${source}补下载到本机中枢">${icon('download')}下载到中枢</button>`;
 }
 
 function renderQQRoamingContent(message, hasResources) {
@@ -683,7 +732,7 @@ function mediaEntries() {
     const resources = message.platform === 'qq' ? qqResources(message.extra)
       : message.extra?.roaming_resources?.length
         ? message.extra.roaming_resources
-      : message.platform === 'wecom' && Array.isArray(message.extra?.attachments)
+      : ['wecom', 'email'].includes(message.platform) && Array.isArray(message.extra?.attachments)
         ? message.extra.attachments
         : [];
     if (resources.length) return resources.map((resource, resourceIndex) => {
@@ -744,7 +793,13 @@ function renderMediaTile(entry, i) {
     : resource?.mime_type || message.extra?.mime_type || message.media_mime_type;
   const preview = image ? `<img src="${esc(localMediaPreviewUrl(imageUrl, mimeType))}" alt="${esc(entry.name)}" loading="lazy">`
     : icon(cachedEmoji ? 'smile' : {video: 'video', voice: 'audio-lines', file: 'file-text', image: 'image'}[entry.type] || 'file');
-  const hint = entry.type === 'video' && imageUrl
+  const emailAttachment = message.platform === 'email' && entry.resourceIndex !== null;
+  const downloadable = !available && canDownloadAttachment(message, resource);
+  const hint = downloadable
+    ? '<span class="media-hint">附件未缓存 · 可补下载</span>'
+    : emailAttachment && !available
+    ? `<span class="media-hint">${canDownloadAttachment(message, resource) ? '邮件附件 · 可补下载' : '邮件附件 · 读取本机缓存'}</span>`
+    : entry.type === 'video' && imageUrl
     ? '<span class="media-hint">视频封面</span>'
     : entry.resourceIndex !== null || ['moment', 'qq_cache'].includes(entry.resourceKind)
     ? '<span class="media-hint">本机附件 · 点击预览</span>' : '';
@@ -759,8 +814,9 @@ function renderMediaTile(entry, i) {
     entry.type === 'video' && imageUrl ? iconButton('image', `video-poster:${i}`, '查看视频封面') : '',
     canLoadBestWechatImage ? iconButton('maximize-2', `wechat-best-image:${i}`, '读取本机缓存中的最佳画质') : '',
     canOpenChat ? iconButton('message-square-text', `open-media-chat:${i}`, '查看所在聊天') : '',
+    downloadable ? iconButton('download', `download-media:${i}`, '下载到中枢') : '',
   ].filter(Boolean).join('');
-  return `<article class="media-tile" data-media-preview-tile="${i}"><button type="button" class="media-open" data-item="${i}" ${entry.resourceIndex !== null ? `data-resource-index="${entry.resourceIndex}"` : ''} ${available ? '' : 'disabled'} aria-label="预览${esc(typeNames[entry.type] || '附件')}" ${title}><div class="media-preview">${preview}${hint}</div><div class="media-caption"><strong class="truncate">${esc(entry.name || message.conversation_title || typeNames[entry.type])}</strong><div>${badge(message.platform)}<span>${dt(message.timestamp, true)}</span></div>${sender}${sizeLabel}${unavailable}</div></button>${actions ? `<div class="media-chat-link">${actions}</div>` : ''}<label class="media-select"><input type="checkbox" data-media-select="${i}" ${state.selectedMedia.has(key) ? 'checked' : ''} ${available ? '' : 'disabled'}><span>加入批量导出</span></label></article>`;
+  return `<article class="media-tile" data-media-preview-tile="${i}"><button type="button" class="media-open" data-item="${i}" ${entry.resourceIndex !== null ? `data-resource-index="${entry.resourceIndex}"` : ''} ${available || emailAttachment ? '' : 'disabled'} aria-label="预览${esc(typeNames[entry.type] || '附件')}" ${title}><div class="media-preview">${preview}${hint}</div><div class="media-caption"><strong class="truncate">${esc(entry.name || message.conversation_title || typeNames[entry.type])}</strong><div>${badge(message.platform)}<span>${dt(message.timestamp, true)}</span></div>${sender}${sizeLabel}${unavailable}</div></button>${actions ? `<div class="media-chat-link">${actions}</div>` : ''}<label class="media-select"><input type="checkbox" data-media-select="${i}" ${state.selectedMedia.has(key) ? 'checked' : ''} ${available ? '' : 'disabled'}><span>加入批量导出</span></label></article>`;
 }
 function cancelMediaPreviews() {
   mediaPreviewController?.observer?.disconnect();
@@ -945,13 +1001,18 @@ function renderSources() {
   const syncEnabled = state.settings.capabilities?.sync?.enabled !== false;
   return `${head('<button class="btn" data-action="sync" ' + (syncEnabled ? '' : 'disabled aria-disabled="true"') + '>' + icon('refresh-cw') + '同步全部</button>')}<div class="view-scroll view-enter"><div class="section-title"><h2>已集成的数据源</h2><span class="label">4 PLATFORMS</span></div><div class="source-list">${['wechat', 'wecom', 'qq', 'email'].map(id => {
     const s = state.sources.find(x => x.id === id) || {id, state: 'disconnected'};
+    const emailAccounts = id === 'email' ? (s.email_config?.accounts || []) : [];
+    const emailAccountDetails = emailAccounts.map(account =>
+      `<span>${esc(account.email)} · ${esc(account.folder || 'INBOX')} · 已同步 UID ${fmt(account.synced_uid || 0)}</span>${iconButton('trash-2', 'remove-email-account:' + account.id, '移除 ' + account.email)}`
+    ).join('');
     const discovery = s.key_discovery || {};
     const canDiscover = id === 'qq' && ['key_required', 'key_invalid'].includes(s.error_code);
     const hasScanCounts = discovery.state !== 'running' &&
       ['processes', 'tested', 'read_mib'].every(key => Number.isInteger(discovery[key]));
     const scanCounts = hasScanCounts
       ? `<div class="source-detail"><span>扫描 ${fmt(discovery.processes)} 个 QQ 进程</span><span>验证 ${fmt(discovery.tested)} 个候选</span><span>读取 ${fmt(discovery.read_mib)} MiB</span></div>` : '';
-    return `<section class="source-row"><div class="source-logo ${id}">${icon(platforms[id].icon)}</div><div><div class="source-name"><h2>${platforms[id].name}</h2><span class="pill"><span class="dot ${statusDot(s)}"></span>${sourceState(s)}</span></div><div class="source-detail"><span>${id === 'email' ? 'IMAP 邮箱同步 · EML / MBOX 归档导入' : id === 'qq' ? '内置 QQ 本地数据库读取' : id === 'wechat' ? '内置本地数据库读取' : '内置企业微信读取'}</span>${id === 'email' && s.email_config?.configured ? `<span>${esc(s.email_config.username)} · ${esc(s.email_config.folder || 'INBOX')}</span>` : ''}${s.version ? `<span class="mono">${esc(s.version)}</span>` : ''}</div>${id === 'wechat' && s.image_key_configured ? '<div class="source-detail"><span>图片解密密钥 · 已在本机加密保存</span></div>' : ''}${id === 'wechat' && s.avatar_database?.message ? `<div class="source-detail"><span>头像库 · ${esc(s.avatar_database.message)}</span></div>` : ''}${id === 'qq' && Number.isInteger(s.database_count) ? `<div class="source-detail"><span>${fmt(s.database_count)} 个本地数据库</span></div>` : ''}<div class="source-detail"><span>${fmt(s.conversation_count)} 个会话</span><span>${fmt(s.message_count)} 条已索引消息</span>${s.last_sync ? `<span>更新 ${dt(s.last_sync)}</span>` : ''}</div>${s.error ? `<div class="source-error">${esc(s.error)}</div>` : ''}${canDiscover && discovery.message ? `<div class="source-detail">${esc(discovery.message)}</div>` : ''}${canDiscover ? scanCounts : ''}${s.progress ? `<div class="source-detail mono">${esc(s.progress)}</div>` : ''}</div><div class="head-actions">${canDiscover ? `<button class="btn" data-action="discover-qq-key" ${discovery.state === 'running' || !syncEnabled ? 'disabled aria-disabled="true"' : ''}>${icon(discovery.state === 'running' ? 'loader-circle' : 'key-round')}${discovery.state === 'running' ? '正在只读查找' : '只读发现密钥'}</button>` : ''}${iconButton('refresh-cw', 'sync:' + id, '同步' + platforms[id].name, syncEnabled ? '' : 'disabled')}${iconButton('settings-2', 'configure:' + id, '配置' + platforms[id].name, syncEnabled ? '' : 'disabled')}</div></section>`;
+    const liveState = s.live_receive?.state ? ({ready: '监听中', waiting_sync: '等待完整索引', disabled: '已关闭', error: '暂不可用'}[s.live_receive.state] || s.live_receive.state) : '';
+    return `<section class="source-row"><div class="source-logo ${id}">${icon(platforms[id].icon)}</div><div><div class="source-name"><h2>${platforms[id].name}</h2><span class="pill"><span class="dot ${statusDot(s)}"></span>${sourceState(s)}</span></div><div class="source-detail"><span>${id === 'email' ? 'IMAP 邮箱同步 · EML / MBOX 归档导入' : id === 'qq' ? '内置 QQ 本地数据库读取' : id === 'wechat' ? '内置本地数据库读取' : '内置企业微信读取'}</span>${id === 'email' ? emailAccountDetails : ''}${s.version ? `<span class="mono">${esc(s.version)}</span>` : ''}</div>${id === 'wechat' && liveState ? `<div class="source-detail"><span>实时接收 · ${esc(liveState)}</span>${s.live_receive.last_ingest ? `<span>最近增量 ${dt(s.live_receive.last_ingest)}</span>` : ''}${s.live_receive.ingested_total ? `<span>已增量 ${fmt(s.live_receive.ingested_total)} 条</span>` : ''}</div>` : ''}${id === 'wechat' && s.image_key_configured ? '<div class="source-detail"><span>图片解密密钥 · 已在本机加密保存</span></div>' : ''}${id === 'wechat' && s.avatar_database?.message ? `<div class="source-detail"><span>头像库 · ${esc(s.avatar_database.message)}</span></div>` : ''}${id === 'qq' && Number.isInteger(s.database_count) ? `<div class="source-detail"><span>${fmt(s.database_count)} 个本地数据库</span></div>` : ''}<div class="source-detail"><span>${fmt(s.conversation_count)} 个会话</span><span>${fmt(s.message_count)} 条已索引消息</span>${s.last_sync ? `<span>更新 ${dt(s.last_sync)}</span>` : ''}</div>${s.error ? `<div class="source-error">${esc(s.error)}</div>` : ''}${canDiscover && discovery.message ? `<div class="source-detail">${esc(discovery.message)}</div>` : ''}${canDiscover ? scanCounts : ''}${s.progress ? `<div class="source-detail mono">${esc(s.progress)}</div>` : ''}</div><div class="head-actions">${canDiscover ? `<button class="btn" data-action="discover-qq-key" ${discovery.state === 'running' || !syncEnabled ? 'disabled aria-disabled="true"' : ''}>${icon(discovery.state === 'running' ? 'loader-circle' : 'key-round')}${discovery.state === 'running' ? '正在只读查找' : '只读发现密钥'}</button>` : ''}${iconButton('refresh-cw', 'sync:' + id, '同步' + platforms[id].name, syncEnabled ? '' : 'disabled')}${id === 'email' ? `<button class="btn" data-action="configure:email" ${syncEnabled ? '' : 'disabled'}>${icon('plus')}添加邮箱</button>` : iconButton('settings-2', 'configure:' + id, '配置' + platforms[id].name, syncEnabled ? '' : 'disabled')}</div></section>`;
   }).join('')}</div><div class="source-description">${icon('lock-keyhole')}<span>索引、缓存与连接配置保存在本机。原始数据库与邮箱只读。</span></div></div>`;
 }
 function renderImports() {
@@ -1026,19 +1087,32 @@ function renderSettingsBase() {
       invalid_response: '端点返回了无法识别的状态'}[qqReady.state] || '状态未知');
   const qqReadinessSettings = `<section class="settings-group"><h2>QQ 发送通道</h2><p class="muted small">检查只会向本机 NapCat 请求登录身份，不会发送消息；此检查不会自动运行。</p><div class="setting-row"><div><strong>${esc(qqReadyText)}</strong><p>${qqReady?.endpoint_reachable ? 'OneBot 本机端点可达' : qqReady?.endpoint_configured ? '端点已配置' : '尚未确认端点状态'}${qqReady?.checked_at ? ` · ${dt(qqReady.checked_at)}` : ''}</p></div><button class="btn" data-action="qq-send-readiness">${icon('activity')}检查本机状态</button></div></section>`;
   const wechatSendEnabled = state.settings.capabilities?.wechat_send?.enabled === true;
+  const wechatAutoSendEnabled = state.settings.capabilities?.wechat_auto_send?.enabled === true;
+  const autoIndexStatus = state.settings.auto_index_status || {};
+  const autoIndexSupported = autoIndexStatus.supported !== false;
+  const autoIndexAtLogin = autoIndexStatus.installed === true;
+  const autoDownloadAttachments = state.settings.auto_download_attachments === true;
+  const attachmentDownloadAvailable = state.settings.capabilities?.attachment_download?.available === true;
+  const attachmentDownloadEnabled = attachmentDownloadAvailable &&
+    state.settings.capabilities?.attachment_download?.enabled === true;
+  const autoDownloadActive = autoDownloadAttachments && attachmentDownloadEnabled;
+  const autoDownloadHint = !attachmentDownloadAvailable
+    ? '主动下载模块当前不可用。'
+    : attachmentDownloadEnabled ? '邮件同步时自动保存附件；微信文件按需由已登录客户端接收。单附件上限 32 MiB。'
+      : '需先在“功能模块”启用“附件下载”，当前自动保存不可用。';
   const wechatReady = state.wechatSendReadiness;
   const wechatReadyText = !wechatReady ? (wechatSendEnabled ? '尚未检查' : '发送功能已关闭')
     : ({capability_disabled: '发送功能已关闭', window_not_found: '未找到微信窗口',
       client_logged_out: '微信客户端未登录，请先在这台电脑上登录',
       account_unavailable: '找到窗口，但无法确认本机登录账号', unavailable: '本机环境不可用'}[wechatReady.state]
       || (wechatReady.state === 'ready' ? `客户端与账号已就绪 · 本机微信 ${esc(wechatReady.account_id || '')}` : '状态未知'));
-  const wechatSendReadinessSettings = `<section class="settings-group"><h2>个人微信发送通道</h2><p class="muted small">检查只读取微信窗口与本机登录账号，不会发送消息；此检查不会自动运行。发送前需打开并唯一识别目标会话。发送时会真实操作微信客户端界面，风控风险由使用者承担。</p><div class="setting-row"><div><strong>${wechatReadyText}</strong><p>${wechatReady?.input_available ? '输入桌面可用' : '输入桌面可能已锁定'}${wechatReady?.checked_at ? ` · ${dt(wechatReady.checked_at)}` : ''}</p></div><button class="btn" data-action="wechat-send-readiness">${icon('activity')}检查本机状态</button></div></section>`;
+  const wechatSendReadinessSettings = `<section class="settings-group"><h2>个人微信发送通道</h2><p class="muted small">检查只读取微信窗口与本机登录账号，不会发送消息。发送前需打开并唯一识别目标会话。发送时会真实操作微信客户端界面，风控风险由使用者承担。${wechatAutoSendEnabled ? '自动发送已开启：MCP 与中枢发送表单会跳过逐条审批。' : '当前为人工审批模式。'}</p><div class="setting-row"><div><strong>${wechatReadyText}</strong><p>${wechatReady?.input_available ? '输入桌面可用' : '输入桌面可能已锁定'}${wechatReady?.checked_at ? ` · ${dt(wechatReady.checked_at)}` : ''}</p></div><button class="btn" data-action="wechat-send-readiness">${icon('activity')}检查本机状态</button></div></section>`;
   const botEnabled = state.settings.capabilities?.wecom_bot_send?.enabled === true;
   const botSettings = `<section class="settings-group"><h2>企业微信机器人身份</h2><p class="muted small">这是机器人账号，不是当前登录员工。每条消息都须在本机单独审核。密钥由 Windows 当前用户 DPAPI 加密保存，不会回显。</p>${botEnabled ? `<div class="setting-row"><div><strong>${esc(bot.identity || '企业微信智能机器人（非当前员工身份）')}</strong><p>${bot.configured ? `已配置 · ID ${esc(bot.bot_id)}` : '尚未配置'}</p></div><span class="pill ${bot.configured ? 'connected' : ''}">${bot.configured ? '本机凭据' : '未配置'}</span></div><form id="wecom-bot-credentials-form" class="account-lock-form"><label>机器人 ID<input name="bot_id" maxlength="128" value="${esc(bot.bot_id || '')}" autocomplete="off" required></label><label>机器人密钥<input name="secret" type="password" minlength="8" maxlength="512" autocomplete="new-password" required></label><button class="btn primary" type="submit">${icon('lock-keyhole')}加密保存机器人凭据</button>${bot.configured ? `<button class="btn danger" type="button" data-action="remove-wecom-bot-credentials">${icon('trash-2')}移除凭据</button>` : ''}</form>` : '<p class="muted small">先在上方启用“企业微信机器人消息发送”，再配置凭据。模块关闭时，机器人身份信息与配置接口均不可访问。</p><button class="btn danger" type="button" data-action="remove-wecom-bot-credentials">移除本机保存的凭据</button>'}</section>`;
   const accountSafetySettings = botSettings + (accountSafety?.enabled ? `<section class="settings-group"><h2>账号安全</h2>${lockSetup}<p class="muted small">锁定本机 WebUI 与 HTTP API。独立配置的 MCP stdio 客户端不受此锁控制。</p></section>` : '');
   const notificationsEnabled = state.settings.capabilities?.notifications?.enabled === true;
   const notificationSettings = notificationAvailable ? `<section class="settings-group"><h2>桌面通知</h2><p class="muted small">仅通知平台与“收到一条新消息”，不显示正文；首次连接会忽略已有记录。</p><div class="notification-settings"><label>接收范围<select id="notification-mode" aria-label="通知接收范围" ${notificationsEnabled ? '' : 'disabled'}><option value="all" ${filters.mode !== 'allowlist' ? 'selected' : ''}>全部所选平台（静音项除外）</option><option value="allowlist" ${filters.mode === 'allowlist' ? 'selected' : ''}>仅白名单会话（静音项仍排除）</option></select></label><label>提示样式<select id="notification-style" aria-label="桌面通知提示样式" ${notificationsEnabled ? '' : 'disabled'}><option value="normal" ${filters.style !== 'silent' ? 'selected' : ''}>标准提示</option><option value="silent" ${filters.style === 'silent' ? 'selected' : ''}>静音提示</option></select></label><div class="notification-platforms">${[['wechat','微信'],['wecom','企业微信'],['qq','QQ']].map(([id,name]) => `<label class="check-label"><input type="checkbox" data-action="notification-platform:${id}" ${(filters.platforms || []).includes(id) ? 'checked' : ''} ${notificationsEnabled ? '' : 'disabled'}>${name}</label>`).join('')}</div><p class="muted small">白名单可在会话详情中管理；静音名单始终优先。</p><button class="btn" type="button" data-action="notification-test" ${notificationsEnabled ? '' : 'disabled'}>${icon('bell')}发送测试通知</button></div></section>` : '';
-  return `${head()}<div class="view-scroll view-enter"><section class="settings-group"><h2>功能模块</h2>${capabilities}</section>${qqReadinessSettings}${state.settings.capabilities?.wechat_send?.available ? wechatSendReadinessSettings : ''}${accountSafetySettings}${notificationSettings}<section class="settings-group"><h2>外观</h2><div class="setting-row"><div><strong>主题</strong><p>工作区配色</p></div><div class="segmented">${[['light', '浅色'], ['dark', '深色'], ['system', '系统']].map(([id, name]) => `<button data-theme-value="${id}" class="${state.theme === id ? 'active' : ''}">${name}</button>`).join('')}</div></div></section><section class="settings-group"><h2>同步</h2><div class="setting-row"><div><strong>自动增量同步</strong><p>读取已连接平台的新消息</p></div><button class="toggle ${state.settings.auto_sync !== false ? 'on' : ''}" role="switch" aria-label="自动增量同步" aria-checked="${state.settings.auto_sync !== false}" data-action="toggle-sync"></button></div><div class="setting-row"><div><strong>同步间隔</strong><p>分钟</p></div><select id="sync-interval" aria-label="同步间隔">${[1, 3, 5, 10, 30].map(v => `<option value="${v}" ${Number(state.settings.sync_interval || 5) === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div></section><section class="settings-group"><h2>数据与隐私</h2><div class="setting-row"><div><strong>存储位置</strong><p class="mono">${esc(state.settings.storage_dir || '.local')}</p></div><span class="pill">${icon('hard-drive')}本机</span></div><div class="setting-row"><div><strong>访问地址</strong><p class="mono">${esc(location.origin)}</p></div><span class="pill">仅本机</span></div><div class="setting-row"><div><strong>搜索索引</strong><p>长关键词使用本地三元字符索引，短词回退字面搜索</p></div><span class="pill">${state.settings.fts_enabled ? 'FTS5 trigram' : 'LIKE 回退'}</span></div><div class="setting-row"><div><strong>原始聊天数据库</strong><p>查询与导出使用本地副本</p></div><span class="pill">只读</span></div></section><section class="settings-group"><h2>已集成项目</h2>${[['WeFlow', '5.0.0 / CC BY-NC-SA 4.0'], ['QQ Chat Exporter', '6.3.2 / GPL-3.0'], ['企业微信本地读取器', '只读 / 本地快照'], ['统一索引与导出', '本地 SQLite / MCP']].map(([name, value]) => `<div class="setting-row"><strong>${name}</strong><span class="small muted mono">${value}</span></div>`).join('')}</section></div>`;
+  return `${head()}<div class="view-scroll view-enter"><section class="settings-group"><h2>功能模块</h2>${capabilities}</section>${qqReadinessSettings}${state.settings.capabilities?.wechat_send?.available ? wechatSendReadinessSettings : ''}${accountSafetySettings}${notificationSettings}<section class="settings-group"><h2>外观</h2><div class="setting-row"><div><strong>主题</strong><p>工作区配色</p></div><div class="segmented">${[['light', '浅色'], ['dark', '深色'], ['system', '系统']].map(([id, name]) => `<button data-theme-value="${id}" class="${state.theme === id ? 'active' : ''}">${name}</button>`).join('')}</div></div></section><section class="settings-group"><h2>自动索引</h2><div class="setting-row"><div><strong>后台自动索引</strong><p>服务启动后立即读取已连接平台，并按下方间隔持续索引新消息</p></div><button class="toggle ${state.settings.auto_sync !== false ? 'on' : ''}" role="switch" aria-label="后台自动索引" aria-checked="${state.settings.auto_sync !== false}" data-action="toggle-sync"></button></div><div class="setting-row"><div><strong>邮件同步时自动保存附件</strong><p>${autoDownloadHint}</p></div><button class="toggle ${autoDownloadActive ? 'on' : ''}" role="switch" aria-label="邮件同步时自动保存附件" aria-checked="${autoDownloadActive}" data-action="toggle-auto-download-attachments" ${attachmentDownloadEnabled ? '' : 'disabled aria-disabled="true"'}></button></div><div class="setting-row"><div><strong>索引间隔</strong><p>分钟</p></div><select id="sync-interval" aria-label="索引间隔">${[1, 3, 5, 10, 30].map(v => `<option value="${v}" ${Number(state.settings.sync_interval || 5) === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div><div class="setting-row"><div><strong>登录 Windows 后自动索引</strong><p>${autoIndexSupported ? '登录后在后台启动索引服务，不自动打开界面' : '仅 Windows 支持'}</p></div><button class="toggle ${autoIndexAtLogin ? 'on' : ''}" role="switch" aria-label="登录 Windows 后自动索引" aria-checked="${autoIndexAtLogin}" data-action="toggle-auto-index-startup" ${autoIndexSupported ? '' : 'disabled aria-disabled="true"'}></button></div></section><section class="settings-group"><h2>数据与隐私</h2><div class="setting-row"><div><strong>存储位置</strong><p class="mono">${esc(state.settings.storage_dir || '.local')}</p></div><span class="pill">${icon('hard-drive')}本机</span></div><div class="setting-row"><div><strong>访问地址</strong><p class="mono">${esc(location.origin)}</p></div><span class="pill">仅本机</span></div><div class="setting-row"><div><strong>搜索索引</strong><p>长关键词使用本地三元字符索引，短词回退字面搜索</p></div><span class="pill">${state.settings.fts_enabled ? 'FTS5 trigram' : 'LIKE 回退'}</span></div><div class="setting-row"><div><strong>原始聊天数据库</strong><p>查询与导出使用本地副本</p></div><span class="pill">只读</span></div></section><section class="settings-group"><h2>已集成项目</h2>${[['WeFlow', '5.0.0 / CC BY-NC-SA 4.0'], ['QQ Chat Exporter', '6.3.2 / GPL-3.0'], ['企业微信本地读取器', '只读 / 本地快照'], ['统一索引与导出', '本地 SQLite / MCP']].map(([name, value]) => `<div class="setting-row"><strong>${name}</strong><span class="small muted mono">${value}</span></div>`).join('')}</section></div>`;
 }
 function renderSettings() {
   const backups = state.backups.map(item => `<div class="backup-row"><div><strong>${esc(item.id)}</strong><span class="small muted">${new Intl.DateTimeFormat('zh-CN', {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(item.created_at * 1000))} · ${fmtBytes(item.size)}</span></div><button class="icon-btn" data-action="download-backup:${encodeURIComponent(item.id)}" title="下载备份" aria-label="下载备份">${icon('download')}</button></div>`).join('') || '<p class="muted small">尚无备份</p>';
@@ -1761,8 +1835,29 @@ function showSendComposer() {
   if (isBot && (!state.wecomBotIdentity?.configured || state.settings.capabilities?.wecom_bot_send?.enabled !== true)) {
     toast('请先在设置中配置机器人身份并启用发送能力', true);return;
   }
+  const autoSend = isWeChat && state.settings.capabilities?.wechat_auto_send?.enabled === true;
   const wechatTargetPattern = '[A-Za-z0-9_-]{1,64}(@chatroom)?';
-  modal(isBot ? '准备企微机器人发送' : isWeChat ? '准备个人微信文本发送' : '准备 QQ 文本发送', `<form id="send-compose-form" data-send-platform="${isBot ? 'wecom_bot' : isWeChat ? 'wechat' : 'qq'}"><p class="muted small">请求先进入本机审批队列，不会立即发送。${isBot ? '发送方是企业微信智能机器人，不是当前员工。请填写机器人可达的成员 ID 或群聊 ID，并核对权限。' : isWeChat ? '发送方是当前登录的本机微信账号。批准后会通过姓名窗口操作已打开的聊天窗口，请先在微信中打开目标会话。' : '发送方是当前登录的本机 QQ 账号。'}</p>${isBot ? `<div class="pill">${esc(state.wecomBotIdentity.identity)}</div><input type="hidden" name="account_id" value="${esc(state.wecomBotIdentity.bot_id)}"><label>消息类型<select name="media_type"><option value="markdown">Markdown 文本</option><option value="image">图片</option><option value="file">文件</option><option value="voice">AMR 语音</option><option value="video">视频</option></select></label>` : isWeChat ? `<label>本机微信账号<input name="account_id" pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" value="${esc(conversation.account_id)}" required></label>` : `<label>QQ 账号<input name="account_id" inputmode="numeric" pattern="[0-9]{5,20}" maxlength="20" value="${esc(conversation.account_id)}" required></label>`}<label>${isBot ? (type === 'group' ? '机器人群聊 ID' : '企业微信成员 ID') : '接收目标'}<input name="conversation_id" ${isWeChat ? `pattern="${wechatTargetPattern}" maxlength="73"` : isBot ? 'pattern="[A-Za-z0-9_@.-]{1,128}" maxlength="128"' : 'pattern="[A-Za-z0-9_.-]{1,64}" maxlength="64"'} value="${esc(conversation.id)}" required></label><p class="muted small" data-send-target-hint>${isBot || isWeChat ? '' : '可填本地会话 UID（u_&hellip;）或 QQ 号 / 群号；本机会先解析成号码再进入审批。'}</p><input type="hidden" name="conversation_type" value="${type}">${isBot ? '<label data-media-file-label hidden>本机附件<input name="media_file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" disabled></label>' : ''}<label data-send-text-label>${isBot ? '文本' : '文本'}<textarea name="text" maxlength="4000" rows="5" ${isBot ? '' : 'required'}></textarea></label></form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" type="submit" form="send-compose-form">' + icon('clipboard-plus') + '加入待审批</button>');
+  const intro = autoSend
+    ? '本表单会立即操作本机微信客户端发送，不再进入审批队列。目标会话必须已打开且名称唯一；目标输入框中的未发送草稿会被清空。'
+    : '请求先进入本机审批队列，不会立即发送。';
+  const identityHint = isBot
+    ? '发送方是企业微信智能机器人，不是当前员工。请填写机器人可达的成员 ID 或群聊 ID，并核对权限。'
+    : isWeChat ? '发送方是当前登录的本机微信账号。请先在微信中打开目标会话。'
+      : '发送方是当前登录的本机 QQ 账号。';
+  const accountInput = isBot
+    ? `<div class="pill">${esc(state.wecomBotIdentity.identity)}</div><input type="hidden" name="account_id" value="${esc(state.wecomBotIdentity.bot_id)}"><label>消息类型<select name="media_type"><option value="markdown">Markdown 文本</option><option value="image">图片</option><option value="file">文件</option><option value="voice">AMR 语音</option><option value="video">视频</option></select></label>`
+    : isWeChat
+      ? `<label>本机微信账号<input name="account_id" pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" value="${esc(conversation.account_id)}" required></label>`
+      : `<label>QQ 账号<input name="account_id" inputmode="numeric" pattern="[0-9]{5,20}" maxlength="20" value="${esc(conversation.account_id)}" required></label>`;
+  const targetInput = `<label>${isBot ? (type === 'group' ? '机器人群聊 ID' : '企业微信成员 ID') : '接收目标'}<input name="conversation_id" ${isWeChat ? `pattern="${wechatTargetPattern}" maxlength="73"` : isBot ? 'pattern="[A-Za-z0-9_@.-]{1,128}" maxlength="128"' : 'pattern="[A-Za-z0-9_.-]{1,64}" maxlength="64"'} value="${esc(conversation.id)}" required></label>`;
+  const mediaInput = isBot
+    ? '<label data-media-file-label hidden>本机附件<input name="media_file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" disabled></label>'
+    : '';
+  const buttonLabel = autoSend ? '立即发送' : '加入待审批';
+  modal(isBot ? '准备企微机器人发送' : autoSend ? '个人微信自动发送'
+    : isWeChat ? '准备个人微信文本发送' : '准备 QQ 文本发送',
+  `<form id="send-compose-form" data-send-platform="${isBot ? 'wecom_bot' : isWeChat ? 'wechat' : 'qq'}" data-auto-send="${autoSend ? 'true' : 'false'}"><p class="muted small">${intro}${identityHint}</p>${accountInput}${targetInput}<p class="muted small" data-send-target-hint>${isBot || isWeChat ? '' : '可填本地会话 UID（u_&hellip;）或 QQ 号 / 群号；本机会先解析成号码再进入审批。'}</p><input type="hidden" name="conversation_type" value="${type}">${mediaInput}<label data-send-text-label>文本<textarea name="text" maxlength="4000" rows="5" ${isBot ? '' : 'required'}></textarea></label></form>`,
+  '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" type="submit" form="send-compose-form">' + icon(autoSend ? 'send' : 'clipboard-plus') + buttonLabel + '</button>');
   const form = document.querySelector('#send-compose-form');
   if (form) form.dataset.sendComposeRevision = String(sendComposeRevision);
 }
@@ -1818,6 +1913,8 @@ async function prepareSend(form) {
   const platform = form.dataset.sendPlatform || 'qq';
   const base = sendRouteBase(platform);
   const controller = new AbortController();
+  const submit = document.querySelector('button[form="send-compose-form"]');
+  if (submit) submit.disabled = true;
   sendComposeController = controller;
   try {
     let attachment;
@@ -1833,17 +1930,29 @@ async function prepareSend(form) {
       attachment = detail;
     }
     if (!isCurrent()) return;
-    const request = await api(base + '/prepare', null, {method: 'POST', signal: controller.signal, body: JSON.stringify({
+    const autoSend = platform === 'wechat' && form.dataset.autoSend === 'true';
+    const request = await api(base + (autoSend ? '/send-now' : '/prepare'), null, {method: 'POST', signal: controller.signal, body: JSON.stringify({
       account_id: values.account_id, conversation_type: values.conversation_type,
       conversation_id: values.conversation_id, text: values.text || '', attachment,
       request_id: crypto.randomUUID().replaceAll('-', '')
     })});
     if (!isCurrent()) return;
+    if (autoSend) {
+      closeModal();
+      toast(request.status === 'sent' ? '微信消息已自动发送' : `发送状态：${request.status}`, request.status !== 'sent');
+      if (state.view === 'settings') await loadView();
+      return;
+    }
     closeModal();state.sendReview = request;
     if (state.view === 'settings') state.pendingSends = [request, ...state.pendingSends.filter(item => item.request_id !== request.request_id)];
     reviewSend(request.request_id);
   } catch (error) {if (isCurrent() && error.name !== 'AbortError') toast(error.message, true);}
-  finally {if (sendComposeController === controller) sendComposeController = null;}
+  finally {
+    if (sendComposeController === controller) {
+      sendComposeController = null;
+      if (isCurrent() && submit) submit.disabled = false;
+    }
+  }
 }
 function showExport() {
   const title = state.view === 'chat' ? state.selected?.title : '搜索结果';
@@ -1973,8 +2082,7 @@ async function exportMoments(button) {
 }
 function showConfigure(id) {
   if (id === 'email') {
-    const config = state.sources.find(source => source.id === 'email')?.email_config || {};
-    modal('配置邮件', `<form id="configure-form" data-source="email"><div class="field"><label for="email-provider">邮箱类型</label><select id="email-provider" name="provider">${[['imap','通用 IMAP'],['gmail','Gmail'],['outlook','Outlook / Microsoft 365']].map(([value,label]) => `<option value="${value}" ${config.provider === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label for="email-host">IMAP 服务器</label><input id="email-host" name="host" value="${esc(config.host || '')}" placeholder="通用 IMAP 必填；Gmail / Outlook 留空使用默认服务器" autocomplete="off"></div><div class="field"><label for="email-port">TLS 端口</label><input id="email-port" name="port" type="number" min="1" max="65535" value="${esc(config.port || 993)}" required></div><div class="field"><label for="email-username">邮箱账号</label><input id="email-username" name="username" type="email" value="${esc(config.email || config.username || '')}" required autocomplete="off"></div><div class="field"><label for="email-auth">认证方式</label><select id="email-auth" name="auth"><option value="password" ${config.auth !== 'oauth2' ? 'selected' : ''}>应用密码 / 授权码</option><option value="oauth2" ${config.auth === 'oauth2' ? 'selected' : ''}>OAuth2 访问令牌</option></select></div><div class="field"><label for="email-password">应用密码 / 授权码</label><input id="email-password" name="password" type="password" autocomplete="off" placeholder="留空保留已保存凭据"><small>使用邮箱服务商提供的应用密码或 IMAP 授权码。</small></div><div class="field"><label for="email-token">OAuth2 访问令牌</label><input id="email-token" name="access_token" type="password" autocomplete="off" placeholder="留空保留已保存凭据"><small>令牌需已授予 IMAP 权限；当前不会自动刷新，过期后需重新填写。</small></div><div class="field"><label for="email-folder">邮件文件夹</label><input id="email-folder" name="folder" value="${esc(config.folder || 'INBOX')}" required autocomplete="off"></div><p class="muted small">凭据不会回显；仅同步读取邮件，不发送邮件或更改已读状态。</p></form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="save-config">' + icon('check') + '保存并同步</button>');
+    modal('添加邮箱', `<form id="configure-form" data-source="email"><div class="field"><label for="email-provider">邮箱类型</label><select id="email-provider" name="provider">${[['imap','通用 IMAP'],['gmail','Gmail'],['outlook','Outlook / Microsoft 365']].map(([value,label]) => `<option value="${value}">${label}</option>`).join('')}</select></div><div class="field"><label for="email-host">IMAP 服务器</label><input id="email-host" name="host" placeholder="通用 IMAP 必填；Gmail / Outlook 留空使用默认服务器" autocomplete="off"></div><div class="field"><label for="email-port">TLS 端口</label><input id="email-port" name="port" type="number" min="1" max="65535" value="993" required></div><div class="field"><label for="email-username">邮箱账号</label><input id="email-username" name="username" type="email" required autocomplete="off"></div><div class="field"><label for="email-auth">认证方式</label><select id="email-auth" name="auth"><option value="password">应用密码 / 授权码</option><option value="oauth2">OAuth2 访问令牌</option></select></div><div class="field"><label for="email-password">应用密码 / 授权码</label><input id="email-password" name="password" type="password" autocomplete="off"><small>凭据只保存在本机 Windows 用户加密存储中。</small></div><div class="field"><label for="email-token">OAuth2 访问令牌</label><input id="email-token" name="access_token" type="password" autocomplete="off"><small>令牌需已授予 IMAP 权限；当前不会自动刷新。</small></div><div class="field"><label for="email-folder">邮件文件夹</label><input id="email-folder" name="folder" value="INBOX" required autocomplete="off"></div><p class="muted small">可添加多个账号。仅同步读取邮件，不发送邮件或更改已读状态。</p></form>`, '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="save-config">' + icon('check') + '保存并同步</button>');
     return;
   }
   const directory = `<div class="field"><label for="data-directory">数据目录</label><input id="data-directory" name="data_dir" placeholder="留空保留配置或自动检测" autocomplete="off"><small>${id === 'wecom' ? '首次配置请填写本机绝对路径；已配置时留空保留当前值。' : '填写时使用本机绝对路径；留空保留已配置目录，尚未配置时自动检测。'}</small></div>`;
@@ -1992,6 +2100,18 @@ async function saveConfig(button) {
     await api('/api/source/' + form.dataset.source + '/configure', null, {method: 'POST', body: JSON.stringify(config)});
     closeModal();toast('本机配置已保存');await sync(form.dataset.source);
   } catch (e) {toast(e.message, true);button.disabled = false;}
+}
+async function removeEmailAccount(accountId) {
+  const account = state.sources.find(source => source.id === 'email')?.email_config?.accounts
+    ?.find(item => item.id === accountId);
+  if (!account || !window.confirm(`移除 ${account.email} 的本机邮件凭据和同步进度？已导入的邮件仍保留在索引中。`)) return;
+  try {
+    await api(`/api/source/email/accounts/${accountId}/remove`, null, {
+      method: 'POST', body: JSON.stringify({confirmation: 'REMOVE_EMAIL_ACCOUNT'})
+    });
+    toast('邮箱账号已移除');
+    await refreshSources();
+  } catch (error) {toast(error.message || '移除邮箱账号失败', true);}
 }
 async function discoverQQKey() {
   const message = '将只读扫描当前 Windows 用户运行中的 QQ 进程内存，最多 180 秒。请保持 QQ 已打开并登录。不会调试、注入或关闭 QQ；只有通过本地数据库校验的密钥会保存到本机配置，并立即开始同步本机 QQ 历史记录。密钥和聊天内容不会发送到网络服务。继续？';
@@ -2048,12 +2168,15 @@ async function resolveMedia(message, resourceIndex = null) {
       renderView();previewMedia(result.media_url, message.type, message.file_name, message.media_mime_type);return;
     }
     if (resourceIndex !== null) {
-      const resources = message.extra?.roaming_resources || message.extra?.attachments;
+      const resources = message.platform === 'qq'
+        ? qqResources(message.extra) : message.extra?.roaming_resources || message.extra?.attachments;
       const resource = message.media_entry?.resource_index === resourceIndex
         ? message.media_entry.resource : resources?.[resourceIndex];
       if (!resource) {toast('附件索引已变化，请刷新会话', true);return;}
+      resource.available = true;
       resource.media_url = result.media_url;
       resource.mime_type = result.mime_type || resource.mime_type;
+      resource.name = result.download_name || resource.name;
       if (message.media_entry) message.media_entry.resource = resource;
       renderView();
       const kind = normalizeMediaType(resource.type);
@@ -2068,6 +2191,52 @@ async function resolveMedia(message, resourceIndex = null) {
       result.download_name || message.file_name || (result.mime_type === 'application/x-wechat-wxgf' ? '微信图片.wxgf' : ''),
       result.mime_type);
   } catch (e) {toast(e.message, true);}
+}
+async function downloadAttachment(message, resourceIndex = null) {
+  const key = JSON.stringify([message.platform, message.account_id, message.id, resourceIndex ?? 0]);
+  if (attachmentDownloads.has(key)) {
+    toast('附件正在下载，请稍候');
+    return;
+  }
+  attachmentDownloads.add(key);
+  try {
+    const result = await api('/api/attachments/download', null, {
+      method: 'POST',
+      body: JSON.stringify({
+        platform: message.platform,
+        account_id: message.account_id,
+        message_id: message.id,
+        conversation_id: message.conversation_id,
+        resource_index: resourceIndex ?? 0
+      })
+    });
+    const mediaUrl = safeUrl(result.media_url);
+    if (result.available !== true || !mediaUrl) {
+      toast(result.message || '附件未能下载到中枢', true);
+      return;
+    }
+    if (resourceIndex !== null) {
+      const resources = message.platform === 'qq'
+        ? qqResources(message.extra) : message.extra?.roaming_resources || message.extra?.attachments;
+      const resource = message.media_entry?.resource_index === resourceIndex
+        ? message.media_entry.resource : resources?.[resourceIndex];
+      if (!resource) {toast('附件索引已变化，请刷新会话', true);return;}
+      resource.available = true;
+      resource.media_url = mediaUrl;
+      resource.name = result.download_name || resource.name;
+      if (message.media_entry) message.media_entry.resource = resource;
+    } else {
+      message.media_available = true;
+      message.media_url = mediaUrl;
+      message.file_name = result.download_name || message.file_name;
+    }
+    renderView();
+    previewMedia(mediaUrl, 'file', result.download_name || message.file_name);
+  } catch (error) {
+    toast(error.message || '附件下载失败', true);
+  } finally {
+    attachmentDownloads.delete(key);
+  }
 }
 async function saveSettings(patch) {
   try {state.settings = await api('/api/settings', null, {method: 'POST', body: JSON.stringify(patch)});if ('mcp_write_enabled' in patch) state.mcp = await api('/api/mcp');syncAccountLockPolling();syncNotificationStream();renderView();toast('设置已保存');}
@@ -2309,6 +2478,11 @@ document.addEventListener('click', async event => {
       'image', '视频封面', entry.resource?.media_poster_mime_type || entry.message.media_poster_mime_type);
     return;
   }
+  else if (action.startsWith('download-media:')) {
+    const entry = mediaEntries()[Number(action.slice('download-media:'.length))];
+    if (entry) await downloadAttachment(entry.message, entry.resourceIndex);
+    return;
+  }
   else if (action === 'qq-forward-read' || action.startsWith('qq-forward-resource:')) {
     const messageId = target.closest('.message')?.dataset.messageId;
     const message = state.messages.find(item => String(item.id) === String(messageId));
@@ -2388,14 +2562,18 @@ document.addEventListener('click', async event => {
   else if (action === 'download-export') await downloadExport(target);
   else if (action === 'close-modal') closeModal();
   else if (action.startsWith('configure:')) showConfigure(action.split(':')[1]);
+  else if (action.startsWith('remove-email-account:')) await removeEmailAccount(action.split(':')[1]);
   else if (action === 'save-config') await saveConfig(target);
   else if (action === 'discover-qq-key') await discoverQQKey();
   else if (action === 'qq-send-readiness') await checkQQSendReadiness();
   else if (action === 'wechat-send-readiness') await checkWeChatSendReadiness();
+  else if (action.startsWith('download-attachment:')) {const encoded = action.slice('download-attachment:'.length);const split = encoded.lastIndexOf(':');const resourceIndex = split < 0 ? null : Number(encoded.slice(split + 1));const id = decodeURIComponent(split < 0 ? encoded : encoded.slice(0, split));const message = state.messages.find(m => m.id === id);if (message) await downloadAttachment(message, Number.isInteger(resourceIndex) ? resourceIndex : null);}
   else if (action.startsWith('resolve-media:')) {const encoded = action.slice('resolve-media:'.length);const split = encoded.lastIndexOf(':');const resourceIndex = split < 0 ? null : Number(encoded.slice(split + 1));const id = decodeURIComponent(split < 0 ? encoded : encoded.slice(0, split));const message = state.messages.find(m => m.id === id);if (message) await resolveMedia(message, Number.isInteger(resourceIndex) ? resourceIndex : null);}
   else if (action === 'page-prev' && state.page > 0) {state.page--;await loadView();}
   else if (action === 'page-next' && (usesCursorPaging() ? !!state.pageCursors[state.page + 1] : (state.page + 1) * 60 < state.total)) {state.page++;await loadView();}
   else if (action === 'toggle-sync') await saveSettings({auto_sync: state.settings.auto_sync === false});
+  else if (action === 'toggle-auto-index-startup') await saveSettings({auto_index_at_login: state.settings.auto_index_status?.installed !== true});
+  else if (action === 'toggle-auto-download-attachments') await saveSettings({auto_download_attachments: state.settings.auto_download_attachments !== true});
   else if (action === 'account-lock-now') await lockAccountNow();
   else if (action === 'remove-wecom-bot-credentials') await removeWeComBotCredentials();
   else if (action === 'toggle-mcp-writes') await saveSettings({mcp_write_enabled: state.settings.mcp_write_enabled !== true});

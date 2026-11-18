@@ -36,9 +36,11 @@ def _configure_runtime() -> None:
 
 def main() -> None:
     _configure_runtime()
-    open_browser = "--no-browser" not in sys.argv
-    if not open_browser:
-        sys.argv.remove("--no-browser")
+    background = "--background" in sys.argv
+    open_browser = "--no-browser" not in sys.argv and not background
+    for flag in ("--no-browser", "--background"):
+        if flag in sys.argv:
+            sys.argv.remove(flag)
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--storage", default=os.environ.get(
         "LMH_STORAGE_DIR", str(Path(__file__).resolve().parents[1] / ".local")))

@@ -50,7 +50,7 @@ def media_message_predicate(alias="m"):
     return f"""(({alias}.type IN ('image','video','voice','file') AND NOT (
         {alias}.platform='wechat' AND COALESCE({alias}.raw_type,'') IN ('47','11000')
     )) OR (
-        {alias}.platform='wecom' AND CASE WHEN json_valid({alias}.extra) THEN CASE
+        {alias}.platform IN ('wecom','email') AND CASE WHEN json_valid({alias}.extra) THEN CASE
             WHEN json_type({alias}.extra,'$.attachments')='array'
             THEN json_array_length({alias}.extra,'$.attachments') ELSE 0 END ELSE 0 END > 0
     ) OR (
@@ -968,6 +968,32 @@ class ChatStore:
             ).fetchone()
         return self._attach_sender_avatars([self._row_to_message(row)])[0] if row else None
 
+    def set_attachment_available(self, platform, account_id, message_id,
+                                 resource_index, available):
+        """Refresh one cached-attachment flag without replacing the whole message."""
+        if type(resource_index) is not int or resource_index < 0 or type(available) is not bool:
+            raise ValueError("attachment availability update is invalid")
+        with self._lock:
+            conn = self._require_connection()
+            row = conn.execute(
+                "SELECT extra FROM messages WHERE platform=? AND account_id=? AND id=?",
+                (_sid(platform), _sid(account_id), _sid(message_id)),
+            ).fetchone()
+            if row is None:
+                return False
+            extra = _load_extra(row["extra"])
+            attachments = extra.get("attachments")
+            if (not isinstance(attachments, list) or resource_index >= len(attachments)
+                    or not isinstance(attachments[resource_index], dict)):
+                return False
+            attachments[resource_index]["available"] = available
+            conn.execute(
+                "UPDATE messages SET extra=? WHERE platform=? AND account_id=? AND id=?",
+                (json.dumps(extra, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+                 _sid(platform), _sid(account_id), _sid(message_id)),
+            )
+            return True
+
     def quoted_message_target(self, platform, account_id, conversation_id,
                               referencing_message_id, source_id):
         source_id = str(source_id or '')
@@ -1081,7 +1107,7 @@ class ChatStore:
         limit = min(max(int(limit), 1), 100)
         with self._lock:
             rows = self._require_connection().execute("""
-                SELECT m.rowid AS event_id, m.platform, m.account_id,
+                SELECT m.rowid AS event_id, m.platform, m.account_id, m.id AS message_id,
                        m.conversation_id, c.title AS conversation_title,
                        c.kind AS conversation_kind, m.sender_name, m.timestamp,
                        m.type, m.is_self
@@ -1696,9 +1722,9 @@ class ChatStore:
             return self._unified_media_attachment_page(platform, media_type, query, limit, offset,
                                                        start, end, source, account_id, conversation_id)
         placeholders = ",".join("?" for _ in MEDIA_TYPES)
-        where = [f"((m.type IN ({placeholders}) OR (m.platform='wechat' AND m.raw_type IN ('47','11000'))) OR (m.platform IN ('wecom', 'qq') AND "
+        where = [f"((m.type IN ({placeholders}) OR (m.platform='wechat' AND m.raw_type IN ('47','11000'))) OR (m.platform IN ('wecom', 'email', 'qq') AND "
                  "CASE WHEN json_valid(m.extra) THEN CASE "
-                 "WHEN m.platform='wecom' AND json_type(m.extra, '$.attachments')='array' "
+                  "WHEN m.platform IN ('wecom', 'email') AND json_type(m.extra, '$.attachments')='array' "
                  "THEN json_array_length(m.extra, '$.attachments') "
                  "WHEN m.platform='qq' AND json_type(m.extra, '$.roaming_resources')='array' "
                  "THEN json_array_length(m.extra, '$.roaming_resources') "
@@ -1719,7 +1745,7 @@ class ChatStore:
         self._append_time_bounds(where, params, start, end, alias="m")
         where_sql = " AND ".join(where)
         attachment_array = """CASE WHEN json_valid(c.extra) THEN CASE
-            WHEN c.platform='wecom' AND json_type(c.extra, '$.attachments')='array'
+            WHEN c.platform IN ('wecom', 'email') AND json_type(c.extra, '$.attachments')='array'
                 THEN json_extract(c.extra, '$.attachments')
             WHEN c.platform='qq' AND json_type(c.extra, '$.roaming_resources')='array'
                 THEN json_extract(c.extra, '$.roaming_resources')
@@ -1812,7 +1838,7 @@ class ChatStore:
         branches, params = [], []
         if include_chat:
             placeholders = ",".join("?" for _ in MEDIA_TYPES)
-            where = [f"((m.type IN ({placeholders}) OR (m.platform='wechat' AND m.raw_type IN ('47','11000'))) OR (m.platform IN ('wecom','qq') AND CASE WHEN json_valid(m.extra) THEN CASE WHEN m.platform='wecom' AND json_type(m.extra,'$.attachments')='array' THEN json_array_length(m.extra,'$.attachments') WHEN m.platform='qq' AND json_type(m.extra,'$.roaming_resources')='array' THEN json_array_length(m.extra,'$.roaming_resources') WHEN m.platform='qq' AND json_type(m.extra,'$.media')='array' THEN json_array_length(m.extra,'$.media') ELSE 0 END ELSE 0 END > 0))"]
+            where = [f"((m.type IN ({placeholders}) OR (m.platform='wechat' AND m.raw_type IN ('47','11000'))) OR (m.platform IN ('wecom','email','qq') AND CASE WHEN json_valid(m.extra) THEN CASE WHEN m.platform IN ('wecom','email') AND json_type(m.extra,'$.attachments')='array' THEN json_array_length(m.extra,'$.attachments') WHEN m.platform='qq' AND json_type(m.extra,'$.roaming_resources')='array' THEN json_array_length(m.extra,'$.roaming_resources') WHEN m.platform='qq' AND json_type(m.extra,'$.media')='array' THEN json_array_length(m.extra,'$.media') ELSE 0 END ELSE 0 END > 0))"]
             params.extend(MEDIA_TYPES)
             scope, scope_params = self._scope_clause(platform, column="m.platform")
             if scope:
@@ -1827,7 +1853,7 @@ class ChatStore:
             self._append_time_bounds(where, params, start, end, alias="m")
             where_sql = " AND ".join(where)
             attachment_array = """CASE WHEN json_valid(m.extra) THEN CASE
-                WHEN m.platform='wecom' AND json_type(m.extra,'$.attachments')='array' THEN json_extract(m.extra,'$.attachments')
+                WHEN m.platform IN ('wecom','email') AND json_type(m.extra,'$.attachments')='array' THEN json_extract(m.extra,'$.attachments')
                 WHEN m.platform='qq' AND json_type(m.extra,'$.roaming_resources')='array' THEN json_extract(m.extra,'$.roaming_resources')
                 WHEN m.platform='qq' AND json_type(m.extra,'$.media')='array' THEN json_extract(m.extra,'$.media') ELSE '[]' END ELSE '[]' END"""
             raw = ("lower(COALESCE(NULLIF(json_extract(j.value,'$.type'),''), "
