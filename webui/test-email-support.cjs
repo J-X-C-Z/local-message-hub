@@ -78,4 +78,3 @@ vm.runInNewContext('renderView = () => {};toast = () => {};sync = async () => {}
   assert.equal(state.importPreview, null, 'a response for previous import selections must stay invalid');
   console.log('PASS email source config, secret payload isolation, archive detection, and stale import preview');
 })().catch(error => {console.error(error);process.exitCode = 1;});
-
