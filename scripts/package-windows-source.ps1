@@ -81,7 +81,7 @@ function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
             throw 'Packaged WebUI root did not return the expected page.'
         }
         $sources = Invoke-RestMethod -Uri "$url/api/sources" -TimeoutSec 5
-        if (@($sources.sources).Count -ne 3) { throw 'Expected the three platform source entries.' }
+        if (@($sources.sources).Count -ne 4) { throw 'Expected the four platform source entries.' }
         $settings = Invoke-RestMethod -Uri "$url/api/settings" -TimeoutSec 5
         if ([System.IO.Path]::GetFullPath($settings.storage_dir) -ne [System.IO.Path]::GetFullPath($storage)) {
             throw 'Hub did not use the isolated temporary storage directory.'
@@ -94,7 +94,7 @@ function Invoke-PackageSmokeTest([string]$PackageRoot, [string]$PythonCommand) {
         if (-not $mcp.available -or $mcp.mode -ne 'read-only') {
             throw 'MCP endpoint did not report the expected available, read-only configuration.'
         }
-        Write-Output "PASS: extracted package served the WebUI and three source entries at $url"
+        Write-Output "PASS: extracted package served the WebUI and four source entries at $url"
         Write-Output 'PASS: isolated storage and read-only MCP endpoint responded'
     } finally {
         if ($process -and -not $process.HasExited) {

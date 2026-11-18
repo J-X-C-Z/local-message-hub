@@ -124,7 +124,7 @@ function Invoke-PackageSmokeTest([string]$PackageRoot) {
         $icons = Invoke-WebRequest -Uri "$url/vendor/lucide.js" -UseBasicParsing -TimeoutSec 5
         if ($icons.StatusCode -ne 200 -or $icons.Content.Length -lt 1000) { throw 'Packaged Lucide asset was unavailable.' }
         $sources = Invoke-RestMethod -Uri "$url/api/sources" -TimeoutSec 5
-        if (@($sources.sources).Count -ne 3) { throw 'Expected three platform entries in the portable package.' }
+        if (@($sources.sources).Count -ne 4) { throw 'Expected four platform entries in the portable package.' }
         $settings = Invoke-RestMethod -Uri "$url/api/settings" -TimeoutSec 5
         if ([System.IO.Path]::GetFullPath($settings.storage_dir) -ne [System.IO.Path]::GetFullPath($storage)) {
             throw 'Portable executable did not use isolated temporary storage.'
@@ -136,7 +136,7 @@ function Invoke-PackageSmokeTest([string]$PackageRoot) {
         $mcp = Invoke-RestMethod -Uri "$url/api/mcp" -TimeoutSec 5
         if (-not $mcp.available -or $mcp.mode -ne 'read-only') { throw 'Read-only MCP endpoint was unavailable.' }
         Write-Output 'PASS: bundled executable served the UI and Lucide without installed Python or Node.'
-        Write-Output 'PASS: three source entries, isolated storage, and read-only MCP endpoint.'
+        Write-Output 'PASS: four source entries, isolated storage, and read-only MCP endpoint.'
     } finally {
         if ($process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -301,6 +301,7 @@ try {
     }
     foreach ($file in @('integrations/qq/provider.py', 'integrations/qq/sender.py',
                         'integrations/qq/local_provider.py', 'integrations/qq/local_wal.py',
+                        'integrations/qq/downloads.py',
                         'integrations/qq/key_reader.py', 'integrations/qq/key_store.py',
                         'integrations/qq/send_target.py', 'integrations/qq/README.md',
                         'scripts/windows_portable.py', 'scripts/windows_mcp.py', 'start_hub.py')) {
