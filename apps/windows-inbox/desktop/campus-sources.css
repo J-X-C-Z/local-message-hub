@@ -1,0 +1,25 @@
+#sources h2,.entry-heading h2{font-size:16px;margin:0 0 4px;color:#335071}
+#source-form{margin:10px 0 6px;flex-wrap:wrap}
+#source-form input{min-width:10rem}
+#source-feedback:empty,#detail-feedback:empty{display:none}
+#source-feedback,#detail-feedback{min-height:1em;color:#3f6695}
+#source-grid{margin-top:14px}
+.source-actions,.account-list{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.source .source-actions{margin-top:6px}
+.source .source-actions button,.account-list button{padding:2px 6px;background:#ecf3fc;color:#3f6695;font-size:11px;border-radius:5px;border:0}
+.account-list .tag{padding:4px 8px}
+.account-list button{margin-left:5px}
+#entry-section,.seit-hub{margin:0 30px 20px;padding:14px 18px;background:#fff;border:1px solid #dfe7f1;border-radius:11px}
+.seit-hub{border-left:3px solid #2467ce}
+.seit-hub button[aria-pressed="true"]{background:#e1ecfc;color:#1b5db4}
+.entry-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.entry-heading p,#entry-section details{margin:0;color:#667993;font-size:12px}
+#entry-section details{margin-top:8px}
+#entry-section summary{cursor:pointer;color:#3f6695}
+#entry-section details p{margin:6px 0 0}
+.entry-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:10px;margin-top:12px}
+.entry-card{background:#f7f9fd;border:1px solid #e7edf6;border-radius:8px;padding:11px}
+.entry-card h3{margin:5px 0 1px;font-size:14px}
+.entry-card p{margin:0 0 7px;color:#657992;font-size:12px}
+.entry-card button{font-size:11px;padding:4px 7px}
+@media(max-width:1100px){#entry-section,.seit-hub{margin:0 20px 16px}.filters select{max-width:160px}}

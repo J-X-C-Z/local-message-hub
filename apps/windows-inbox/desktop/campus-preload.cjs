@@ -1,0 +1,2 @@
+const {contextBridge,ipcRenderer}=require('electron');
+contextBridge.exposeInMainWorld('campus',Object.freeze(Object.fromEntries(['snapshot','refresh','read','detail','open','copy','setSource','addSource','removeSource'].map(action=>[action,(...args)=>ipcRenderer.invoke('campus:'+action,...args)]).concat([['onUpdate',callback=>{if(typeof callback==='function')ipcRenderer.on('campus:updated',()=>callback());}]]))));

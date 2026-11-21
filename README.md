@@ -16,6 +16,8 @@ MCP 可用 `wait_for_new_messages` 从持久事件游标等待新消息；首次
 
 需要不依赖本机 Python/Node 的便携版时，按 [Windows 打包说明](docs/windows-package.md) 构建；发布包包含独立 MCP 启动器和经校验的 NapCat/QCE 运行时。
 
+也可单独构建 [Rust 版 Windows 收件台](apps/windows-inbox/README.md)。它使用 WebView2，提供独立的消息、邮件、校园资讯和 AIHot 阅读窗口，不替换 `START.cmd`，也不共享消息中枢的数据库。
+
 发送能力（QQ、企业微信机器人、个人微信）默认全部关闭，开启后每条消息都要在本机界面逐条审批才会投递；MCP 只能创建待审批请求和查状态，不能审批或发送。
 
 微信和企业微信使用仓库内置的本地读取代码；QQ 随工具提供 NapCat/QCE，复用 QQ Chat Exporter 的历史记录读取链路。QQ 需要本人完成本机登录，服务启动与账号在线是两个不同状态。未连接的数据源不会填充演示记录。

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+ <title>AI 热点 · 企微收件台</title>
+ <link rel="stylesheet" href="aihot.css">
+ <script src="aihot-ui.js" defer></script>
+</head>
+<body>
+ <header id="toolbar">
+  <div class="identity"><strong>AI 热点</strong><span>应用内阅读</span></div>
+  <nav aria-label="阅读导航">
+   <button id="back" data-command="back" title="Alt + ←" disabled>← 返回</button>
+   <button id="forward" data-command="forward" title="Alt + →" disabled>前进 →</button>
+   <button data-command="home">AIHot 首页</button>
+   <button data-command="reload" title="F5">刷新</button>
+  </nav>
+  <div class="location" aria-live="polite"><strong id="host">aihot.news</strong><span id="status">正在加载…</span></div>
+  <button class="close" data-command="close">返回收件台</button>
+ </header>
+ <main id="waiting" role="status">
+  <section><h1>正在打开 AIHot</h1><p>新闻会在这里显示，不会跳出收件台。</p></section>
+ </main>
+ <main id="error" hidden>
+  <section aria-labelledby="error-title">
+   <h1 id="error-title">暂时打不开该网页</h1>
+   <p id="error-detail" role="status"></p>
+   <button class="retry" data-command="reload">重试</button>
+   <button data-command="home">回 AIHot 首页</button>
+  </section>
+ </main>
+</body>
+</html>
