@@ -1,0 +1,1 @@
+WeChat emoji images copyright Tencent. Resource collection: xxk8/wechat-emojis, commit 7546b8c294095c9d18adb72cbde96abdaf4ba980. The upstream MIT code license excludes these images; this personal local inbox preserves the upstream image notice.

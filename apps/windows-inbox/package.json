@@ -1,0 +1,20 @@
+{
+  "name": "wecom-inbox-desktop",
+  "productName": "企微收件台",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows 企业微信只接收消息工作台",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "pretest": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "package": "node scripts/package-rust.mjs"
+  },
+  "dependencies": {
+    "fast-xml-parser": "5.12.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

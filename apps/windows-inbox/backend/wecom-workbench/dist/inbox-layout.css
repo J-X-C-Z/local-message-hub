@@ -1,0 +1,65 @@
+:root{color:#1c2b40;--blue:#245cbb;--muted:#5a6c83;--border:#e1e7ef;--bg:#f5f8fd;--inbox-tint:#e9f1ff;--inbox-rail:#f5f7fc}
+body{background:#e7edf5}
+.rail{background:var(--inbox-rail);border-color:var(--border)}
+.rail .brand{color:var(--blue)}
+.nav-button{color:var(--muted)}
+.nav-button.active,.nav-button:hover{color:var(--blue);background:var(--inbox-tint)}
+.topbar{height:53px;gap:10px;padding-inline:16px;background:#fff}
+.topbar .workspace-title{display:none}
+.topbar .platform-bar{display:flex;flex:0 0 auto;gap:3px;padding:3px;background:var(--inbox-rail);border:1px solid var(--border);border-radius:8px}
+.topbar .platform-bar button{flex:none;padding:5px 12px;background:transparent;border:0;border-radius:5px;font-size:13px;color:var(--muted);white-space:nowrap}
+.topbar .platform-bar button:is(.active,:hover){color:var(--blue);background:var(--inbox-tint);box-shadow:none}
+.topbar-actions{margin-left:auto;gap:8px}
+.sync-label{color:var(--muted)}
+.conversation-panel{min-width:0}
+.inbox-heading{padding:15px 14px 11px;gap:8px}
+.inbox-heading h1{font-size:22px;margin-bottom:4px}
+.inbox-heading span:not([data-icon]),.inbox-footer{color:var(--muted)}
+.conversation-panel>.search-box{margin-inline:14px;background:var(--bg);border-color:var(--border)}
+.search-box input,.conv-preview{font-size:11px;color:var(--muted)}
+.conversation-tabs{height:40px;padding:0 14px;gap:15px}
+.conversation-tabs button{padding-bottom:0;color:var(--muted)}
+.conversation-tabs button.active,.conversation-tabs button.active span{color:var(--blue)}
+.conversation-tabs button.active::after,.unread-badge{background:var(--blue)}
+.conversation-list{padding-top:5px}
+.conversation{min-height:58px;padding:8px 9px;gap:9px;border-radius:8px;border-left:2px solid transparent;margin:0}
+.conversation .avatar{width:36px;height:36px;border-radius:9px}
+.conversation.selected{background:var(--inbox-tint);border-left-color:var(--blue)}
+.conversation.selected .conv-title{color:var(--blue)}
+.conv-title{color:#1c2b40;font-size:13px;font-weight:600}
+.conv-time,.conversation.selected .conv-preview{color:var(--muted)}
+.conv-top{margin-bottom:3px}
+.inbox-footer{height:32px;padding-inline:14px}
+.chat-panel{background:var(--bg)}
+.chat-header{height:65px;padding-inline:18px;border-bottom:1px solid var(--border)}
+.chat-heading p{color:var(--muted);margin-top:4px}
+.message-scroll{padding:17px max(17px,calc((100% - 720px) / 2))}
+.message{margin-bottom:14px}
+.message-body{max-width:min(calc(100% - 43px),670px)}
+.message-meta{margin-bottom:5px;color:var(--muted)}
+.message-meta time{color:var(--muted)}
+.bubble{padding:8px 12px;border-color:var(--border);border-radius:9px;color:#1c2b40;line-height:1.7}
+.file-card{min-width:min(235px,100%);max-width:100%;overflow-wrap:anywhere}
+.conversation-resizer{display:none}
+@media(min-width:591px){
+  .content-grid,.content-grid.no-details{grid-template-columns:min(var(--conversation-width,348px),max(220px,calc(100% - 321px))) 1px minmax(0,1fr);grid-template-rows:minmax(0,1fr);grid-template-areas:"conversations divider chat"}
+  .conversation-panel{grid-area:conversations;border-right:0}
+  .chat-panel{grid-area:chat}
+  .conversation-resizer{grid-area:divider;display:block;position:relative;z-index:2;width:11px;margin-inline-start:-5px;cursor:col-resize;touch-action:none;user-select:none;outline:none}
+  .conversation-resizer::before,.conversation-resizer::after{content:"";position:absolute;inset-block:0;left:50%;width:1px;background:var(--border);transform:translateX(-50%);pointer-events:none}
+  .conversation-resizer::after{inset-block:calc(50% - 15px);width:3px;border-radius:2px;background:#abbed8}
+  .conversation-resizer:is(:hover,:focus-visible,.is-dragging)::before{width:3px;background:var(--blue)}
+  .conversation-resizer:is(:hover,:focus-visible,.is-dragging)::after{width:5px;background:var(--blue)}
+  .content-grid.is-resizing,.content-grid.is-resizing *{cursor:col-resize!important;user-select:none!important}
+}
+@media(max-width:710px){
+  .topbar{padding-inline:10px}
+  .topbar .platform-bar button{padding-inline:7px;font-size:12px}
+  .topbar .sync-label{display:none}
+}
+@media(max-width:590px){
+  .topbar-actions{gap:3px;min-width:0}
+  .chat-header{padding-inline:11px}
+  .message-scroll{padding-inline:12px}
+  .message-body{max-width:calc(100% - 40px)}
+}

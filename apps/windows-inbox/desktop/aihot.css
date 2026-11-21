@@ -1,0 +1,23 @@
+:root{font:14px system-ui,"Microsoft YaHei",sans-serif;color:#1e2b41;background:#f5f7fb;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0}
+header{position:relative;height:62px;display:flex;align-items:center;gap:16px;padding:0 16px;background:#fff;border-bottom:1px solid #dce5f0;white-space:nowrap}
+header.loading::after{content:"";position:absolute;bottom:0;left:0;height:2px;width:30%;background:#326be3;animation:loading 1.35s ease-in-out infinite alternate}
+@keyframes loading{from{left:0}to{left:70%}}
+@media(prefers-reduced-motion:reduce){header.loading::after{animation:none;width:100%}}
+.identity,.location{display:flex;min-width:0;flex-direction:column;gap:2px}
+.identity{flex:none}
+.identity strong{font-size:16px}
+.identity span,.location span{color:#536582;font-size:11px}
+.location{flex:1}
+.location strong,.location span{overflow:hidden;text-overflow:ellipsis}
+nav{display:flex;gap:5px}
+button{padding:7px 10px;background:#f4f7fb;color:#23344f;border:1px solid #d9e4f1;border-radius:7px;font:inherit;cursor:pointer}
+button:hover:enabled{background:#e8f0fc;color:#174eaf}
+button:focus-visible{outline:2px solid #326be3;outline-offset:2px}
+button:disabled{opacity:.48;cursor:default}
+.close{flex:none}
+main{margin:clamp(40px,12vh,110px) auto;width:min(484px,calc(100vw - 48px));padding:30px;background:white;border:1px solid #dce5f0;border-radius:14px}
+h1{margin:0;font-size:23px}
+main p{margin:12px 0 20px;color:#536582;line-height:1.7}
+.retry{background:#265ac3;color:#fff;border-color:#265ac3}

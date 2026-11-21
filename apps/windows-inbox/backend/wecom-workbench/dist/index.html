@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ebf0f7">
+  <meta name="description" content="微信、企业微信和邮箱，集中接收与阅读。">
+  <title>收件台</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./inbox-layout.css">
+  <script src="./app.js" type="module"></script>
+  <script src="./pane-resizer.js" type="module"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <nav class="rail" aria-label="主导航">
+      <a class="brand" href="#" aria-label="收件台首页"><svg viewBox="0 0 32 32" fill="none"><path d="M7 10.5h18v12H7z" fill="currentColor" opacity=".28"/><path d="m5 10 11-5 11 5-11 5L5 10Z" fill="currentColor"/><path d="M7 15v9l9 4 9-4v-9l-9 4-9-4Z" fill="currentColor"/></svg></a>
+      <div class="workspace-avatar" title="星河科技 · 演示企业">星<span></span></div>
+      <div class="rail-nav">
+        <button class="nav-button active" data-view="messages" aria-label="消息" title="消息"><span data-icon="message"></span><span class="rail-label">消息</span><i class="nav-dot"></i></button>
+        <button class="nav-button" data-view="contacts" aria-label="通讯录" title="通讯录"><span data-icon="contacts"></span><span class="rail-label">通讯录</span></button>
+        <button class="nav-button" data-view="moments" aria-label="朋友圈" title="朋友圈" hidden><span data-icon="image"></span><span class="rail-label">朋友圈</span></button>
+        <button class="nav-button" data-view="overview" aria-label="工作台" title="工作台"><span data-icon="grid"></span><span class="rail-label">工作台</span></button>
+      </div>
+      <div class="rail-bottom">
+        <button class="nav-button" id="connection-button" aria-label="数据连接" title="数据连接"><span data-icon="link"></span><span class="rail-label">连接</span></button>
+        <button class="self-avatar" id="profile-button" aria-label="查看当前工作区">我</button>
+      </div>
+    </nav>
+
+    <div class="main-app">
+      <header class="topbar">
+        <div class="workspace-title"><span id="workspace-name">微信</span><span class="topbar-title">收件台</span></div>
+        <div class="topbar-actions"><span class="sync-label"><i></i><span id="sync-label">正在连接</span></span><button class="icon-button" id="refresh-button" title="刷新消息" aria-label="刷新消息"><span data-icon="refresh"></span></button><button class="source-button" id="source-button"><span data-icon="database"></span><span id="source-label">数据源</span></button></div>
+      </header>
+
+      <div class="content-grid no-details" id="messages-view">
+        <aside class="conversation-panel" id="conversation-panel">
+          <div class="inbox-heading"><div><h1>消息</h1><span id="conversation-total">正在读取会话</span></div><button class="icon-button soft" id="mark-all-button" title="全部标为已读" aria-label="全部标为已读"><span data-icon="check-double"></span></button></div>
+          <label class="search-box"><span data-icon="search"></span><input id="search-input" placeholder="搜索联系人或消息" autocomplete="off"><kbd>/</kbd></label>
+          <div class="conversation-tabs" role="tablist" aria-label="会话筛选"><button class="active" role="tab" aria-selected="true" data-filter="all">全部<span id="all-count">0</span></button><button role="tab" aria-selected="false" data-filter="unread">未读<span id="unread-count">0</span></button><button role="tab" aria-selected="false" data-filter="pinned">置顶</button></div>
+          <div class="conversation-list" id="conversation-list" aria-label="会话列表"></div>
+          <div class="inbox-footer"><span data-icon="shield"></span><span id="inbox-footer-text">演示工作区 · 内容仅供预览</span></div>
+        </aside>
+
+        <div id="conversation-resizer" class="conversation-resizer" role="separator" aria-label="调整会话列表宽度" aria-orientation="vertical" aria-controls="conversation-panel" tabindex="0" title="左右拖动调整宽度，双击恢复默认"></div>
+        <main class="chat-panel" id="chat-panel">
+          <header class="chat-header"><button class="icon-button mobile-back" id="back-button" aria-label="返回会话列表"><span data-icon="chevron-left"></span></button><div class="avatar" id="chat-avatar"></div><div class="chat-heading"><h2 id="chat-title"></h2><p id="chat-subtitle"></p></div><div class="chat-actions"><button class="icon-button" id="pin-button" aria-label="置顶此会话" title="置顶此会话"><span data-icon="pin"></span></button><button class="icon-button" id="details-button" aria-label="显示或隐藏会话详情" title="会话详情"><span data-icon="panel"></span></button></div></header>
+          <div class="chat-notice"><span data-icon="info"></span><span id="chat-notice-text">只读演示 · 样例内容</span></div>
+          <div class="message-scroll" id="message-scroll" aria-live="polite" aria-label="会话消息"></div>
+          <footer class="receive-footer"><span data-icon="shield"></span><span id="receive-status">只接收消息 · 页面不提供发送功能</span></footer>
+        </main>
+
+        <aside class="details-panel" id="details-panel">
+          <div class="details-heading"><h3>会话详情</h3><span data-icon="info"></span></div>
+          <div class="profile-card"><div class="avatar profile-avatar" id="detail-avatar"></div><h3 id="detail-name"></h3><span class="profile-tag" id="detail-tag"></span><p id="detail-description"></p></div>
+          <div class="detail-section"><h4>会话信息</h4><dl id="detail-info"></dl></div>
+          <div class="detail-section"><h4><span>消息概览</span><span class="small-icon" data-icon="chart"></span></h4><div class="stat-cards"><div><strong id="stat-total">0</strong><span>消息总数</span></div><div><strong id="stat-today">0</strong><span>今日消息</span></div></div></div>
+          <div class="detail-section"><h4>快捷操作</h4><button class="detail-action" id="export-button"><span data-icon="download"></span>导出当前会话<span data-icon="chevron-right"></span></button><button class="detail-action" id="unread-button"><span data-icon="mail"></span>标记为未读<span data-icon="chevron-right"></span></button></div>
+          <div class="integration-card"><div class="integration-icon"><span data-icon="link"></span></div><strong>连接企业微信</strong><p>接入应用回调，在这里查看<br>真实收到的消息与事件。</p><button id="connect-card-button">查看接入方式<span data-icon="arrow-right"></span></button></div>
+          <div class="details-footnote">企微消息工作台 <span>v1.0</span></div>
+        </aside>
+      </div>
+
+      <main class="alternate-view" id="contacts-view" hidden><div class="page-heading"><div><span class="eyebrow">DIRECTORY</span><h1>通讯录</h1><p>从当前消息中的发送人开始，快速找到一段对话。</p></div><label class="search-box"><span data-icon="search"></span><input id="contact-search" placeholder="搜索联系人"></label></div><div class="contact-cards" id="contact-cards"></div></main>
+      <main class="alternate-view moments-view" id="moments-view" hidden><div class="page-heading"><div><span class="eyebrow">WECHAT · READ ONLY</span><h1>朋友圈</h1><p>查看当前微信账号已缓存的动态。</p></div><button class="source-button" id="moments-refresh">刷新</button></div><p class="moments-status" id="moments-status" role="status"></p><div id="moments-feed" class="moments-feed"></div><button class="source-button" id="moments-more" hidden>加载更多</button></main>
+      <main class="alternate-view" id="overview-view" hidden><div class="page-heading"><div><span class="eyebrow">WORKSPACE</span><h1>工作台</h1><p>消息、连接与协作动态，一目了然。</p></div><button class="source-button" id="overview-source-button"><span data-icon="link"></span>管理数据连接</button></div><div class="overview-welcome"><div><span class="eyebrow">KEEP YOUR TEAM IN SYNC</span><h2>每一条消息，都有着落。</h2><p>查看团队动态，让信息在同一个工作区流动。</p><button class="send-button" id="overview-messages-button">进入消息<span data-icon="arrow-right"></span></button></div><div class="overview-art" aria-hidden="true"><div class="art-bubble">协作，从沟通开始。<i></i></div><div class="art-bubble secondary">收到，马上跟进 ✓</div><div class="art-logo">企</div></div></div><div class="overview-stats" id="overview-stats"></div><div class="overview-bottom"><section><h3>最近会话</h3><div id="recent-conversations"></div></section><section class="connection-overview"><h3>数据连接</h3><div class="connection-status"><span class="status-orb"></span><div><strong id="overview-connection-title">演示工作区</strong><p id="overview-connection-description">使用示例消息预览工作台</p></div></div><p>接入范围：自建应用收到的消息与事件。普通员工私聊及已有群历史需要另行接入会话内容存档。</p><button class="text-button" id="overview-connect-button">查看连接配置 →</button></section></div></main>
+    </div>
+  </div>
+
+  <dialog id="connection-dialog"><form method="dialog" class="dialog-head"><div><span class="eyebrow">DATA CONNECTION</span><h2>连接你的消息</h2></div><button class="icon-button" aria-label="关闭"><span data-icon="close"></span></button></form><div class="dialog-content"><div class="connection-option"><div class="connection-option-icon blue"><span data-icon="grid"></span></div><div><strong>演示工作区</strong><p>浏览只读样例会话，体验搜索和消息展示。</p></div><button class="small-button" id="demo-mode-button">使用演示</button></div><div class="connection-option"><div class="connection-option-icon green"><span data-icon="link"></span></div><div><strong>企业微信应用回调</strong><p id="live-option-text">本地版可直接读取 MCP 的消息数据库。</p></div><button class="small-button" id="live-mode-button">连接</button></div><div class="setup-guide"><strong>真实消息接入 · 3 步完成</strong><ol><li>在已有 MCP 服务中配置企业微信回调，启动回调接收服务。</li><li>本机启动工作台：<code>node server.mjs</code>，通过环境变量 <code>WECOM_DB_PATH</code> 指定同一个消息数据库。</li><li>打开终端显示的本地地址，选择“企业微信应用回调”。工作台通过长连接接收新消息。</li></ol><p>线上页面不直接访问你的电脑或企业凭据。平台只接收和展示消息，所有模式均不提供发送功能。</p></div><div class="dialog-foot"><span data-icon="shield"></span>Secret 与 Token 始终保留在企业微信 MCP 服务端。</div></div></dialog>
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-dialog-title"><form method="dialog" class="dialog-head"><h2 id="image-dialog-title">图片预览</h2><button type="submit" class="small-button" autofocus>关闭</button></form><div class="image-stage"><p id="image-preview-status" role="status"></p><img id="large-chat-image" alt="聊天图片" hidden></div></dialog>
+  <dialog id="record-dialog" class="record-dialog" aria-labelledby="record-dialog-title"><form method="dialog" class="dialog-head"><h2 id="record-dialog-title">合并转发的聊天记录</h2><button type="submit" class="small-button" autofocus>关闭</button></form><div id="record-dialog-body" class="record-dialog-body"></div></dialog>
+  <dialog id="video-dialog" class="video-dialog" aria-labelledby="video-dialog-title"><form method="dialog" class="dialog-head"><h2 id="video-dialog-title">视频播放</h2><button type="submit" class="small-button" autofocus>关闭</button></form><div class="video-stage"><p id="video-preview-status" role="status"></p><video id="chat-video-player" controls playsinline preload="metadata" hidden></video><button id="video-external" type="button" class="small-button" hidden>用系统播放器打开</button></div></dialog>
+  <dialog id="audio-dialog" class="video-dialog" aria-labelledby="audio-dialog-title"><form method="dialog" class="dialog-head"><h2 id="audio-dialog-title">音频播放</h2><button type="submit" class="small-button" autofocus>关闭</button></form><div class="video-stage"><p id="audio-preview-status" role="status"></p><audio id="chat-audio-player" controls preload="metadata" hidden></audio><button id="audio-external" type="button" class="small-button" hidden>用系统播放器打开</button></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
