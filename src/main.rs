@@ -129,6 +129,7 @@ struct Config {
     plugin_id: Option<String>,
     live_imported_media_link: Option<PathBuf>,
     wechat_config: Option<PathBuf>,
+    webui_dir: Option<PathBuf>,
 }
 
 enum ArchiveConfig {
@@ -143,6 +144,7 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
     #[allow(unused_mut)]
     let mut live_imported_media_link = None;
     let mut wechat_config = None;
+    let mut webui_dir = None;
     while let Some(key) = args.next() {
         let value = args.next().ok_or_else(|| invalid(USAGE))?;
         match key.to_str() {
@@ -163,6 +165,9 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
             }
             Some("--wechat-config") if mode == Mode::Http && wechat_config.is_none() => {
                 wechat_config = Some(PathBuf::from(value));
+            }
+            Some("--webui-dir") if mode == Mode::Http && webui_dir.is_none() => {
+                webui_dir = Some(PathBuf::from(value));
             }
             Some("--port") if port.is_none() && mode == Mode::Http => {
                 port = Some(
@@ -187,6 +192,9 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
     if wechat_config.is_some() && !matches!(&archive, Some(ArchiveConfig::Live(_))) {
         return Err(invalid(USAGE));
     }
+    if webui_dir.is_some() && !matches!(&archive, Some(ArchiveConfig::Live(_))) {
+        return Err(invalid(USAGE));
+    }
     Ok(Config {
         archive: archive.ok_or_else(|| invalid(USAGE))?,
         grants: grants.ok_or_else(|| invalid(USAGE))?,
@@ -194,6 +202,7 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
         plugin_id,
         live_imported_media_link,
         wechat_config,
+        webui_dir,
     })
 }
 
@@ -205,6 +214,7 @@ async fn run_http(
     _live_imported_media_link: Option<PathBuf>,
     _live_owner:Option<tokio::sync::watch::Receiver<bool>>,
     wechat_config: Option<PathBuf>,
+    webui_dir: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     let listener =
         tokio::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
@@ -252,7 +262,11 @@ async fn run_http(
                 host::live_router(address,events,store,plugins)
             };
             #[cfg(not(target_os = "linux"))]
-            let app = host::live_router(address,events,store,plugins);
+            let app = if let Some(dir) = webui_dir {
+                host::live_router_with_webui(address, events, store, plugins, dir)
+            } else {
+                host::live_router(address, events, store, plugins)
+            };
             (app.map_err(invalid)?,"native-live")
         }
     };
@@ -1032,7 +1046,7 @@ fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
             desktop_launcher::private_grants(&config.grants)?;
             let plugins = Plugins::load(config.grants)?;
             tokio::runtime::Builder::new_multi_thread().enable_all().build()?
-                .block_on(run_http(config.port,config.archive,plugins,true,None,live_owner,config.wechat_config))?;
+                .block_on(run_http(config.port,config.archive,plugins,true,None,live_owner,config.wechat_config,config.webui_dir))?;
         }
         #[cfg(target_os="linux")]
         Some("serve-mcp-http") => {
@@ -1094,7 +1108,7 @@ fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()?
-                    .block_on(run_http(config.port, config.archive, plugins, false, config.live_imported_media_link, None, config.wechat_config))?;
+                    .block_on(run_http(config.port, config.archive, plugins, false, config.live_imported_media_link, None, config.wechat_config, config.webui_dir))?;
             }
         }
         Some("sync-wechat") => {

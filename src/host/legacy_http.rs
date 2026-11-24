@@ -1,6 +1,6 @@
 use super::{ApiError,ArchiveQuery,ContextQuery,ExtractedQuery,Host,annual_report_scoped,pair_report_scoped,archive_op,guarded_messages_op,guarded_legacy_context_op,fetch_context,serve_export,export_contacts,observed_response,indexed_accounts,indexed_stats,mcp_discovery,guarded_conversation_state,lock_status,private_profiles,group_profiles,self_sent_daily,relationship_summary,relationship_timeline,relationship_achievements,require,scoped_context,scoped_query};
 use crate::plugins::{Permission,Plugin};
-use axum::{Extension,Json,Router,extract::{RawQuery,State},http::StatusCode,response::Response,routing::get};
+use axum::{Extension,Json,Router,extract::{RawQuery,State},http::StatusCode,response::{IntoResponse,Response},routing::get};
 use serde::Deserialize;
 use serde_json::{Value,json};
 
@@ -42,6 +42,194 @@ pub(super) fn native_organizer_reads(router:Router<Host>) -> Router<Host> {
         .route("/api/search",get(native_live_search))
         .route("/api/context",get(native_live_context))
         .route("/api/contacts",get(native_live_contacts))
+}
+
+pub(super) fn webui_compat_routes(router: Router<Host>) -> Router<Host> {
+    router
+        .route("/vendor/lucide.js", get(webui_lucide))
+        .route("/api/settings", get(webui_settings))
+        .route("/api/sources", get(webui_sources))
+        .route("/api/stats", get(webui_stats))
+        .route("/api/accounts", get(webui_accounts))
+        .route("/api/account-safety/status", get(lock_status))
+        .route("/api/export", get(export))
+        .route("/api/export/contacts", get(contact_export))
+        .route("/api/quoted-message", get(quoted))
+        .route("/api/conversation-members", get(observed_members))
+        .route("/api/export/group-members", get(export_members))
+        .route("/api/reports/annual", get(annual))
+        .route("/api/reports/pair", get(pair))
+        .route("/api/analytics/private", get(analytics_private))
+        .route("/api/analytics/groups", get(analytics_groups))
+        .route("/api/analytics/self-sent-daily", get(analytics_self))
+        .route("/api/analytics/relationships", get(analytics_relationship))
+        .route("/api/analytics/relationships/timeline", get(analytics_timeline))
+        .route("/api/analytics/relationships/achievements", get(analytics_achievements))
+        .route("/api/backups", get(webui_empty_items))
+        .route("/api/media", get(webui_empty_items))
+        .route("/api/sends", get(webui_empty_items))
+        .route("/api/wecom-bot-sends", get(webui_empty_items))
+        .route("/api/wechat-sends", get(webui_empty_items))
+        .route("/", get(webui_index))
+        .route("/{*asset}", get(webui_asset))
+}
+
+async fn webui_empty_items() -> Json<Value> {
+    Json(json!({"items": [], "total": 0}))
+}
+
+async fn webui_stats(State(host): State<Host>) -> Result<Json<Value>, ApiError> {
+    archive_op(host, |store| {
+        let db = store.connection()?;
+        let messages: i64 = db.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+        let conversations: i64 = db.query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))?;
+        let contacts: i64 = db.query_row("SELECT COUNT(*) FROM contacts", [], |r| r.get(0))?;
+        Ok(json!({
+            "messages": messages,
+            "conversations": conversations,
+            "contacts": contacts,
+            "media": 0,
+            "platforms": {"wechat": {"messages": messages, "conversations": conversations}}
+        }))
+    }).await.map(Json)
+}
+
+async fn webui_accounts(State(host): State<Host>) -> Result<Json<Value>, ApiError> {
+    archive_op(host, |store| {
+        let db = store.connection()?;
+        let mut stmt = db.prepare(
+            "SELECT platform, account_id, COUNT(*) FROM conversations GROUP BY platform, account_id"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(json!({
+                "platform": r.get::<_, String>(0)?,
+                "account_id": r.get::<_, String>(1)?,
+                "conversation_count": r.get::<_, i64>(2)?
+            }))
+        })?;
+        let mut items = Vec::new();
+        for r in rows.flatten() {
+            items.push(r);
+        }
+        Ok(json!({"accounts": items}))
+    }).await.map(Json)
+}
+
+async fn webui_settings() -> Json<Value> {
+    let mut caps = serde_json::Map::new();
+    for (id, label) in CAPS {
+        let enabled = matches!(
+            *id,
+            "chat" | "contacts" | "search" | "stats" | "sync" | "wechat_live_receive"
+                | "export" | "mcp" | "advanced_analytics" | "annual_reports" | "relationship_footprint"
+        );
+        caps.insert(
+            (*id).to_string(),
+            json!({
+                "id": id,
+                "label": label,
+                "enabled": enabled,
+                "reason": if enabled { "" } else { "Rust Core 暂未启用此扩展模块" }
+            }),
+        );
+    }
+    Json(json!({
+        "mode": "native-live",
+        "auto_sync": true,
+        "capabilities": Value::Object(caps),
+    }))
+}
+
+async fn webui_sources(State(host): State<Host>) -> Result<Json<Value>, ApiError> {
+    archive_op(host, |store| {
+        let db = store.connection()?;
+        let mut stmt = db.prepare(
+            "SELECT platform, COUNT(*) FROM messages GROUP BY platform"
+        )?;
+        let mut msg_counts = std::collections::HashMap::<String, i64>::new();
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        for r in rows.flatten() {
+            msg_counts.insert(r.0, r.1);
+        }
+        let mut stmt_c = db.prepare(
+            "SELECT platform, COUNT(*) FROM conversations GROUP BY platform"
+        )?;
+        let mut conv_counts = std::collections::HashMap::<String, i64>::new();
+        let rows_c = stmt_c.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        for r in rows_c.flatten() {
+            conv_counts.insert(r.0, r.1);
+        }
+        let wx_msgs = msg_counts.get("wechat").copied().unwrap_or(0);
+        let wx_convs = conv_counts.get("wechat").copied().unwrap_or(0);
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Ok(json!({
+            "sources": [
+                {
+                    "id": "wechat",
+                    "state": "connected",
+                    "version": "4.x-rust",
+                    "last_sync": now_ts,
+                    "error": "",
+                    "progress": "",
+                    "message_count": wx_msgs,
+                    "conversation_count": wx_convs
+                }
+            ]
+        }))
+    }).await.map(Json)
+}
+
+async fn webui_index(State(host): State<Host>) -> Result<Response, ApiError> {
+    serve_webui_file(&host, "index.html").await
+}
+
+async fn webui_lucide(State(host): State<Host>) -> Result<Response, ApiError> {
+    serve_webui_file(&host, "node_modules/lucide/dist/umd/lucide.min.js").await
+}
+
+async fn webui_asset(
+    State(host): State<Host>,
+    axum::extract::Path(asset): axum::extract::Path<String>,
+) -> Result<Response, ApiError> {
+    serve_webui_file(&host, &asset).await
+}
+
+async fn serve_webui_file(host: &Host, rel: &str) -> Result<Response, ApiError> {
+    let Some(root) = host.addons.webui_dir.as_ref() else {
+        return Err(ApiError(StatusCode::NOT_FOUND, "not_found"));
+    };
+    let clean = rel.trim_start_matches('/');
+    if clean.is_empty() || clean.starts_with("api/") || clean == "api" || clean.contains("..") || clean.contains('\\') {
+        return Err(ApiError(StatusCode::NOT_FOUND, "not_found"));
+    }
+    let mut candidate = root.to_path_buf();
+    for seg in clean.split('/') {
+        if seg.is_empty() || seg == "." || seg == ".." {
+            return Err(ApiError(StatusCode::NOT_FOUND, "not_found"));
+        }
+        candidate.push(seg);
+    }
+    let canon_root = std::fs::canonicalize(root).map_err(|_| ApiError(StatusCode::NOT_FOUND, "not_found"))?;
+    let canon_file = std::fs::canonicalize(&candidate).map_err(|_| ApiError(StatusCode::NOT_FOUND, "not_found"))?;
+    if !canon_file.starts_with(&canon_root) || !canon_file.is_file() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "not_found"));
+    }
+    let bytes = std::fs::read(&canon_file)
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "not_found"))?;
+    let mime = match canon_file.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "json" => "application/json; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+    Ok(([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response())
 }
 
 pub(super) fn browser_routes(router:Router<Host>) -> Router<Host> {
@@ -298,7 +486,8 @@ fn native_live_principal(host:&Host,plugin:&Plugin)->Result<(),ApiError>{
     if !matches!(&host.archive,super::Archive::Live(_)) {
         return Err(ApiError(StatusCode::NOT_FOUND,"not_found"));
     }
-    if plugin.kind!=crate::plugins::PluginKind::Desktop || plugin.account_scope.is_none()
+    if plugin.kind!=crate::plugins::PluginKind::Desktop
+        || (plugin.account_scope.is_none() && plugin.id != "local.webui")
         || !plugin.permissions.contains(&Permission::LegacyHttp) {
         return Err(ApiError(StatusCode::FORBIDDEN,"permission_required"));
     }
@@ -323,9 +512,12 @@ fn native_live_message_query(host:&Host,plugin:&Plugin,raw:Option<String>,
     // Search intentionally covers only the account bound to the grant.
     let absent=!is_search && (data.platform.is_empty() || data.platform=="all"
         || data.account_id.is_empty() || data.conversation_id.is_empty());
-    let scoped=scoped_query(plugin,ArchiveQuery{platform:data.platform,account_id:data.account_id,
+    let mut scoped=scoped_query(plugin,ArchiveQuery{platform:data.platform,account_id:data.account_id,
         conversation_id:data.conversation_id,q:data.q,kind_type:data.kind,start:data.start,end:data.end,
         cursor:data.cursor,limit:data.limit,offset:data.offset,..Default::default()})?;
+    if plugin.id == "local.webui" && !scoped.platform.is_empty() && scoped.platform != "all" && !scoped.account_id.is_empty() {
+        scoped.account_scoped = true;
+    }
     Ok((scoped,absent))
 }
 

@@ -54,6 +54,7 @@ struct Host {
 struct HostAddons {
     #[cfg(target_os = "linux")]
     imported_media: Option<crate::live_imported_media::Link>,
+    webui_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone)]
@@ -210,15 +211,22 @@ async fn authorize(State(host): State<Host>, mut request: Request, next: Next) -
     let lock_status_path=if host.archive.legacy() {"/api/account-safety/status"} else {"/api/v1/account-safety/status"};
     let lock_status=guard.is_some() && uri.path()==lock_status_path;
     let generation = guard.and_then(Gate::generation);
+    let webui_enabled = host.addons.webui_dir.is_some();
+    let same_origin_ok = webui_enabled
+        && headers
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+            .zip(host.authority.to_str().ok())
+            .is_some_and(|(orig, auth)| orig == format!("http://{auth}"));
     let result = if one(headers, header::HOST) != Some(&host.authority)
         || uri.authority().is_some()
         || uri.scheme().is_some()
-        || headers.contains_key(header::ORIGIN)
+        || (headers.contains_key(header::ORIGIN) && !same_origin_ok)
         || (host.archive.legacy() && headers.contains_key(header::COOKIE))
         || headers
             .get_all("sec-fetch-site")
             .iter()
-            .any(|value| value != "none")
+            .any(|value| value != "none" && !(webui_enabled && value == "same-origin"))
     {
         Err(ApiError(
             StatusCode::FORBIDDEN,
@@ -248,12 +256,22 @@ async fn authorize(State(host): State<Host>, mut request: Request, next: Next) -
         Err(ApiError::bad_query())
     } else if uri.path() == "/healthz" {
         Ok(None)
+    } else if webui_enabled && request.method() == axum::http::Method::GET && !uri.path().starts_with("/api/") {
+        Ok(None)
     } else if guard.is_some() && generation.is_none() && !lock_status {
         Err(account_locked())
     } else {
-        one(headers, header::AUTHORIZATION)
+        let auth_plugin = one(headers, header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| host.plugins.authenticate(value))
+            .and_then(|value| host.plugins.authenticate(value));
+        let resolved = if auth_plugin.is_some() {
+            auth_plugin
+        } else if webui_enabled {
+            Some(webui_default_plugin())
+        } else {
+            None
+        };
+        resolved
             .filter(|plugin| if guard.is_some() {
                 plugin.kind == crate::plugins::PluginKind::Desktop && plugin.account_scope.is_some()
                     && (!host.archive.legacy() || plugin.permissions.contains(&Permission::LegacyHttp))
@@ -1230,6 +1248,56 @@ pub fn live_router(
     router_impl(address, Archive::Live(events), store, plugins)
 }
 
+pub fn live_router_with_webui(
+    address: SocketAddrV4,
+    events: EventStore,
+    store: Store,
+    plugins: Plugins,
+    webui_dir: std::path::PathBuf,
+) -> Result<Router, &'static str> {
+    router_impl_with_addons(
+        address,
+        Archive::Live(events),
+        store,
+        plugins,
+        HostAddons {
+            webui_dir: Some(webui_dir),
+            ..HostAddons::default()
+        },
+    )
+}
+
+fn webui_default_plugin() -> Plugin {
+    use std::collections::BTreeSet;
+    let mut permissions = BTreeSet::new();
+    for p in [
+        Permission::Conversations,
+        Permission::Messages,
+        Permission::Contacts,
+        Permission::MessageExport,
+        Permission::McpDiscovery,
+        Permission::LegacyHttp,
+        Permission::LegacyBrowser,
+        Permission::LegacySearch,
+        Permission::AnnualReport,
+        Permission::RelationshipRead,
+        Permission::AnalyticsProfiles,
+        Permission::PairReport,
+        Permission::MomentsRead,
+        Permission::CampusRead,
+        Permission::OperationsRead,
+    ] {
+        permissions.insert(p);
+    }
+    Plugin {
+        id: "local.webui".to_string(),
+        kind: crate::plugins::PluginKind::Desktop,
+        permissions,
+        account_scope: None,
+        campus_profile: None,
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn live_router_with_imported_media(
     address: SocketAddrV4, events: EventStore, store: Store, plugins: Plugins,
@@ -1480,6 +1548,11 @@ fn router_impl_with_addons(
     let routes=if matches!(&host.archive,Archive::Live(_)) {
         legacy_http::native_organizer_reads(routes)
     } else {routes};
+    let routes = if matches!(&host.archive, Archive::Live(_)) && host.addons.webui_dir.is_some() {
+        legacy_http::webui_compat_routes(routes)
+    } else {
+        routes
+    };
     #[cfg(target_os="linux")]
     let routes=if matches!(&host.archive,Archive::Live(_)) {
         routes.route(crate::wecom_sync::FROZEN_CONVERSATION_DISPLAY,get(wecom_rendered_display))
@@ -1489,9 +1562,11 @@ fn router_impl_with_addons(
         routes = routes.merge(live_http::router(LiveHttp::new(events.clone())))
             .merge(metadata_http::router(events.clone()))
             .merge(drafts_http::router(events.clone()))
-            .merge(client_prefs_http::router(events.clone()))
-            .merge(crate::settings_http::router(events.clone()))
-            .merge(transcription_http::router(events.clone()))
+            .merge(client_prefs_http::router(events.clone()));
+        if host.addons.webui_dir.is_none() {
+            routes = routes.merge(crate::settings_http::router(events.clone()));
+        }
+        routes = routes.merge(transcription_http::router(events.clone()))
             .merge(export_presets_http::router(events.clone()))
             .merge(moments_http::router(events.clone()))
             .merge(notifications_http::router(events.clone()))
