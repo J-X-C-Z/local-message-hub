@@ -145,7 +145,7 @@ impl Plan {
 
         let request = IngestRequest { idempotency_key: "legacy-json-preview".into(), messages };
         request.validate(OFFLINE_PRODUCER).map_err(|_| ImportError::Invalid)?;
-        if serde_json::to_vec(&request.messages).map_err(|_| ImportError::Invalid)?.len() > MAX_BATCH_BYTES {
+        if preflight::encoded_len(&request.messages).map_err(|_| ImportError::Invalid)? > MAX_BATCH_BYTES {
             return Err(ImportError::Invalid);
         }
         Self::bind(bytes,archive,platform,account,mode,request)

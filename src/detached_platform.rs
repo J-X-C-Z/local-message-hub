@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use sha2::{Digest, Sha256};
-use std::{collections::{BTreeMap, BTreeSet}, path::Path};
+use std::{collections::{BTreeMap, BTreeSet}, io, path::Path};
 
 const WE_COM_FORMAT: &str = "wecom-rendered-v1";
 const WE_CHAT_FORMAT: &str = "wechat-provider-page-v1";
@@ -128,6 +128,27 @@ pub struct WeComReceipt {
     unchanged: usize,
 }
 
+/// Count the same compact normalized JSON without keeping a byte buffer.
+fn check_wecom_size(messages: &[NormalizedMessage]) -> Result<()> {
+    #[derive(Default)]
+    struct EncodedLen(usize);
+
+    impl io::Write for EncodedLen {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self.0.checked_add(bytes.len())
+                .ok_or_else(|| io::Error::other("normalized JSON size overflow"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    }
+
+    let mut len = EncodedLen::default();
+    serde_json::to_writer(&mut len, messages).map_err(|_| AdapterError::Format)?;
+    if len.0 > MAX_BATCH_BYTES { return Err(AdapterError::Format); }
+    Ok(())
+}
+
 struct WeComPlan {
     request: IngestRequest,
     skipped_non_text: usize,
@@ -193,9 +214,7 @@ impl WeComPlan {
         // Use the established offline normalized-text owner: the same scoped
         // old Hub JSON row can deduplicate, but cannot be revised by import.
         request.validate(OFFLINE_PRODUCER).map_err(|_| AdapterError::Format)?;
-        if serde_json::to_vec(&request.messages).map_err(|_| AdapterError::Format)?.len() > MAX_BATCH_BYTES {
-            return Err(AdapterError::Format);
-        }
+        check_wecom_size(&request.messages)?;
         Ok(Self { request, skipped_non_text })
     }
 
@@ -213,7 +232,7 @@ impl WeComPlan {
         }
         let rows = self.request.messages.len();
         let batch_id = self.request.idempotency_key.clone();
-        let receipt = archive.import_legacy(self.request).map_err(|_| AdapterError::Apply)?;
+        let receipt = archive.import_wecom_rendered(self.request).map_err(|_| AdapterError::Apply)?;
         Ok(WeComReceipt {
             batch_id, rows, skipped_non_text: self.skipped_non_text,
             created: receipt.created, unchanged: receipt.unchanged,

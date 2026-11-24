@@ -5,7 +5,7 @@ use super::{ARTIFACT_MAX, Artifact, Connection, Error, EventStore, MAX_TIME, Opt
     Principal, Result, Sha256, Digest, AccountScope, begin, principal, valid_id, valid_now, writer, params};
 use serde::{Deserialize,Serialize};
 use std::collections::BTreeSet;
-use zeroize::Zeroizing;
+use rusqlite::types::ValueRef;
 
 const MAX_PAGE:usize=16;
 const MAX_BATCH:usize=8;
@@ -108,16 +108,16 @@ impl Plan {
 
 struct Found { artifact:Artifact, removed:bool }
 
-fn decode(slot:&Slot,format:String,byte_count:usize,sha256:String,body:Option<&[u8]>)->Result<Artifact> {
+fn decode(slot:&Slot,format:String,byte_count:usize,sha256:String,body_verified:Option<bool>)->Result<Artifact> {
     if !format_valid(&format)||byte_count>ARTIFACT_MAX||!valid_id(&sha256)
-        ||body.is_some_and(|bytes|bytes.len()!=byte_count||hex::encode(Sha256::digest(bytes))!=sha256) {
+        ||body_verified==Some(false) {
         return Err(Error::Storage);
     }
     Ok(Artifact{schedule_id:slot.schedule_id.clone(),due_at:slot.due_at,format,byte_count,sha256})
 }
 
 fn find(db:&Connection,key:&Principal,slot:&Slot,has_removed:bool,read_body:bool)->Result<Found> {
-    let current:Option<(String,usize,String,Option<Vec<u8>>,bool)>=db.query_row(
+    let current:Option<(String,usize,String,Option<bool>,bool)>=db.query_row(
         "SELECT a.format,a.byte_count,a.sha256,
             CASE WHEN ?5 AND a.byte_count BETWEEN 0 AND ?6
                       AND length(a.body)=a.byte_count AND typeof(a.body)='blob' THEN a.body END,
@@ -127,7 +127,28 @@ fn find(db:&Connection,key:&Principal,slot:&Slot,has_removed:bool,read_body:bool
           AND r.due_at=a.due_at AND r.state='rendered'
          WHERE a.owner=?1 AND a.account=?2 AND a.schedule_id=?3 AND a.due_at=?4",
         params![key.owner,key.account,slot.schedule_id,slot.due_at,read_body,ARTIFACT_MAX],
-        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        |r|{
+            let format:String=r.get(0)?;
+            let count:usize=r.get(1)?;
+            let sha:String=r.get(2)?;
+            let body=match r.get_ref(3)? {
+                ValueRef::Null=>None,
+                ValueRef::Blob(bytes)=>Some(bytes),
+                value=>return Err(rusqlite::Error::InvalidColumnType(
+                    3,r.as_ref().column_name(3)?.into(),value.data_type())),
+            };
+            let valid:bool=r.get(4)?;
+            // Keep only a proof, never the SQLite-owned bytes. Any failed
+            // proof is interpreted only after retained/tombstone resolution.
+            let body_verified=body.map(|bytes|{
+                if !valid||!format_valid(&format)||count>ARTIFACT_MAX
+                    ||!valid_id(&sha)||bytes.len()!=count {return false;}
+                let mut encoded=[0u8;64];
+                hex::encode_to_slice(Sha256::digest(bytes),&mut encoded).is_ok()
+                    && encoded.as_slice()==sha.as_bytes()
+            });
+            Ok((format,count,sha,body_verified,valid))
+        }).optional()?;
     let removed:Option<(String,usize,String)>=if has_removed {
         db.query_row("SELECT d.format,d.byte_count,d.sha256 FROM native_export_artifact_removal_v1 d
             JOIN native_export_run_v1 r ON r.owner=d.owner AND r.account=d.account
@@ -137,10 +158,8 @@ fn find(db:&Connection,key:&Principal,slot:&Slot,has_removed:bool,read_body:bool
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?
     }else{None};
     match (current,removed) {
-        (Some((format,count,sha,body,true)),None) if !read_body||body.is_some()=>{
-            let body=body.map(Zeroizing::new);
-            let bytes=body.as_ref().map(|value|value.as_slice());
-            Ok(Found{artifact:decode(slot,format,count,sha,bytes)?,removed:false})
+        (Some((format,count,sha,body_verified,true)),None) if !read_body||body_verified.is_some()=>{
+            Ok(Found{artifact:decode(slot,format,count,sha,body_verified)?,removed:false})
         }
         (None,Some((format,count,sha)))=>Ok(Found{
             artifact:decode(slot,format,count,sha,None)?,removed:true}),

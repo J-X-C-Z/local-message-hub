@@ -659,9 +659,15 @@ fn tool_result(id: Value, mut value: Value, structured: bool) -> Value {
             "Result exceeds the response budget; use a smaller page.",
         );
     }
-    let mut response = json!({"content":[{"type":"text","text":text}],"isError":false});
+    // The text and structured value already have owners. Move them into the
+    // same wire objects rather than reserializing either through json!'s Value serializer.
+    let mut response = json!({"content":[{"type":"text","text":null}],"isError":false});
+    response["content"][0]["text"] = Value::String(text);
     if structured {
         response["structuredContent"] = value;
     }
-    result(id, response)
+    let mut envelope = json!({"jsonrpc":"2.0","id":null,"result":null});
+    envelope["id"] = id;
+    envelope["result"] = response;
+    envelope
 }

@@ -1,7 +1,7 @@
 //! Safe metadata projections for one explicit indexed account; no provider lookup.
 use crate::{plugins::AccountScope,store::{Store,Result,StoreError}};
 use rusqlite::{Connection,params};
-use serde::Deserialize;
+use serde::{Deserialize,Serialize};
 use serde_json::{Value,json};
 use std::collections::BTreeMap;
 
@@ -32,7 +32,27 @@ fn bounded_count(db:&Connection,scope:&AccountScope,table:&'static str) -> Resul
     if n>ROW_CAP {Err(StoreError::TooLarge)} else {Ok(n)}
 }
 
-pub(crate) fn stats(store:Store,scope:AccountScope) -> Result<Value> {
+// Match the existing lexical serde_json::Value object key order.
+#[derive(Serialize)]
+struct Day {
+    count:i64,
+    date:String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Stats {
+    contact_count:i64,
+    conversation_count:i64,
+    daily:Vec<Day>,
+    media_count:i64,
+    media_count_basis:&'static str,
+    message_count:i64,
+    per_platform:serde_json::Map<String,Value>,
+    per_type:BTreeMap<String,i64>,
+    scope:&'static str,
+}
+
+pub(crate) fn stats(store:Store,scope:AccountScope) -> Result<Stats> {
     let mut db=store.connection()?;
     let tx=db.transaction()?;
     let message_count=bounded_count(&tx,&scope,"messages")?;
@@ -57,15 +77,16 @@ pub(crate) fn stats(store:Store,scope:AccountScope) -> Result<Value> {
     let mut days=Vec::new();
     while let Some(row)=rows.next()? {
         if days.len()==DAY_CAP as usize {return Err(StoreError::TooLarge);}
-        days.push(json!({"date":row.get::<_,String>(0)?,"count":row.get::<_,i64>(1)?}));
+        let date=row.get::<_,String>(0)?;
+        let count=row.get::<_,i64>(1)?;
+        days.push(Day{count,date});
     }
     let mut per_platform=serde_json::Map::new();
     if message_count+conversation_count+contact_count>0 {
         per_platform.insert(scope.platform,json!({"messages":message_count,
             "conversations":conversation_count,"contacts":contact_count}));
     }
-    Ok(json!({"message_count":message_count,"conversation_count":conversation_count,
-        "contact_count":contact_count,"media_count":media_count,"per_type":per_type,
-        "per_platform":per_platform,"daily":days,"scope":"indexed_account",
-        "media_count_basis":"normalized_message_kind_only"}))
+    Ok(Stats{contact_count,conversation_count,daily:days,media_count,
+        media_count_basis:"normalized_message_kind_only",message_count,per_platform,per_type,
+        scope:"indexed_account"})
 }

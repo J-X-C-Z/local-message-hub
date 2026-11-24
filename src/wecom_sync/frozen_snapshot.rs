@@ -229,6 +229,43 @@ impl<'a> Page<'a> {
 }
 
 struct Inventory<'a> {hash:String,pages:Vec<Page<'a>>,conversations:usize,messages:usize}
+// The inventory pass checks the original row's complete JSON shape, but only
+// page projection needs to keep the decoded body. Mirror serde's owned String
+// visitor so malformed text still fails before that pass looks at row scope.
+struct ValidatedDiscardedText;
+impl<'de> Deserialize<'de> for ValidatedDiscardedText {
+    fn deserialize<D:Deserializer<'de>>(input:D)->std::result::Result<Self,D::Error>{
+        struct StringShape;
+        impl<'de> Visitor<'de> for StringShape {
+            type Value=ValidatedDiscardedText;
+
+            fn expecting(&self,fmt:&mut fmt::Formatter<'_>)->fmt::Result{
+                fmt.write_str("a string")
+            }
+
+            fn visit_str<E:de::Error>(self,_:&str)->std::result::Result<Self::Value,E>{
+                Ok(ValidatedDiscardedText)
+            }
+
+            fn visit_string<E:de::Error>(self,_:String)->std::result::Result<Self::Value,E>{
+                Ok(ValidatedDiscardedText)
+            }
+
+            fn visit_bytes<E:de::Error>(self,value:&[u8])->std::result::Result<Self::Value,E>{
+                match std::str::from_utf8(value) {
+                    Ok(_)=>Ok(ValidatedDiscardedText),
+                    Err(_)=>Err(E::invalid_value(de::Unexpected::Bytes(value),&self)),
+                }
+            }
+
+            fn visit_byte_buf<E:de::Error>(self,value:Vec<u8>)->std::result::Result<Self::Value,E>{
+                self.visit_bytes(&value)
+            }
+        }
+        input.deserialize_string(StringShape)
+    }
+}
+
 impl<'a> Inventory<'a> {
     fn parse(bytes:&'a [u8],account:&str)->Result<Self>{
         let pair:Pair<'a>=serde_json::from_slice(bytes).map_err(|_|Error::Format)?;
@@ -244,7 +281,7 @@ impl<'a> Inventory<'a> {
         for (raw,message) in pair.conversations.0.into_iter().map(|raw|(raw,false))
             .chain(pair.messages.0.into_iter().map(|raw|(raw,true))) {
             if message {
-                let row:Row=serde_json::from_str(raw.get()).map_err(|_|Error::Format)?;
+                let row:Row<ValidatedDiscardedText>=serde_json::from_str(raw.get()).map_err(|_|Error::Format)?;
                 if row.platform.as_deref().is_some_and(|p|p!="wecom")
                     ||row.account_id.as_deref().is_some_and(|a|a!=account){return Err(Error::Scope);}
                 if !ids.insert(row.message_id.string(false)?)

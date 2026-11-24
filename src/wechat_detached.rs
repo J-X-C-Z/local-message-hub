@@ -132,7 +132,23 @@ pub(crate) fn valid_scope(account:&str,namespace:&str)->bool {
     source_id(account) && !account.eq_ignore_ascii_case("local") && token(namespace)
 }
 
+#[derive(Default)]
+struct JsonLength(usize);
+
+impl std::io::Write for JsonLength {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
 pub(crate) fn normalized(bytes:&[u8],account:&str,namespace:&str)->Result<(Vec<NormalizedMessage>,usize)> {
+    normalized_with_size_check(bytes,account,namespace,false)
+}
+
+fn normalized_with_size_check(bytes:&[u8],account:&str,namespace:&str,
+    count_only:bool)->Result<(Vec<NormalizedMessage>,usize)> {
     if !valid_scope(account,namespace) {return Err(Error::Scope);}
     if bytes.len()>MAX_BATCH_BYTES {return Err(Error::Format);}
     let envelope: Envelope = serde_json::from_slice(bytes).map_err(|_| Error::Format)?;
@@ -168,15 +184,24 @@ pub(crate) fn normalized(bytes:&[u8],account:&str,namespace:&str)->Result<(Vec<N
             sender_name: row.sender_name, timestamp: row.timestamp, is_self: row.is_self, text: Some(row.text),
         });
     }
-    let encoded=serde_json::to_vec(&messages).map_err(|_|Error::Format)?;
-    if encoded.len()>MAX_BATCH_BYTES {return Err(Error::Format);}
+    // Only the explicit, unclaimed local file commands opt in; broker and
+    // claimed-file callers retain their existing materialization path.
+    let encoded_len = if count_only {
+        let mut length = JsonLength::default();
+        serde_json::to_writer(&mut length,&messages).map_err(|_|Error::Format)?;
+        length.0
+    } else {
+        serde_json::to_vec(&messages).map_err(|_|Error::Format)?.len()
+    };
+    if encoded_len>MAX_BATCH_BYTES {return Err(Error::Format);}
     Ok((messages,by_conversation.len()))
 }
 
-fn plan(file: &Path, archive: &EventStore, account: &str, namespace: &str) -> Result<Plan> {
+fn plan(file: &Path, archive: &EventStore, account: &str, namespace: &str,
+    count_only:bool) -> Result<Plan> {
     if !valid_scope(account,namespace) {return Err(Error::Scope);}
     let bytes=read_stable_source(file, MAX_BATCH_BYTES).map_err(|_|Error::Source)?;
-    let (messages,conversations)=normalized(&bytes,account,namespace)?;
+    let (messages,conversations)=normalized_with_size_check(&bytes,account,namespace,count_only)?;
     let file_digest = Sha256::digest(&bytes);
     let receipt = hash(b"hub-wechat-detached-confirmation-v1", &[
         archive.archive_id().as_bytes(), account.as_bytes(), namespace.as_bytes(), file_digest.as_slice(),
@@ -206,7 +231,7 @@ pub struct Receipt {
 
 pub fn preview(file: &Path, target: &Path, account: &str, namespace: &str) -> Result<Preview> {
     let archive = EventStore::open(target).map_err(|_| Error::Archive)?;
-    let plan = plan(file, &archive, account, namespace)?;
+    let plan = plan(file, &archive, account, namespace, true)?;
     Ok(Preview { confirmation: plan.request.idempotency_key, rows: plan.request.messages.len(),
         conversations: plan.conversations })
 }
@@ -214,7 +239,7 @@ pub fn preview(file: &Path, target: &Path, account: &str, namespace: &str) -> Re
 pub fn commit(file: &Path, target: &Path, account: &str, namespace: &str, confirmation: &str) -> Result<Receipt> {
     if !hex(confirmation, 64) { return Err(Error::Confirmation); }
     let archive = EventStore::open(target).map_err(|_| Error::Archive)?;
-    let plan = plan(file, &archive, account, namespace)?;
+    let plan = plan(file, &archive, account, namespace, true)?;
     if plan.request.idempotency_key != confirmation { return Err(Error::Confirmation); }
     let rows = plan.request.messages.len();
     let receipt = archive.import_wechat_detached(plan.request, account).map_err(|err| match err {
@@ -259,7 +284,7 @@ impl ClaimedFormat {
             return paged_plan(file,archive,account,namespace,selection.ok_or(Error::Format)?,self);
         }
         if selection.is_some() {return Err(Error::Format);}
-        if matches!(self,Self::Detached) {return Ok((plan(file,archive,account,namespace)?,None));}
+        if matches!(self,Self::Detached) {return Ok((plan(file,archive,account,namespace,false)?,None));}
         if !valid_scope(account,namespace) {return Err(Error::Scope);}
         let bytes=read_stable_source(file,MAX_BATCH_BYTES).map_err(|_|Error::Source)?;
         let (messages,replies)=if matches!(self,Self::LegacyReply) {

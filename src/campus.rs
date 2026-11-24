@@ -177,8 +177,14 @@ fn commit_items(store:&EventStore,profile:&str,batch_id:String,list:Vec<Article>
             unchanged+=1;continue;
         }
         if count+created as i64>=MAX_PROFILE_ITEMS { return Err(Error::Conflict); }
-        let search=format!("{} {} {} {}",a.title,a.summary,a.content.as_deref().unwrap_or_default(),a.source_name)
-            .to_lowercase();
+        let mut search=format!("{} {} {} {}",a.title,a.summary,a.content.as_deref().unwrap_or_default(),a.source_name);
+        // Only detached institutional text with an entirely ASCII search
+        // projection can reuse its buffer. Preserve provider and Unicode paths.
+        if a.source_id != campus_wechat::SOURCE_ID && search.is_ascii() {
+            search.make_ascii_lowercase();
+        } else {
+            search=search.to_lowercase();
+        }
         tx.execute("INSERT INTO native_campus_articles
           (profile,id,url,title,published_at,summary,source_id,source_name,category,content,search_text,digest)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",

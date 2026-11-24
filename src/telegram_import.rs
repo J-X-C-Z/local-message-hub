@@ -2,7 +2,7 @@
 use crate::events::{EventStore, IngestRequest, MAX_BATCH_BYTES, NormalizedMessage};
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use sha2::{Digest, Sha256};
-use std::{collections::{BTreeMap, BTreeSet}, path::Path};
+use std::{collections::{BTreeMap, BTreeSet}, io, path::Path};
 
 pub(crate) const PRODUCER: &str = "@offline/telegram-desktop-v1";
 const MAX_SOURCE: usize = 512 * 1024;
@@ -98,15 +98,31 @@ fn flatten<'a>(parts: impl Iterator<Item=&'a str>) -> Result<String> {
 }
 
 impl Text {
-    fn flat(&self) -> Result<String> {
+    fn into_flat(self) -> Result<String> {
         match self {
-            Self::Plain(text) => flatten(std::iter::once(text.as_str())),
+            Self::Plain(text) if text.len() <= MAX_TEXT_BYTES => Ok(text),
+            Self::Plain(_) => Err(ImportError::Invalid),
             Self::Parts(parts) => flatten(parts.iter().map(|part| match part {
                 Part::Plain(text) => text.as_str(),
                 Part::Entity(entity) => &entity.text,
             })),
         }
     }
+}
+
+// The old path first fully flattened the entities (including its byte cap)
+// and only then compared the strings. Keep that order, but do not retain a
+// second copy of the text: track a matching suffix while checking every part.
+fn validate_entity_mirror(primary: &str, entities: &[Entity]) -> Result<()> {
+    let mut rest = Some(primary.as_bytes());
+    let mut len = 0usize;
+    for entity in entities {
+        let bytes = entity.text.as_bytes();
+        len = len.checked_add(bytes.len()).ok_or(ImportError::Invalid)?;
+        if len > MAX_TEXT_BYTES { return Err(ImportError::Invalid); }
+        rest = rest.and_then(|suffix| suffix.strip_prefix(bytes));
+    }
+    if rest.is_some_and(|suffix| suffix.is_empty()) { Ok(()) } else { Err(ImportError::Invalid) }
 }
 
 fn canonical_decimal(value: &str) -> Option<u64> {
@@ -183,12 +199,19 @@ fn decode(bytes: &[u8], account: &str) -> Result<(Vec<NormalizedMessage>,Counts)
                 counts.skipped_messages += 1;
                 continue;
             }
-            let primary = row.text.as_ref().map(Text::flat).transpose()?;
-            let entities = row.text_entities.as_ref().map(|es|flatten(es.iter().map(|e|e.text.as_str()))).transpose()?;
-            let text = match (primary,entities) {
-                (Some(a),Some(b)) if a != b => return Err(ImportError::Invalid),
-                (Some(a),_) | (None,Some(a)) if !a.is_empty() => a,
-                _ => { counts.skipped_messages += 1; continue; }
+            let primary = row.text.map(Text::into_flat).transpose()?;
+            let text = match (primary, row.text_entities) {
+                (Some(text), Some(entities)) => {
+                    validate_entity_mirror(&text, &entities)?;
+                    Some(text)
+                }
+                (Some(text), None) => Some(text),
+                (None, Some(entities)) => Some(flatten(entities.iter().map(|e| e.text.as_str()))?),
+                (None, None) => None,
+            };
+            let Some(text) = text.filter(|s| !s.is_empty()) else {
+                counts.skipped_messages += 1;
+                continue;
             };
             let timestamp = row.date_unixtime.as_deref().and_then(canonical_decimal)
                 .filter(|&n|n <= MAX_TIMESTAMP).ok_or(ImportError::Invalid)?;
@@ -211,6 +234,26 @@ fn decode(bytes: &[u8], account: &str) -> Result<(Vec<NormalizedMessage>,Counts)
     Ok((messages,counts))
 }
 
+#[derive(Default)]
+struct EncodedLen(usize);
+
+impl io::Write for EncodedLen {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.checked_add(bytes.len())
+            .ok_or_else(|| io::Error::other("normalized JSON size overflow"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
+fn check_normalized_size(messages: &[NormalizedMessage]) -> Result<()> {
+    let mut len = EncodedLen::default();
+    serde_json::to_writer(&mut len, messages).map_err(|_| ImportError::Invalid)?;
+    if len.0 > MAX_BATCH_BYTES { return Err(ImportError::Invalid); }
+    Ok(())
+}
+
 fn plan(source: &Path, archive: &EventStore, account: &str) -> Result<(IngestRequest,Counts)> {
     let bytes = crate::legacy_import::read_stable_source(source,MAX_SOURCE).map_err(|_|ImportError::Source)?;
     let (messages,counts) = decode(&bytes,account)?;
@@ -219,9 +262,7 @@ fn plan(source: &Path, archive: &EventStore, account: &str) -> Result<(IngestReq
     let idempotency_key = hex::encode(Sha256::digest(inputs));
     let request = IngestRequest {idempotency_key,messages};
     request.validate(PRODUCER).map_err(|_|ImportError::Invalid)?;
-    if serde_json::to_vec(&request.messages).map_err(|_|ImportError::Invalid)?.len() > MAX_BATCH_BYTES {
-        return Err(ImportError::Invalid);
-    }
+    check_normalized_size(&request.messages)?;
     Ok((request,counts))
 }
 
@@ -297,6 +338,38 @@ mod tests {
         assert!(matches!(rows(chat("personal_chat",42,vec![missing])),Err(ImportError::Invalid)));
         assert!(matches!(rows(chat("personal_chat",42,vec![row(1,"user43",json!("unexpected third party"))])),
             Err(ImportError::Invalid)));
+    }
+
+
+    #[test]
+    fn counted_normalized_size_matches_serde_at_exact_batch_boundary() {
+        let escaped = "你, \"引号\"\\\r\n🦀";
+        let mut messages = chat("personal_chat",42,(1..=96)
+            .map(|n| row(n,"user42",json!(["long ",{"type":"bold","text":escaped}])))
+            .collect());
+        let (rows,_) = rows(messages.clone()).unwrap();
+        let expected = format!("long {escaped}");
+        assert!(rows.iter().all(|r|r.text.as_deref()==Some(expected.as_str())));
+        let base = serde_json::to_vec(&rows).unwrap().len();
+        for target in [MAX_BATCH_BYTES-1,MAX_BATCH_BYTES,MAX_BATCH_BYTES+1] {
+            let remaining = target-base;
+            for (n,item) in messages["messages"].as_array_mut().unwrap().iter_mut().enumerate() {
+                let cjk = remaining / 96 / 3;
+                let fill = remaining / 96 + usize::from(n < remaining % 96);
+                item["text"] = json!(format!("long {escaped}{}{}", "字".repeat(cjk), "x".repeat(fill - cjk * 3)));
+            }
+            let source = serde_json::to_vec(&messages).unwrap();
+            assert!(source.len() <= MAX_SOURCE);
+            let (rows,_) = decode(&source,"user900").unwrap();
+            let request = IngestRequest {idempotency_key:"fixture".into(),messages:rows};
+            request.validate(PRODUCER).unwrap();
+            assert_eq!(serde_json::to_vec(&request.messages).unwrap().len(),target);
+            match check_normalized_size(&request.messages) {
+                Ok(()) => assert!(target <= MAX_BATCH_BYTES),
+                Err(ImportError::Invalid) => assert!(target > MAX_BATCH_BYTES),
+                Err(e) => panic!("unexpected cap error: {e}"),
+            }
+        }
     }
 
     #[test]

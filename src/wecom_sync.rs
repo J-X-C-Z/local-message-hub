@@ -128,7 +128,7 @@ struct Conversation {
     participants:u32,
 }
 #[derive(Deserialize)]
-struct Row {
+struct Row<T = String> {
     platform:Option<String>,
     account_id:Option<String>,
     message_id:SourceId,
@@ -138,7 +138,7 @@ struct Row {
     sender:Option<String>,
     content_type:u32,
     send_time:i64,
-    text:String,
+    text:T,
     kind:String,
     // Required Boolean in the original renderer, never inferred or defaulted.
     me:bool,

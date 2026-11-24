@@ -905,13 +905,13 @@ async fn observed_response(host:Host,plugin:Plugin,mut query:Observed,download:b
     let scope=export_scope(&plugin,&mut query.platform,&mut query.account_id)?;
     let format=query.format;
     let result=archive_op(host,move |store| {
-        let Some(records)=grouped_exports::observed_records(store,scope,query)? else {return Ok(None)};
         let response=if download {
-            let bytes=grouped_exports::download(records,format,false)?;
+            let Some(bytes)=grouped_exports::observed_download(store,scope,query)? else {return Ok(None)};
             ([(header::CONTENT_TYPE,format.mime()),
                (header::CONTENT_DISPOSITION,format.disposition(false)),
                (header::REFERRER_POLICY,"no-referrer")],bytes).into_response()
         } else {
+            let Some(records)=grouped_exports::observed_records(store,scope,query)? else {return Ok(None)};
             Json(json!({"source":"observed","complete_roster":false,"total":records.len(),"items":records})).into_response()
         };
         Ok(Some(response))
@@ -969,13 +969,13 @@ async fn indexed_source_availability(State(host):State<Host>,Extension(plugin):E
 }
 
 async fn indexed_stats(State(host):State<Host>,Extension(plugin):Extension<Plugin>,
-    query:ExtractedQuery<IndexSelector>) -> Result<Json<Value>,ApiError> {
+    query:ExtractedQuery<IndexSelector>) -> Result<Json<index_overview::Stats>,ApiError> {
     let mut q=require(&plugin,Permission::Messages,query)?;
     if !plugin.permissions.contains(&Permission::Conversations) || !plugin.permissions.contains(&Permission::Contacts) {
         return Err(ApiError(StatusCode::FORBIDDEN,"permission_required"));
     }
     let scope=export_scope(&plugin,&mut q.platform,&mut q.account_id)?;
-    run_archive(host,move |store|index_overview::stats(store,scope)).await
+    archive_op(host,move |store|index_overview::stats(store,scope)).await.map(Json)
 }
 
 #[derive(serde::Deserialize)]

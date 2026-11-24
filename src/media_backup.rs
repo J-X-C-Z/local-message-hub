@@ -83,16 +83,36 @@ pub struct Imported {
     pub parent_synced: bool,
 }
 
+// Keep serialized field order identical to the old serde_json::Value map.
 #[derive(Serialize)]
 struct CatalogEntry {
-    ref_sha256: String,
     blob_sha256: String,
+    ref_sha256: String,
     size: u64,
     source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    wechat_leaf: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     wechat_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wechat_leaf: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn catalog_bytes(items: &[CatalogEntry], preview: &Preview, projected_hash: &str) -> Result<Vec<u8>> {
+    #[derive(Serialize)]
+    struct Catalog<'a> {
+        format: &'static str,
+        items: &'a [CatalogEntry],
+        projected_index_sha256: &'a str,
+        source_archive_sha256: &'a str,
+        version: u8,
+    }
+    serde_json::to_vec_pretty(&Catalog {
+        format: "lmh-private-media-catalog",
+        items,
+        projected_index_sha256: projected_hash,
+        source_archive_sha256: &preview.archive_sha256,
+        version: 1,
+    }).map_err(|_| MediaBackupError::Invalid)
 }
 
 struct ImportStage<'a> {
@@ -138,12 +158,7 @@ impl<'a> ImportStage<'a> {
         if self.catalog.windows(2).any(|pair| pair[0].ref_sha256 == pair[1].ref_sha256) {
             return Err(MediaBackupError::Invalid);
         }
-        let catalog = serde_json::to_vec_pretty(&serde_json::json!({
-            "format":"lmh-private-media-catalog","version":1,
-            "source_archive_sha256":preview.archive_sha256,
-            "projected_index_sha256":projected_hash,
-            "items":self.catalog,
-        })).map_err(|_| MediaBackupError::Invalid)?;
+        let catalog = catalog_bytes(&self.catalog, preview, projected_hash)?;
         let mut out = open_private_new(&self.root.join("catalog.json"))?;
         out.write_all(&catalog)?;
         out.sync_all()?;
@@ -371,16 +386,22 @@ fn parse_members(file: &mut File, file_len: u64) -> Result<BTreeMap<String, ZipM
 }
 
 fn read_member(file: &mut File, member: &ZipMember, output: &mut impl Write) -> Result<String> {
+    let mut digest = Sha256::new();
+    read_member_checked(file,member,output,|data|digest.update(data))?;
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn read_member_checked(file:&mut File,member:&ZipMember,output:&mut impl Write,
+    mut observe:impl FnMut(&[u8])) -> Result<()> {
     file.seek(SeekFrom::Start(member.data_start))?;
     let mut source = file.take(member.compressed);
     let mut plain = [0_u8; 64 * 1024];
-    let mut digest = Sha256::new();
     let mut crc = crc32fast::Hasher::new();
     let mut length = 0_u64;
     let mut write = |data: &[u8]| -> Result<()> {
         length += data.len() as u64;
         if length > member.size { return Err(MediaBackupError::Invalid); }
-        digest.update(data);
+        observe(data);
         crc.update(data);
         output.write_all(data)?;
         Ok(())
@@ -418,7 +439,7 @@ fn read_member(file: &mut File, member: &ZipMember, output: &mut impl Write) -> 
     if length != member.size || crc.finalize() != member.crc {
         return Err(MediaBackupError::Invalid);
     }
-    Ok(hex::encode(digest.finalize()))
+    Ok(())
 }
 
 fn validate_refs(projected: &Path, qq: &mut BTreeSet<String>, wechat: &mut BTreeSet<String>) -> Result<()> {
@@ -479,11 +500,12 @@ fn verify_archive(path: &Path, mut stage: Option<&mut ImportStage<'_>>) -> Resul
     let opened = file.metadata()?;
     if !opened.is_file() || meta.len() != opened.len() { return Err(MediaBackupError::Changed); }
     let archive_sha256 = read_digest(&mut file,&mut io::sink(),meta.len())?;
-    let entries = parse_members(&mut file,meta.len())?;
+    let mut entries = parse_members(&mut file,meta.len())?;
     let manifest_member = entries.get(MANIFEST).ok_or(MediaBackupError::Invalid)?;
-    let index_member = entries.get(INDEX).ok_or(MediaBackupError::Invalid)?;
+    let index_member = entries.get(INDEX).copied().ok_or(MediaBackupError::Invalid)?;
     let mut encoded = Vec::new();
-    read_member(&mut file,manifest_member,&mut encoded)?;
+    // The manifest has no independent SHA consumer; keep its length and CRC checks.
+    read_member_checked(&mut file,manifest_member,&mut encoded,|_|{})?;
     let manifest: Manifest = serde_json::from_slice(&encoded).map_err(|_| MediaBackupError::Invalid)?;
     // The typed manifest owns its fields. Release the raw member before
     // verification and indexing allocate their own working storage.
@@ -491,25 +513,26 @@ fn verify_archive(path: &Path, mut stage: Option<&mut ImportStage<'_>>) -> Resul
     if manifest.format != "local-message-hub-media-backup" || manifest.version != 1 || manifest.created_at < 0
         || manifest.media_count != manifest.media.len() || manifest.media_count != entries.len()-2
     { return Err(MediaBackupError::Invalid); }
-    let mut declared = BTreeSet::new();
     let mut qq = BTreeSet::new();
     let mut wechat = BTreeSet::new();
     let mut verified_bytes = 0_u64;
     let mut qq_entries = 0;
     let mut wechat_entries = 0;
-    for item in &manifest.media {
-        if !declared.insert(item.path.as_str()) || !hex_is(&item.sha256,64,true) {
+    for item in manifest.media {
+        // A missing or repeated path has no media record left to consume.
+        // Refuse it before classifying the path or touching media bytes.
+        let member = entries.remove(&item.path).ok_or(MediaBackupError::Invalid)?;
+        if !hex_is(&item.sha256,64,true) {
             return Err(MediaBackupError::Invalid);
         }
         let source = match kind(&item.path).ok_or(MediaBackupError::Invalid)? {
             Media::Qq(relative) => { qq.insert(relative.to_owned()); qq_entries += 1; "qq" }
             Media::Wechat(key) => { wechat.insert(key.to_owned()); wechat_entries += 1; "wechat" }
         };
-        let member = entries.get(&item.path).ok_or(MediaBackupError::Invalid)?;
         if item.size != member.size { return Err(MediaBackupError::Invalid); }
         let sha = match stage.as_deref_mut() {
-            Some(stage) => stage.record(&mut file,member,item,source)?,
-            None => read_member(&mut file,member,&mut io::sink())?,
+            Some(stage) => stage.record(&mut file,&member,&item,source)?,
+            None => read_member(&mut file,&member,&mut io::sink())?,
         };
         if sha != item.sha256 { return Err(MediaBackupError::Invalid); }
         verified_bytes += member.size;
@@ -533,7 +556,7 @@ fn verify_archive(path: &Path, mut stage: Option<&mut ImportStage<'_>>) -> Resul
         .expect("stage or temporary directory");
     let detached = data.path().join(INDEX);
     let mut output = open_private_new(&detached)?;
-    let index_sha256 = read_member(&mut file,index_member,&mut output)?;
+    let index_sha256 = read_member(&mut file,&index_member,&mut output)?;
     drop(output);
     let projection = project_snapshot(&detached,&projected).map_err(|_| MediaBackupError::Invalid)?;
     if projection.source_sha256 != index_sha256 { return Err(MediaBackupError::Changed); }
@@ -630,6 +653,37 @@ mod tests {
         check(&valid,true);
         check(&valid[..valid.len()-1],false);
         check(&with_extra,false);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn typed_catalog_keeps_legacy_exact_pretty_bytes_and_optional_fields() {
+        let preview = Preview {
+            archive_sha256: "a".repeat(64), index_sha256: "b".repeat(64),
+            verified_media_count: 3, verified_media_bytes: 24, referenced_qq_count: 1,
+            referenced_wechat_count: 2, reported_missing_media_count: 0,
+        };
+        let projected = "c".repeat(64);
+        let items = [
+            CatalogEntry { blob_sha256: "d".repeat(64), ref_sha256: "1".repeat(64),
+                size: 0, source: "qq", wechat_key: None, wechat_leaf: None },
+            CatalogEntry { blob_sha256: "e".repeat(64), ref_sha256: "2".repeat(64),
+                size: 23, source: "wechat", wechat_key: Some("9".repeat(64)),
+                wechat_leaf: Some("相片 \"晚餐\".jpg".into()) },
+            CatalogEntry { blob_sha256: "f".repeat(64), ref_sha256: "3".repeat(64),
+                size: 1, source: "wechat", wechat_key: Some("8".repeat(64)),
+                wechat_leaf: Some("".into()) },
+        ];
+        for count in 0..=items.len() {
+            let items = &items[..count];
+            let legacy = serde_json::to_vec_pretty(&serde_json::json!({
+                "format":"lmh-private-media-catalog","version":1,
+                "source_archive_sha256":preview.archive_sha256,
+                "projected_index_sha256":projected,
+                "items":items,
+            })).unwrap();
+            assert_eq!(catalog_bytes(items,&preview,&projected).unwrap(), legacy);
+        }
     }
 
     #[test]

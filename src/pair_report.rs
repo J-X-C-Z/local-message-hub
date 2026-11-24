@@ -1,5 +1,5 @@
 //! Private-conversation activity; no message bodies, sender identities, or titles.
-use crate::{annual_report::{Detail,MAX_ROWS,annual,period_bounds},plugins::AccountScope,store::{Store,StoreError}};
+use crate::{annual_report::{Detail,MAX_ROWS,annual_for_pair,period_bounds},plugins::AccountScope,store::{Store,StoreError}};
 use rusqlite::{Connection,OptionalExtension};
 use serde::Deserialize;
 use serde_json::{Value,json};
@@ -51,7 +51,7 @@ fn pair(db:&Connection,scope:&AccountScope,year:impl Into<Option<i32>>,conversat
     if !matches!(kind.as_str(),"private"|"direct"|"friend"|"single"|"personal"|"dm") {
         return Err(StoreError::BadQuery("pair reports require a private conversation"));
     }
-    let mut summary=annual(db,scope,year,Some(conversation),cap,detail)?;
+    let mut summary=annual_for_pair(db,scope,year,conversation,cap,detail)?;
     let fields=summary.as_object_mut().ok_or_else(bad)?;
     fields.retain(|key,_|matches!(key.as_str(),"platform"|"account_id"|"conversation_id"|"year"
         |"total_messages"|"sent_messages"|"received_messages"|"sent_ratio"|"active_days"

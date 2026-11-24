@@ -41,6 +41,44 @@ impl From<Query> for LegacyQuery {
     }
 }
 
+#[derive(Default)]
+struct DayStream {
+    current:Option<(NaiveDate,i64)>,
+    busiest:Option<(NaiveDate,i64)>,
+    run:Option<(i64,NaiveDate,NaiveDate)>,
+    streak:Option<(i64,NaiveDate,NaiveDate)>,
+    active:usize,
+}
+
+impl DayStream {
+    fn add(&mut self, day:NaiveDate, count:i64) {
+        if let Some((date,total))=&mut self.current
+            && *date==day {
+            *total+=count;
+            return;
+        }
+        self.flush();
+        self.current=Some((day,count));
+    }
+
+    fn flush(&mut self) {
+        let Some((day,count))=self.current.take() else {return;};
+        self.active+=1;
+        if self.busiest.is_none_or(|(_,best)|count>best) {
+            self.busiest=Some((day,count));
+        }
+        let (length,start)=match self.run {
+            Some((length,start,previous)) if previous.succ_opt()==Some(day)=>(length+1,start),
+            _=>(1,day),
+        };
+        let run=(length,start,day);
+        self.run=Some(run);
+        if self.streak.is_none_or(|(best,_,_)|length>best) {
+            self.streak=Some(run);
+        }
+    }
+}
+
 fn bad() -> StoreError {StoreError::BadQuery("invalid annual report request")}
 
 pub(crate) fn report(store:Store,scope:AccountScope,q:LegacyQuery,detail:Detail)->Result<Value,StoreError> {
@@ -68,7 +106,16 @@ pub(crate) fn period_bounds(year:Option<i32>)->Result<(Option<i64>,Option<i64>),
 
 pub(crate) fn annual(db:&Connection,scope:&AccountScope,year:impl Into<Option<i32>>,
     conversation:Option<&str>,row_cap:i64,detail:Detail)->Result<Value,StoreError> {
-    let year=year.into();
+    annual_inner(db,scope,year.into(),conversation,row_cap,detail,false)
+}
+
+pub(crate) fn annual_for_pair(db:&Connection,scope:&AccountScope,year:Option<i32>,
+    conversation:&str,row_cap:i64,detail:Detail)->Result<Value,StoreError> {
+    annual_inner(db,scope,year,Some(conversation),row_cap,detail,true)
+}
+
+fn annual_inner(db:&Connection,scope:&AccountScope,year:Option<i32>,
+    conversation:Option<&str>,row_cap:i64,detail:Detail,pair_only:bool)->Result<Value,StoreError> {
     let (lower,upper)=period_bounds(year)?;
     let date_condition=if year.is_some() {"AND timestamp>=?3 AND timestamp<?4"} else {""};
     let condition=if conversation.is_some() {"AND conversation_id COLLATE BINARY=?5"} else {""};
@@ -99,6 +146,9 @@ pub(crate) fn annual(db:&Connection,scope:&AccountScope,year:impl Into<Option<i3
     let mut stmt=db.prepare(&sql)?;
     let mut rows=stmt.query((&scope.platform,&scope.account_id,lower,upper,conversation,row_cap+1))?;
     let mut days=BTreeMap::<NaiveDate,i64>::new();
+    let mut stream=DayStream::default();
+    let mut negative_first=None;
+    let (mut pair_days,mut previous_pair_day)=(0_usize,None);
     let mut months=[0_i64;12];
     let mut hours=[0_i64;24];
     let mut heatmap=[[0_i64;24];7];
@@ -125,12 +175,30 @@ pub(crate) fn annual(db:&Connection,scope:&AccountScope,year:impl Into<Option<i3
         months[day.month0() as usize]+=count;
         hours[hour]+=count;
         heatmap[day.weekday().num_days_from_sunday() as usize][hour]+=count;
-        *days.entry(day).or_default()+=count;
+        if pair_only {
+            // SQLite date() emits one canonical text per valid date; ORDER BY
+            // day keeps all its hours and type buckets adjacent, even when
+            // negative years are not chronologically ordered as text.
+            if previous_pair_day!=Some(day) {
+                pair_days+=1;
+                previous_pair_day=Some(day);
+            }
+        } else if *negative_first.get_or_insert_with(||day.year()<0) {
+            *days.entry(day).or_default()+=count;
+        } else {
+            // SQLite date() emits negative-year text before all four-digit
+            // nonnegative years. This ordered stream is chronological once
+            // its first fully checked day is nonnegative.
+            stream.add(day,count);
+        }
     }
 
     // Tie policy matches the pinned report: oldest date, earliest hour,
     // and first occurrence of the longest consecutive active-day streak.
+    stream.flush();
+    let active_days=if pair_only {pair_days} else if negative_first==Some(true) {days.len()} else {stream.active};
     let busiest_day=days.iter().max_by_key(|(day,count)|(**count,std::cmp::Reverse(**day)))
+        .map(|(&day,&count)|(day,count)).or(stream.busiest)
         .map(|(day,count)|json!({"date":day.to_string(),"count":count}));
     let busiest_hour=hours.iter().enumerate().filter(|(_,count)|**count>0)
         .max_by_key(|(hour,count)|(**count,std::cmp::Reverse(*hour)))
@@ -148,6 +216,7 @@ pub(crate) fn annual(db:&Connection,scope:&AccountScope,year:impl Into<Option<i3
             streak=Some((streak_days,start.expect("first date sets start"),day));
         }
     }
+    let streak=streak.or(stream.streak);
     // Stock all-history reports fold the same month of different years into
     // one calendar-month bin; days and the streak retain full UTC+08 dates.
     let monthly:Vec<_>=months.iter().enumerate().map(|(i,n)|json!({"month":i+1,"count":n})).collect();
@@ -158,7 +227,7 @@ pub(crate) fn annual(db:&Connection,scope:&AccountScope,year:impl Into<Option<i3
     };
     let mut result=json!({"platform":scope.platform,"account_id":scope.account_id,"year":year,"conversation_id":conversation,
         "total_messages":total,"sent_messages":sent,"received_messages":received,"sent_ratio":ratio,
-        "active_days":days.len(),"first_timestamp":first,"last_timestamp":last,"monthly":monthly,"hourly":hourly,
+        "active_days":active_days,"first_timestamp":first,"last_timestamp":last,"monthly":monthly,"hourly":hourly,
         "busiest_day":busiest_day,"busiest_hour":busiest_hour,"activity_heatmap":heatmap,
         "longest_streak":streak.map(|(n,start,end)|json!({"days":n,"start_date":start.to_string(),"end_date":end.to_string()}))
     });

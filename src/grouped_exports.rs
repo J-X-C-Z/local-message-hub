@@ -5,7 +5,7 @@ use crate::{
     store::{Query, Result, Store, StoreError},
 };
 use rusqlite::params;
-use serde::Deserialize;
+use serde::{Deserialize,Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, io::Write};
 
@@ -104,7 +104,24 @@ pub(crate) fn contact_records(store:Store,scope:AccountScope,query:ContactExport
     Ok(records)
 }
 
+struct ObservedRow {
+    id:String,
+    name:Option<String>,
+    first_seen:i64,
+    last_seen:i64,
+    message_count:i64,
+}
+
 pub(crate) fn observed_records(store:Store,scope:AccountScope,query:Observed) -> Result<Option<Vec<Value>>> {
+    collect_observed(store,&scope,&query,|row|json!({
+        "source":"observed","id":row.id,"name":row.name,
+        "platform":scope.platform,"account_id":scope.account_id,"conversation_id":query.conversation_id,
+        "first_seen":row.first_seen,"last_seen":row.last_seen,"message_count":row.message_count
+    }))
+}
+
+fn collect_observed<T>(store:Store,scope:&AccountScope,query:&Observed,
+    mut project:impl FnMut(ObservedRow)->T) -> Result<Option<Vec<T>>> {
     if !bounded_id(&query.conversation_id) || query.source.as_deref().is_some_and(|s|s!="observed") {
         return Err(StoreError::BadQuery("invalid observed participant selection"));
     }
@@ -143,9 +160,8 @@ pub(crate) fn observed_records(store:Store,scope:AccountScope,query:Observed) ->
         if !bounded_id(&id) {return Err(StoreError::Schema);}
         aggregate=aggregate.saturating_add(id.len()+name.as_ref().map_or(0,String::len)+512);
         if aggregate>MAX_OUTPUT {return Err(StoreError::TooLarge);}
-        items.push(json!({"source":"observed","id":id,"name":name,
-            "platform":scope.platform,"account_id":scope.account_id,"conversation_id":query.conversation_id,
-            "first_seen":r.get::<_,i64>(2)?,"last_seen":r.get::<_,i64>(3)?,"message_count":r.get::<_,i64>(4)?}));
+        items.push(project(ObservedRow{id,name,first_seen:r.get(2)?,
+            last_seen:r.get(3)?,message_count:r.get(4)?}));
     }
     Ok(Some(items))
 }
@@ -185,14 +201,19 @@ const OBSERVED_CSV_LABELS: &[(&str,&str)] = &[
     ("last_seen","最后出现Unix秒"),("message_count","档案消息数"),
 ];
 
-fn observed_csv(records: &[Value]) -> Result<Vec<u8>> {
-    let mut out = Capped::default();
+fn observed_csv_header(out:&mut Capped) -> Result<()> {
     let limit = |_| StoreError::TooLarge;
     for (i, (_, label)) in OBSERVED_CSV_LABELS.iter().enumerate() {
         if i != 0 { out.write_all(b",").map_err(limit)?; }
-        csv_cell(&mut out, label).map_err(limit)?;
+        csv_cell(out, label).map_err(limit)?;
     }
-    out.write_all(b"\r\n").map_err(limit)?;
+    out.write_all(b"\r\n").map_err(limit)
+}
+
+fn observed_csv(records: &[Value]) -> Result<Vec<u8>> {
+    let mut out = Capped::default();
+    let limit = |_| StoreError::TooLarge;
+    observed_csv_header(&mut out)?;
     for row in records {
         for (i, (key, _)) in OBSERVED_CSV_LABELS.iter().enumerate() {
             if i != 0 { out.write_all(b",").map_err(limit)?; }
@@ -205,6 +226,62 @@ fn observed_csv(records: &[Value]) -> Result<Vec<u8>> {
         out.write_all(b"\r\n").map_err(limit)?;
     }
     Ok(out.bytes)
+}
+
+// Alphabetic field order is the existing serde_json Value map wire order.
+#[derive(Serialize)]
+struct ObservedWire<'a> {
+    account_id:&'a str,
+    conversation_id:&'a str,
+    first_seen:i64,
+    id:&'a str,
+    last_seen:i64,
+    message_count:i64,
+    name:Option<&'a str>,
+    platform:&'a str,
+    source:&'static str,
+}
+
+pub(crate) fn observed_download(store:Store,scope:AccountScope,query:Observed) -> Result<Option<Vec<u8>>> {
+    // Finish the same snapshot checks and row decoding before encoding. In
+    // particular, do not return an output-cap error before a bad later row.
+    let Some(records)=collect_observed(store,&scope,&query,|row|row)? else {return Ok(None)};
+    encode_observed(&records,&scope,&query)
+}
+
+fn encode_observed(records:&[ObservedRow],scope:&AccountScope,query:&Observed) -> Result<Option<Vec<u8>>> {
+    let mut out=Capped::default();
+    let limit=|_|StoreError::TooLarge;
+    match query.format {
+        TabularFormat::Json=>{
+            out.write_all(b"[").map_err(limit)?;
+            for (i,row) in records.iter().enumerate() {
+                if i!=0 {out.write_all(b",").map_err(limit)?;}
+                let wire=ObservedWire{account_id:&scope.account_id,conversation_id:&query.conversation_id,
+                    first_seen:row.first_seen,id:&row.id,last_seen:row.last_seen,message_count:row.message_count,
+                    name:row.name.as_deref(),platform:&scope.platform,source:"observed"};
+                serde_json::to_writer(&mut out,&wire).map_err(|e|if e.is_io(){StoreError::TooLarge}
+                    else{StoreError::BadQuery("could not serialize export")})?;
+            }
+            out.write_all(b"]").map_err(limit)?;
+        }
+        TabularFormat::Csv=>{
+            observed_csv_header(&mut out)?;
+            for row in records {
+                let first=row.first_seen.to_string();
+                let last=row.last_seen.to_string();
+                let count=row.message_count.to_string();
+                for (i,value) in ["observed",scope.platform.as_str(),scope.account_id.as_str(),
+                    query.conversation_id.as_str(),row.id.as_str(),row.name.as_deref().unwrap_or(""),
+                    first.as_str(),last.as_str(),count.as_str()].into_iter().enumerate() {
+                    if i!=0 {out.write_all(b",").map_err(limit)?;}
+                    csv_cell(&mut out,value).map_err(limit)?;
+                }
+                out.write_all(b"\r\n").map_err(limit)?;
+            }
+        }
+    }
+    Ok(Some(out.bytes))
 }
 
 pub(crate) fn download(records:Vec<Value>,format:TabularFormat,contacts:bool) -> Result<Vec<u8>> {

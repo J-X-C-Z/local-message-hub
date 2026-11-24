@@ -6,7 +6,7 @@ use crate::{
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{io, path::Path};
 
 const MODE: &str = "lmh-qq-message-csv-v1";
 const HEADER: [&str; 13] = [
@@ -143,6 +143,27 @@ fn decode(bytes: &[u8], account: &str, self_sender: &str) -> Result<(Vec<Normali
     Ok((messages,skipped))
 }
 
+/// Match serde_json's full normalized JSON encoding without retaining it.
+#[derive(Default)]
+struct EncodedLen(usize);
+
+impl io::Write for EncodedLen {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.checked_add(bytes.len())
+            .ok_or_else(|| io::Error::other("normalized JSON size overflow"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
+fn check_normalized_size(messages: &[NormalizedMessage]) -> Result<()> {
+    let mut len = EncodedLen::default();
+    serde_json::to_writer(&mut len, messages).map_err(|_| ImportError::Invalid)?;
+    if len.0 > MAX_BATCH_BYTES { return Err(ImportError::Invalid); }
+    Ok(())
+}
+
 fn plan(source: &Path, archive: &EventStore, account: &str, self_sender: &str) -> Result<(IngestRequest,usize)> {
     let bytes = read_stable_source(source,MAX_BATCH_BYTES).map_err(|_|ImportError::Source)?;
     let (messages,skipped) = decode(&bytes,account,self_sender)?;
@@ -150,9 +171,7 @@ fn plan(source: &Path, archive: &EventStore, account: &str, self_sender: &str) -
         .map_err(|_|ImportError::Invalid)?;
     let request = IngestRequest { idempotency_key:hex::encode(Sha256::digest(digest)), messages };
     request.validate(OFFLINE_PRODUCER).map_err(|_|ImportError::Invalid)?;
-    if serde_json::to_vec(&request.messages).map_err(|_|ImportError::Invalid)?.len() > MAX_BATCH_BYTES {
-        return Err(ImportError::Invalid);
-    }
+    check_normalized_size(&request.messages)?;
     Ok((request,skipped))
 }
 
@@ -191,6 +210,45 @@ mod tests {
         assert_eq!(rows[0].timestamp,1_724_128_496);
         assert!(rows[0].is_self);
         assert!(matches!(decode(&data,"A","not-present"),Err(ImportError::Sender)));
+    }
+
+    #[test]
+    fn counted_normalized_size_matches_full_serde_cap() {
+        // CSV unescapes doubled quotes; serde_json then counts that quote,
+        // backslash, embedded CRLF and multibyte Unicode exactly as before.
+        let data=blob(&[",qq,A,title,name,self,text,\"你, \"\"好\"\"\\\r\n🦀\",,,[],room,m1\r\n"]);
+        let (rows,skipped)=decode(&data,"A","self").unwrap();
+        assert_eq!(skipped,0);
+        let mut count = EncodedLen::default();
+        serde_json::to_writer(&mut count, &rows).unwrap();
+        assert_eq!(count.0, serde_json::to_vec(&rows).unwrap().len());
+
+        // Nine valid text rows stay below the individual field limit.
+        // Distribute ordinary text across them to land on each exact
+        // normalized JSON boundary without any individually oversized cell.
+        let rows: Vec<_>=(0..9).map(|i|{
+            let mut row=rows[0].clone();
+            row.message_id=format!("msg-{i}");
+            row.text=Some(format!("{}{}", row.text.as_deref().unwrap(), "x".repeat(56_000)));
+            row
+        }).collect();
+        let current=serde_json::to_vec(&rows).unwrap().len();
+        for limit in [MAX_BATCH_BYTES-1, MAX_BATCH_BYTES, MAX_BATCH_BYTES+1] {
+            let remaining=limit.checked_sub(current).unwrap();
+            let mut req=IngestRequest{idempotency_key:"fixture".into(),messages:rows.clone()};
+            for (i,row) in req.messages.iter_mut().enumerate() {
+                row.text.as_mut().unwrap().push_str(
+                    &"x".repeat(remaining/rows.len() + usize::from(i < remaining%rows.len()))
+                );
+            }
+            req.validate(OFFLINE_PRODUCER).unwrap();
+            let old=serde_json::to_vec(&req.messages).unwrap();
+            assert_eq!(old.len(),limit);
+            let mut counter=EncodedLen::default();
+            serde_json::to_writer(&mut counter,&req.messages).unwrap();
+            assert_eq!(counter.0,old.len());
+            assert_eq!(check_normalized_size(&req.messages).is_ok(),limit<=MAX_BATCH_BYTES);
+        }
     }
 
     #[test]

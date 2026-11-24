@@ -3,10 +3,29 @@ use super::{LegacyTextRow,OFFLINE_PRODUCER};
 use crate::events::{IngestRequest,MAX_BATCH_BYTES};
 use serde::{Deserialize,Deserializer,Serialize,de::{self,SeqAccess,Visitor}};
 use serde_json::value::RawValue;
-use std::{collections::BTreeSet,fmt,marker::PhantomData};
+use std::{collections::BTreeSet,fmt,io,marker::PhantomData};
 
 const MAX_ROWS:usize=100;
 const MAX_SAMPLE:usize=5;
+
+#[derive(Default)]
+struct EncodedLen(usize);
+
+impl io::Write for EncodedLen {
+    fn write(&mut self, bytes:&[u8])->io::Result<usize> {
+        self.0=self.0.checked_add(bytes.len())
+            .ok_or_else(||io::Error::other("normalized JSON size overflow"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self)->io::Result<()> {Ok(())}
+}
+
+pub(super) fn encoded_len(value:&impl Serialize)->Result<usize,Error> {
+    let mut len=EncodedLen::default();
+    serde_json::to_writer(&mut len,value).map_err(|_|Error::Format)?;
+    Ok(len.0)
+}
 
 #[derive(Debug)]
 pub(crate) enum Error { Format,Scope,Limit }
@@ -99,7 +118,7 @@ pub(crate) fn preview(body:&[u8],platform:&str,account:&str)->Result<Report,Erro
             report.errors.push(RowError{row:index+1,error:"duplicate_message_id"});
             continue;
         }
-        normalized_size+=serde_json::to_vec(message).map_err(|_|Error::Format)?.len()
+        normalized_size+=encoded_len(message)?
             + if report.valid==0 {0} else {1};
         if normalized_size>MAX_BATCH_BYTES{return Err(Error::Limit);}
         report.valid+=1;
@@ -128,6 +147,39 @@ fn prefix(value:&str,bytes:usize)->String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn counted_normalized_length_preserves_exact_preview_cap() {
+        let mut records=(0..9).map(|n|json!({"platform":"qq","account_id":"A",
+            "conversation_id":"group","id":format!("record-{n}"),"sender_name":"示例",
+            "timestamp":1700000000,"is_self":false,"type":"text",
+            "text":format!("界\"\\\n{}", "a".repeat(if n<8 {58000} else {0}))}))
+            .collect::<Vec<_>>();
+        let normalize=|rows:&[serde_json::Value]|rows.iter().map(|r|
+            serde_json::from_value::<LegacyTextRow>(r.clone()).unwrap()
+                .normalize("qq","A").unwrap()).collect::<Vec<_>>();
+        let base=serde_json::to_vec(&normalize(&records)).unwrap().len();
+        for (target,admitted) in [(MAX_BATCH_BYTES-1,true),(MAX_BATCH_BYTES,true),
+            (MAX_BATCH_BYTES+1,false)] {
+            records[8]["text"]=json!("界\"\\\n".to_owned()+&"a".repeat(target-base));
+            let body=serde_json::to_vec(&records).unwrap();
+            assert!(body.len()<=MAX_BATCH_BYTES);
+            let messages=normalize(&records);
+            let mut modeled=2+messages.len()-1;
+            for message in &messages {
+                let old=serde_json::to_vec(message).unwrap();
+                let new=encoded_len(message).unwrap();
+                assert_eq!(new,old.len());
+                modeled+=new;
+            }
+            assert_eq!(modeled,target);
+            if admitted {
+                assert_eq!(preview(&body,"qq","A").unwrap().valid,9);
+            } else {
+                assert!(matches!(preview(&body,"qq","A"),Err(Error::Limit)));
+            }
+        }
+    }
 
     #[test]
     fn raw_row_wire_spans_match_owned_reference() {

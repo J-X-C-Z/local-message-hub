@@ -121,9 +121,10 @@ pub fn commit(file:&Path,directory:&Path,account:&str,confirmation:&str)->Result
     let mut result=Receipt{batch_id:confirmation.to_owned(),created:0,unchanged:0};
     for post in plan.posts {
         let existing=tx.query_row("SELECT id,author_id,created_at,text FROM native_detached_moments_v1
-            WHERE account=? AND id=?", (account,&post.id),row).optional()?;
-        if let Some(existing)=existing {
-            if existing!=post {return Err(Error::Conflict);}
+            WHERE account=? AND id=?", (account,&post.id),
+            |r| same_post(r,&post)).optional()?;
+        if let Some(same)=existing {
+            if !same {return Err(Error::Conflict);}
             result.unchanged+=1;
             continue;
         }
@@ -136,6 +137,31 @@ pub fn commit(file:&Path,directory:&Path,account:&str,confirmation:&str)->Result
         (account,confirmation,result.created,result.unchanged))?;
     tx.commit()?;
     Ok(result)
+}
+
+// Mirror the pinned driver's String column validation, without copying a
+// valid value. In particular, a later malformed column must still fail even
+// when an earlier field would make this post unequal.
+fn post_text<'r>(r:&'r rusqlite::Row<'_>,column:usize)->rusqlite::Result<&'r str> {
+    use rusqlite::{Error,types::FromSqlError};
+    let value=r.get_ref(column)?;
+    match value.as_str() {
+        Ok(text)=>Ok(text),
+        Err(FromSqlError::InvalidType)=>Err(Error::InvalidColumnType(
+            column,r.as_ref().column_name(column)?.into(),value.data_type())),
+        Err(FromSqlError::OutOfRange(n))=>Err(Error::IntegralValueOutOfRange(column,n)),
+        Err(FromSqlError::Other(err))=>Err(Error::FromSqlConversionFailure(column,value.data_type(),err)),
+        Err(err)=>Err(Error::FromSqlConversionFailure(column,value.data_type(),Box::new(err))),
+    }
+}
+
+fn same_post(r:&rusqlite::Row<'_>,post:&Post)->rusqlite::Result<bool> {
+    let id=post_text(r,0)?;
+    let author_id=post_text(r,1)?;
+    let created_at:i64=r.get(2)?;
+    let text=post_text(r,3)?;
+    Ok(id==post.id.as_str() && author_id==post.author_id.as_str()
+        && created_at==post.created_at && text==post.text.as_str())
 }
 
 fn row(r:&rusqlite::Row<'_>)->rusqlite::Result<Post> {
@@ -236,7 +262,7 @@ fn export_bound(raw:Option<&str>,end:bool)->Result<Option<i64>>{
 }
 
 // This projection is used only while the SQLite row is live. Match the
-// owned Post's field order; page, import and commit still use owned posts.
+// owned Post's field order; page and imported request payloads still own posts.
 #[derive(Serialize)]
 struct ExportPost<'a> { id:&'a str, author_id:&'a str, created_at:i64, text:&'a str }
 

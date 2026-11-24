@@ -188,7 +188,7 @@ async fn accounts(State(host):State<Host>,Extension(plugin):Extension<Plugin>,Ra
     indexed_accounts(State(host),Extension(plugin),query).await
 }
 async fn stats(State(host):State<Host>,Extension(plugin):Extension<Plugin>,RawQuery(raw):RawQuery,
-    query:ExtractedQuery<crate::index_overview::Selector>) -> Result<Json<Value>,ApiError> {
+    query:ExtractedQuery<crate::index_overview::Selector>) -> Result<Json<crate::index_overview::Stats>,ApiError> {
     valid_encoding(raw)?;
     indexed_stats(State(host),Extension(plugin),query).await
 }

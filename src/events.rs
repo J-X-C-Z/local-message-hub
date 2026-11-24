@@ -792,6 +792,12 @@ impl EventStore {
         self.ingest_with_policy(crate::legacy_import::OFFLINE_PRODUCER, request, true, false, None, None)
     }
 
+    /// Explicit local wecom-rendered-v1 commit only; retains the legacy receipt owner.
+    pub(crate) fn import_wecom_rendered(&self, request: IngestRequest) -> Result<IngestReceipt> {
+        self.ingest_with_policy_and_digest(crate::legacy_import::OFFLINE_PRODUCER,
+            request, true, false, None, None, |request, _| bounded_unprogressed_digest(request))
+    }
+
     /// Apply the exact old WeCom text identity plus local snapshot progress.
     /// No provider/journal event is emitted, including for metadata-only batches.
     pub(crate) fn import_wecom_sync(&self,request:IngestRequest,account:&str,
@@ -902,11 +908,18 @@ impl EventStore {
 
     fn ingest_with_policy(&self, producer: &str, request: IngestRequest, offline: bool,
         guarded: bool, scope: Option<&AccountScope>, progress: Option<Progress<'_>>) -> Result<IngestReceipt> {
+        self.ingest_with_policy_and_digest(producer, request, offline, guarded, scope, progress, ingest_digest)
+    }
+
+    fn ingest_with_policy_and_digest(&self, producer: &str, request: IngestRequest, offline: bool,
+        guarded: bool, scope: Option<&AccountScope>, progress: Option<Progress<'_>>,
+        encode_digest: fn(&IngestRequest, Option<&source_progress::Advance>) -> Result<[u8;32]>)
+        -> Result<IngestReceipt> {
         let advance = match progress { Some(Progress::Source(advance))=>Some(advance),_=>None };
         if let Some(advance) = advance { advance.validate()?; }
         if guarded != self.guard.is_some() || (guarded && !offline) { return Err(EventError::ProfileLocked); }
         request.validate_for_policy(producer, matches!(progress, Some(Progress::WecomSync(_))))?;
-        let digest=ingest_digest(&request,advance)?;
+        let digest=encode_digest(&request,advance)?;
         // Refuse unrelated/replaced DBs before opening read-write at all; recheck
         // on the actual writer transaction so aliases cannot select another archive.
         self.verify()?;
@@ -1074,6 +1087,57 @@ fn ingest_digest(request:&IngestRequest,advance:Option<&source_progress::Advance
     Ok(digest.into())
 }
 
+/// Hash the exact compact normalized array used by existing unprogressed receipts,
+/// without holding its complete encoding. Batch serializer fragments on the stack.
+fn bounded_unprogressed_digest(request: &IngestRequest) -> Result<[u8; 32]> {
+    const BLOCK: usize = 8192;
+    struct Sink {
+        hash: Sha256,
+        pending: [u8; BLOCK],
+        used: usize,
+        len: usize,
+    }
+    impl io::Write for Sink {
+        fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
+            let len = bytes.len();
+            self.len = self.len.checked_add(len)
+                .ok_or_else(|| io::Error::other("normalized JSON size overflow"))?;
+            while !bytes.is_empty() {
+                if self.used == 0 && bytes.len() >= BLOCK {
+                    let full = bytes.len() / BLOCK * BLOCK;
+                    self.hash.update(&bytes[..full]);
+                    bytes = &bytes[full..];
+                } else {
+                    let n = bytes.len().min(BLOCK - self.used);
+                    self.pending[self.used..self.used + n].copy_from_slice(&bytes[..n]);
+                    self.used += n;
+                    bytes = &bytes[n..];
+                    if self.used == BLOCK {
+                        self.hash.update(&self.pending);
+                        self.used = 0;
+                    }
+                }
+            }
+            Ok(len)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.used != 0 {
+                self.hash.update(&self.pending[..self.used]);
+                self.used = 0;
+            }
+            Ok(())
+        }
+    }
+    let mut sink = Sink { hash: Sha256::new(), pending: [0; BLOCK], used: 0, len: 0 };
+    serde_json::to_writer(&mut sink, &request.messages).map_err(|_| EventError::Storage)?;
+    if sink.len > MAX_BATCH_BYTES {
+        return Err(EventError::BadRequest("message batch exceeds byte limit"));
+    }
+    io::Write::flush(&mut sink).map_err(|_| EventError::Storage)?;
+    Ok(sink.hash.finalize().into())
+}
+
 fn lookup_ingest_receipt(conn:&Connection,producer:&str,key:&str)
     ->Result<Option<(Vec<u8>,IngestReceipt)>> {
     Ok(conn.query_row(
@@ -1090,7 +1154,7 @@ fn lookup_ingest_receipt(conn:&Connection,producer:&str,key:&str)
 pub(crate) struct LegacyImportProof { digest:Vec<u8>, receipt:IngestReceipt }
 impl LegacyImportProof {
     pub(crate) fn verify(self,request:&IngestRequest)->Result<IngestReceipt> {
-        if self.digest.as_slice()!=ingest_digest(request,None)?.as_slice() {
+        if self.digest.as_slice()!=bounded_unprogressed_digest(request)?.as_slice() {
             return Err(EventError::Storage);
         }
         Ok(self.receipt)

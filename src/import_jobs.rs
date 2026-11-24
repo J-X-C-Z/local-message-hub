@@ -265,10 +265,13 @@ pub(crate) fn cancel(store: &EventStore, plugin: &str, scope: &AccountScope,
 // Read and validate the same scoped, bounded payload for commit and
 // explicit read-only proof. Never use the stored JSON string as the digest.
 fn pending_request(db:&Connection,key:&str,job:&Job,scope:&AccountScope)->Result<IngestRequest,Error> {
-    let payload: String = db.query_row("SELECT payload FROM native_local_import_jobs
+    let request: IngestRequest = db.query_row_and_then("SELECT payload FROM native_local_import_jobs
           WHERE owner=? AND job=? AND length(CAST(payload AS BLOB))<=?",
-        params![key,job.job_id,MAX_BATCH_BYTES + 256], |r| r.get(0))?;
-    let request: IngestRequest = serde_json::from_str(&payload).map_err(|_| Error::Storage)?;
+        params![key,job.job_id,MAX_BATCH_BYTES + 256], |r| -> Result<IngestRequest,Error> {
+            let value = r.get_ref(0)?;
+            let payload = value.as_str().map_err(|_| Error::Storage)?;
+            serde_json::from_str(payload).map_err(|_| Error::Storage)
+        })?;
     request.validate(OFFLINE_PRODUCER).map_err(|_| Error::Storage)?;
     if request.messages.len() != job.rows || request.idempotency_key != job.confirmation ||
         !request.messages.iter().all(|m| m.platform == scope.platform && m.account_id == scope.account_id) {

@@ -247,6 +247,13 @@ impl Bundle {
     }
 
     pub(crate) fn read(&self, key: &MessageKey, id: &str) -> io::Result<Option<Vec<u8>>> {
+        self.read_with_verified_digest(key,id).map(|pair|pair.map(|(bytes,_)|bytes))
+    }
+
+    /// Return the digest computed from these same owned bytes and verified
+    /// against the catalog after the file and length checks.
+    pub(crate) fn read_with_verified_digest(&self,key:&MessageKey,id:&str)
+        ->io::Result<Option<(Vec<u8>,String)>> {
         let Some(attachment) = self.list(key).iter().find(|a| a.id == id) else { return Ok(None); };
         let file = open_file(&self.0.objects.join(&attachment.item.blob_sha256))?;
         let mark = Stamp::checked(file.metadata()?,false)?;
@@ -254,9 +261,11 @@ impl Bundle {
         let mut bytes = Vec::with_capacity(mark.size as usize);
         (&file).take(mark.size + 1).read_to_end(&mut bytes)?;
         if Stamp::checked(file.metadata()?,false)? != mark
-            || bytes.len() as u64 != mark.size || sha(&bytes) != attachment.item.blob_sha256
+            || bytes.len() as u64 != mark.size
         { return Err(invalid()); }
-        Ok(Some(bytes))
+        let digest=sha(&bytes);
+        if digest!=attachment.item.blob_sha256 {return Err(invalid());}
+        Ok(Some((bytes,digest)))
     }
 }
 

@@ -346,9 +346,10 @@ async fn verified_bytes(
         }
         // Read/hash the whole catalog-approved object, not a byte interval.
         // Buffered bytes remain immutable following the final scope/row fence.
-        let value=link.bundle.read(&key,&id).map_err(|_|unavailable())?.ok_or_else(missing)?;
+        let (value,digest)=link.bundle.read_with_verified_digest(&key,&id)
+            .map_err(|_|unavailable())?.ok_or_else(missing)?;
         if value.len()>MAX_VERIFIED_BYTES{return Err(unavailable());}
-        if !bool::from(digest(value.as_slice()).as_bytes().ct_eq(q.expected_sha256.as_bytes())){
+        if !bool::from(digest.as_bytes().ct_eq(q.expected_sha256.as_bytes())){
             return Err(Api(StatusCode::CONFLICT,"live_imported_media_digest_mismatch"));
         }
         recheck(link,events,&key,live)?;

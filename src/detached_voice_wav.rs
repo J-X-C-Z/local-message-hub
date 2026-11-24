@@ -200,9 +200,10 @@ pub(crate) fn inspect(bundle:&Path,key:&MessageKey,attachment:&str)->io::Result<
     let (catalogue,snapshot,index)=Bundle::open(bundle).map_err(|_|invalid())?;
     verify(&catalogue,&snapshot)?;
     require_voice(&index,key)?;
-    let audio=Zeroizing::new(catalogue.read(key,attachment).map_err(|_|invalid())?.ok_or_else(invalid)?);
+    let (audio,audio_digest)=catalogue.read_with_verified_digest(key,attachment)
+        .map_err(|_|invalid())?.ok_or_else(invalid)?;
+    let audio=Zeroizing::new(audio);
     let wav=pcm(audio.as_slice()).ok_or_else(unsupported)?;
-    let audio_digest=sha(audio.as_slice());
     // Retain the original PCM confirmation contract. The result ledger
     // separately binds its entry to the private directory instance.
     let witness=binding(&["voice-snapshot-witness",catalogue.catalog_stamp(),&key.platform,
