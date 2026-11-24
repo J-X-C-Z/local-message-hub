@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>本地档案 · 只读验证页</title>
+  <link rel="stylesheet" href="/api/_reader/reader.css">
+  <script src="/api/_reader/reader.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="label">LOCAL MESSAGE HUB / READ-ONLY</p>
+      <h1>本地档案</h1>
+      <p>仅显示当前授权账号的已存档文本，不连接任何消息平台。</p>
+      <button id="reload" type="button">重新读取</button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </header>
+    <div class="columns">
+      <section aria-labelledby="conversations-title">
+        <h2 id="conversations-title">会话</h2>
+        <ul id="conversations"></ul>
+      </section>
+      <section aria-labelledby="messages-title">
+        <h2 id="messages-title">消息</h2>
+        <p id="selected"></p>
+        <ol id="messages"></ol>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Detached Local Message Hub campus articles v1",
+  "description": "Operator-curated public SYSU text and a bounded public manual WeChat subset. Runtime additionally enforces UTF-8 byte limits, date and safe URL canonicalization, exact profile, and distinct article identities. This schema is not evidence of source authenticity.",
+  "type": "object",
+  "required": ["version", "profile", "articles"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "profile": { "$ref": "#/$defs/slug" },
+    "articles": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "title", "source_id", "source_name", "category"],
+        "allOf": [
+          {
+            "if": { "properties": { "source_id": { "const": "wechat-manual" } } },
+            "then": {
+              "properties": {
+                "source_name": { "const": "微信公众号公开文章（按链接导入）" },
+                "category": { "const": "wechat" }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "url": { "type": "string", "maxLength": 1024,
+            "description": "Canonicalizable HTTPS SYSU article URL (no query) or a strict mp.weixin.qq.com/s public article URL (explicit __biz, idx, mid, sn, plus allowlisted tracking only); no credentials or ports." },
+          "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "published_at": { "type": "string", "pattern": "^(?:[0-9]{4}-[0-9]{2}-[0-9]{2})?$" },
+          "summary": { "type": "string", "maxLength": 2048 },
+          "source_id": { "$ref": "#/$defs/slug" },
+          "source_name": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "category": { "$ref": "#/$defs/slug" },
+          "content": { "type": "string", "maxLength": 16384 }
+        }
+      }
+    }
+  },
+  "$defs": { "slug": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" } }
+}

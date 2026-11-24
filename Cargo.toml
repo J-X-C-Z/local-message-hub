@@ -1,0 +1,45 @@
+[package]
+name = "local-message-hub-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[dependencies]
+async-stream = "=0.3.6"
+axum = "=0.8.9"
+base64 = "=0.22.1"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+getrandom = "=0.4.3"
+ring = "=0.17.14"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+zeroize = "=1.9.1"
+hex = "=0.4.3"
+regex = "=1.13.1"
+rusqlite = { version = "=0.32.1", features = ["bundled", "hooks", "limits"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["raw_value"] }
+sha2 = "=0.10.9"
+subtle = "=2.6.1"
+thiserror = "=2.0.21"
+url = "=2.5.8"
+# Deflate backend for the limited ZIP preview; no encryption/other codecs.
+flate2 = "=1.1.11"
+crc32fast = "=1.5.5"
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+
+tempfile = "=3.27.0"
+
+[dev-dependencies]
+zip = { version = "=2.6.1", default-features = false, features = ["deflate-flate2", "flate2"] }
+tower = { version = "=0.5.3", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "=1.1.6", features = ["fs", "process"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rustix = { version = "=1.1.6", features = ["fs"] }

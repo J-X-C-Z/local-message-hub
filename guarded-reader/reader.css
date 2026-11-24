@@ -1,0 +1,14 @@
+:root { color-scheme: light; background: #f0f2f5; color: #202a3b; font-family: sans-serif; }
+body { margin: 0; }
+main { max-width: 64rem; margin: auto; padding: clamp(1rem, 3vw, 2rem); }
+header, section { background: #fff; border: 1px solid #dce1e8; border-radius: .7rem; padding: 1.15rem; }
+.label { font-size: .75rem; letter-spacing: .12em; color: #496484; }
+h1, h2, p { margin: 0 0 .7rem; }
+.columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); gap: 1rem; margin-top: 1rem; }
+button { font: inherit; padding: .4rem .65rem; background: #e9eff7; color: #172e4a; border: 1px solid #9bb0cb; border-radius: .35rem; cursor: pointer; }
+button:focus-visible { outline: 2px solid #395f91; outline-offset: 2px; }
+ul, ol { padding-left: 1.25rem; }
+li { margin: 0 0 .6rem; overflow-wrap: anywhere; }
+li p { white-space: pre-wrap; }
+#status { margin: .7rem 0 0; min-height: 1.5em; }
+@media (max-width: 42rem) { .columns { grid-template-columns: 1fr; } }

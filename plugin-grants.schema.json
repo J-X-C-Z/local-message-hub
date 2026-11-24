@@ -1,0 +1,1036 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Local Message Hub plugin grants, v1",
+  "description": "Host-owner grants loaded at startup. Tokens are generated independently per plugin; store only their SHA-256 verifier in this file.",
+  "type": "object",
+  "required": [
+    "version",
+    "grants"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "grants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "permissions",
+          "token_sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?(\\.[a-z]([a-z0-9-]*[a-z0-9])?)*$"
+          },
+          "kind": {
+            "enum": [
+              "desktop",
+              "tool",
+              "producer",
+              "scoped-tool",
+              "scoped-producer",
+              "campus-reader",
+              "campus-editor"
+            ]
+          },
+          "permissions": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "conversations.read",
+                "messages.read",
+                "messages.export",
+                "media.read",
+                "media.live_imported.read",
+                "media.live_imported.bytes.read",
+                "moments.read",
+                "moments.export",
+                "contacts.read",
+                "events.read",
+                "messages.ingest",
+                "conversations.metadata.write",
+                "contacts.identity.write",
+                "metadata.audit.read",
+                "mcp.sources.read",
+                "mcp.prompts.read",
+                "mcp.incoming.read",
+                "mcp.conversation_note.write",
+                "legacy.http.read",
+                "legacy.search.read",
+                "analytics.annual.read",
+                "analytics.pair.read",
+                "drafts.read",
+                "drafts.write",
+                "notifications.read",
+                "notifications.write",
+                "campus.read",
+                "campus.bookmarks.write",
+                "legacy.browser.read",
+                "imports.local.manage",
+                "analytics.profiles",
+                "sources.jobs.manage",
+                "analytics.relationships",
+                "operations.read",
+                "drafts.review.queue",
+                "client.preferences.manage",
+                "events.legacy.read",
+                "voice.transcription.read",
+                "voice.transcription.write",
+                "mcp.discovery.read",
+                "campus.events.write",
+                "exports.presets.manage",
+                "campus.sources.preferences.write",
+                "campus.scoring.write",
+                "campus.profile.display.write",
+                "campus.sources.registration.write"
+              ]
+            }
+          },
+          "token_sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "account_scope": {
+            "type": "object",
+            "description": "Exact account scope. Required for scoped-tool and scoped-producer; optional for desktop. Other grant kinds must omit it.",
+            "required": [
+              "platform",
+              "account_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "platform": {
+                "enum": [
+                  "wechat",
+                  "wecom",
+                  "qq",
+                  "telegram",
+                  "email"
+                ]
+              },
+              "account_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^(?!\\s)(?!.*[\\x00-\\x1f\\x7f-\\x9f]).*\\S$",
+                "description": "Exact case-sensitive UTF-8 account identifier, at most 256 UTF-8 bytes; no leading/trailing whitespace or control characters."
+              }
+            }
+          },
+          "campus_profile": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          }
+        },
+        "allOf": [
+          {
+            "if":{"properties":{"permissions":{"contains":{"const":"media.live_imported.bytes.read"}}}},
+            "then":{"properties":{"permissions":{"contains":{"const":"media.live_imported.read"}}}}
+          },
+          {
+            "if":{"properties":{"permissions":{"contains":{"const":"media.live_imported.read"}}}},
+            "then":{"required":["account_scope"],"properties":{
+              "kind":{"const":"desktop"},"account_scope":{"properties":{"platform":{"enum":["qq","wechat"]}}},
+              "permissions":{"allOf":[{"contains":{"const":"messages.read"}},{"contains":{"const":"media.read"}}]}
+            }}
+          },
+          {
+            "if": {"properties":{"permissions":{"contains":{"enum":["moments.read","moments.export"]}}}},
+            "then": {"required":["account_scope"],"properties":{
+              "kind":{"const":"desktop"},
+              "account_scope":{"properties":{"platform":{"const":"wechat"}}},
+              "permissions":{"contains":{"const":"moments.read"}}
+            }}
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "producer",
+                    "scoped-producer"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "messages.ingest"
+                  },
+                  "maxItems": 3,
+                  "items": {
+                    "enum": [
+                      "messages.ingest",
+                      "sources.jobs.manage",
+                      "operations.read"
+                    ]
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "permissions": {
+                  "not": {
+                    "contains": {
+                      "const": "messages.ingest"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "account_scope"
+              ]
+            },
+            "then": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "desktop",
+                    "scoped-tool",
+                    "scoped-producer"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "scoped-producer"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "messages.export",
+                      "media.read"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "contains": {
+                    "const": "messages.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "conversations.metadata.write",
+                      "contacts.identity.write",
+                      "metadata.audit.read"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "conversations.metadata.write"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "conversations.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "contacts.identity.write"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "contacts.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "scoped-tool"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "permissions": {
+                  "oneOf": [
+                    {
+                      "minItems": 1,
+                      "items": {
+                        "enum": [
+                          "messages.read",
+                          "mcp.sources.read",
+                          "mcp.prompts.read"
+                        ]
+                      },
+                      "anyOf": [
+                        {
+                          "contains": {
+                            "const": "messages.read"
+                          }
+                        },
+                        {
+                          "contains": {
+                            "const": "mcp.sources.read"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "const": [
+                        "mcp.incoming.read"
+                      ]
+                    },
+                    {
+                      "const": [
+                        "mcp.conversation_note.write"
+                      ]
+                    }
+                  ]
+                },
+                "account_scope": {
+                  "properties": {
+                    "account_id": {
+                      "not": {
+                        "enum": [
+                          ".",
+                          ".."
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "mcp.sources.read",
+                      "mcp.prompts.read",
+                      "mcp.incoming.read",
+                      "mcp.conversation_note.write"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "kind": {
+                  "const": "scoped-tool"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "mcp.prompts.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "messages.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "legacy.http.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "const": "conversations.read"
+                      }
+                    },
+                    {
+                      "contains": {
+                        "const": "messages.read"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "legacy.search.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "legacy.http.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "analytics.annual.read",
+                      "analytics.pair.read"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "drafts.read",
+                      "drafts.write"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "const": "conversations.read"
+                      }
+                    },
+                    {
+                      "contains": {
+                        "const": "drafts.read"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "notifications.read",
+                      "notifications.write"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "contains": {
+                    "const": "notifications.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "campus-reader",
+                    "campus-editor"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "campus_profile"
+              ],
+              "not": {
+                "required": [
+                  "account_scope"
+                ]
+              },
+              "properties": {
+                "permissions": {
+                  "oneOf": [
+                    {
+                      "const": [
+                        "campus.read"
+                      ]
+                    },
+                    {
+                      "minItems": 2,
+                      "maxItems": 7,
+                      "items": {
+                        "enum": [
+                          "campus.read",
+                          "campus.bookmarks.write",
+                          "campus.events.write",
+                          "campus.sources.preferences.write",
+                          "campus.scoring.write",
+                          "campus.profile.display.write",
+                          "campus.sources.registration.write"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "campus_profile"
+                ]
+              },
+              "properties": {
+                "permissions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "campus.read",
+                        "campus.bookmarks.write",
+                        "campus.events.write",
+                        "campus.sources.preferences.write",
+                        "campus.scoring.write",
+                        "campus.profile.display.write",
+                        "campus.sources.registration.write"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "campus-reader"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "const": [
+                    "campus.read"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "campus-editor"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "minItems": 2,
+                  "allOf": [
+                    {
+                      "contains": {
+                        "const": "campus.read"
+                      }
+                    },
+                    {
+                      "contains": {
+                        "const": "campus.bookmarks.write"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "legacy.browser.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "legacy.http.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "imports.local.manage"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "producer"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "const": [
+                    "messages.ingest"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "sources.jobs.manage"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "scoped-producer"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "analytics.profiles"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "analytics.relationships"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "operations.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "desktop",
+                    "scoped-producer"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "client.preferences.manage"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "drafts.review.queue"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "const": "drafts.read"
+                      }
+                    },
+                    {
+                      "contains": {
+                        "const": "conversations.read"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "events.legacy.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "contains": {
+                    "const": "events.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "enum": [
+                      "voice.transcription.read",
+                      "voice.transcription.write"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "contains": {
+                    "const": "messages.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "voice.transcription.write"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "voice.transcription.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "mcp.discovery.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "contains": {
+                    "const": "messages.read"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "permissions": {
+                  "contains": {
+                    "const": "exports.presets.manage"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "account_scope"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "desktop"
+                },
+                "permissions": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "const": "messages.read"
+                      }
+                    },
+                    {
+                      "contains": {
+                        "const": "messages.export"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
