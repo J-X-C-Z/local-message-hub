@@ -129,6 +129,8 @@ struct Config {
     plugin_id: Option<String>,
     live_imported_media_link: Option<PathBuf>,
     wechat_config: Option<PathBuf>,
+    qq_config: Option<PathBuf>,
+    wecom_config: Option<PathBuf>,
     webui_dir: Option<PathBuf>,
 }
 
@@ -144,6 +146,8 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
     #[allow(unused_mut)]
     let mut live_imported_media_link = None;
     let mut wechat_config = None;
+    let mut qq_config = None;
+    let mut wecom_config = None;
     let mut webui_dir = None;
     while let Some(key) = args.next() {
         let value = args.next().ok_or_else(|| invalid(USAGE))?;
@@ -165,6 +169,12 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
             }
             Some("--wechat-config") if mode == Mode::Http && wechat_config.is_none() => {
                 wechat_config = Some(PathBuf::from(value));
+            }
+            Some("--qq-config") if mode == Mode::Http && qq_config.is_none() => {
+                qq_config = Some(PathBuf::from(value));
+            }
+            Some("--wecom-config") if mode == Mode::Http && wecom_config.is_none() => {
+                wecom_config = Some(PathBuf::from(value));
             }
             Some("--webui-dir") if mode == Mode::Http && webui_dir.is_none() => {
                 webui_dir = Some(PathBuf::from(value));
@@ -192,6 +202,12 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
     if wechat_config.is_some() && !matches!(&archive, Some(ArchiveConfig::Live(_))) {
         return Err(invalid(USAGE));
     }
+    if qq_config.is_some() && !matches!(&archive, Some(ArchiveConfig::Live(_))) {
+        return Err(invalid(USAGE));
+    }
+    if wecom_config.is_some() && !matches!(&archive, Some(ArchiveConfig::Live(_))) {
+        return Err(invalid(USAGE));
+    }
     if webui_dir.is_some() && !matches!(&archive, Some(ArchiveConfig::Live(_))) {
         return Err(invalid(USAGE));
     }
@@ -202,6 +218,8 @@ fn parse(mode: Mode, mut args: impl Iterator<Item = OsString>) -> io::Result<Con
         plugin_id,
         live_imported_media_link,
         wechat_config,
+        qq_config,
+        wecom_config,
         webui_dir,
     })
 }
@@ -214,6 +232,8 @@ async fn run_http(
     _live_imported_media_link: Option<PathBuf>,
     _live_owner:Option<tokio::sync::watch::Receiver<bool>>,
     wechat_config: Option<PathBuf>,
+    qq_config: Option<PathBuf>,
+    wecom_config: Option<PathBuf>,
     webui_dir: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     let listener =
@@ -251,6 +271,34 @@ async fn run_http(
                             wx_dir,
                             wx_events,
                             std::time::Duration::from_secs(2),
+                        );
+                    })?;
+            }
+            if let Some(qq_cfg) = qq_config {
+                let qq_events = events.clone();
+                let qq_dir = directory.clone();
+                std::thread::Builder::new()
+                    .name("qq-local-sync".to_string())
+                    .spawn(move || {
+                        local_message_hub_rs::qq_local_sync::run_background_sync(
+                            qq_cfg,
+                            qq_dir,
+                            qq_events,
+                            std::time::Duration::from_secs(3),
+                        );
+                    })?;
+            }
+            if let Some(wc_cfg) = wecom_config {
+                let wc_events = events.clone();
+                let wc_dir = directory.clone();
+                std::thread::Builder::new()
+                    .name("wecom-local-sync".to_string())
+                    .spawn(move || {
+                        local_message_hub_rs::wecom_local_sync::run_background_sync(
+                            wc_cfg,
+                            wc_dir,
+                            wc_events,
+                            std::time::Duration::from_secs(3),
                         );
                     })?;
             }
@@ -1046,7 +1094,7 @@ fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
             desktop_launcher::private_grants(&config.grants)?;
             let plugins = Plugins::load(config.grants)?;
             tokio::runtime::Builder::new_multi_thread().enable_all().build()?
-                .block_on(run_http(config.port,config.archive,plugins,true,None,live_owner,config.wechat_config,config.webui_dir))?;
+                .block_on(run_http(config.port,config.archive,plugins,true,None,live_owner,config.wechat_config,config.qq_config,config.wecom_config,config.webui_dir))?;
         }
         #[cfg(target_os="linux")]
         Some("serve-mcp-http") => {
@@ -1108,8 +1156,70 @@ fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()?
-                    .block_on(run_http(config.port, config.archive, plugins, false, config.live_imported_media_link, None, config.wechat_config, config.webui_dir))?;
+                    .block_on(run_http(config.port, config.archive, plugins, false, config.live_imported_media_link, None, config.wechat_config, config.qq_config, config.wecom_config, config.webui_dir))?;
             }
+        }
+        Some("sync-qq") => {
+            let (mut live_dir, mut qq_cfg) = (None, None);
+            while let Some(key) = args.next() {
+                let value = args.next().ok_or_else(|| invalid(USAGE))?;
+                match key.to_str() {
+                    Some("--live") if live_dir.is_none() => live_dir = Some(PathBuf::from(value)),
+                    Some("--qq-config") if qq_cfg.is_none() => qq_cfg = Some(PathBuf::from(value)),
+                    _ => return Err(invalid(USAGE).into()),
+                }
+            }
+            let live_dir = live_dir.ok_or_else(|| invalid(USAGE))?;
+            let qq_cfg = qq_cfg.ok_or_else(|| invalid(USAGE))?;
+            let events = EventStore::open(&live_dir)?;
+            let base = live_dir.parent().unwrap_or(&live_dir);
+            let mut syncer = local_message_hub_rs::qq_local_sync::QQLocalSyncer::new(
+                qq_cfg,
+                base.join(".lmh-qq-cache"),
+                base.join("qq_sync_cursors.json"),
+            ).map_err(io::Error::other)?;
+            let stats = syncer.sync_once(&events).map_err(io::Error::other)?;
+            println!(
+                "{}",
+                json!({
+                    "account": stats.account_id,
+                    "conversations_checked": stats.conversations_checked,
+                    "conversations_changed": stats.conversations_changed,
+                    "created": stats.created,
+                    "revised": stats.revised,
+                    "unchanged": stats.unchanged
+                })
+            );
+        }
+        Some("sync-wecom") => {
+            let (mut live_dir, mut wc_cfg) = (None, None);
+            while let Some(key) = args.next() {
+                let value = args.next().ok_or_else(|| invalid(USAGE))?;
+                match key.to_str() {
+                    Some("--live") if live_dir.is_none() => live_dir = Some(PathBuf::from(value)),
+                    Some("--wecom-config") if wc_cfg.is_none() => wc_cfg = Some(PathBuf::from(value)),
+                    _ => return Err(invalid(USAGE).into()),
+                }
+            }
+            let live_dir = live_dir.ok_or_else(|| invalid(USAGE))?;
+            let wc_cfg = wc_cfg.ok_or_else(|| invalid(USAGE))?;
+            let events = EventStore::open(&live_dir)?;
+            let base = live_dir.parent().unwrap_or(&live_dir);
+            let mut syncer = local_message_hub_rs::wecom_local_sync::WeComLocalSyncer::new(
+                wc_cfg,
+                base.join(".lmh-wecom-cache"),
+                base.join("wecom_sync_cursors.json"),
+            ).map_err(io::Error::other)?;
+            let stats = syncer.sync_once(&events).map_err(io::Error::other)?;
+            println!(
+                "{}",
+                json!({
+                    "account": stats.account_id,
+                    "created": stats.created,
+                    "revised": stats.revised,
+                    "unchanged": stats.unchanged
+                })
+            );
         }
         Some("sync-wechat") => {
             let (mut live_dir, mut wx_cfg) = (None, None);

@@ -133,4 +133,7 @@ mod pair_report;
 
 pub mod moments;
 mod moments_http;
+pub mod local_crypto;
 pub mod wechat_local_sync;
+pub mod qq_local_sync;
+pub mod wecom_local_sync;

@@ -161,6 +161,10 @@ async fn webui_sources(State(host): State<Host>) -> Result<Json<Value>, ApiError
         }
         let wx_msgs = msg_counts.get("wechat").copied().unwrap_or(0);
         let wx_convs = conv_counts.get("wechat").copied().unwrap_or(0);
+        let qq_msgs = msg_counts.get("qq").copied().unwrap_or(0);
+        let qq_convs = conv_counts.get("qq").copied().unwrap_or(0);
+        let wc_msgs = msg_counts.get("wecom").copied().unwrap_or(0);
+        let wc_convs = conv_counts.get("wecom").copied().unwrap_or(0);
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -176,6 +180,26 @@ async fn webui_sources(State(host): State<Host>) -> Result<Json<Value>, ApiError
                     "progress": "",
                     "message_count": wx_msgs,
                     "conversation_count": wx_convs
+                },
+                {
+                    "id": "qq",
+                    "state": "connected",
+                    "version": "nt-rust",
+                    "last_sync": now_ts,
+                    "error": "",
+                    "progress": "",
+                    "message_count": qq_msgs,
+                    "conversation_count": qq_convs
+                },
+                {
+                    "id": "wecom",
+                    "state": "connected",
+                    "version": "local-rust",
+                    "last_sync": now_ts,
+                    "error": "",
+                    "progress": "",
+                    "message_count": wc_msgs,
+                    "conversation_count": wc_convs
                 }
             ]
         }))
